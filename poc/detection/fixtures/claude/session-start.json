@@ -1,0 +1,14 @@
+{
+  "agent": "claude",
+  "event": "SessionStart",
+  "payload": {
+    "session_id": "6fcfd142-c93f-4d4b-a118-8ba8620616f4",
+    "transcript_path": "C:\\Users\\dev\\.claude\\projects\\C--Users-dev-AppData-Local-Temp-orq-poc-runs-claude-probe-1791536783635-work\\6fcfd142-c93f-4d4b-a118-8ba8620616f4.jsonl",
+    "cwd": "C:\\Users\\dev\\AppData\\Local\\Temp\\orq-poc-runs\\claude-probe-1791536783635\\work",
+    "scratchpad_dir": "C:\\Users\\dev\\AppData\\Local\\Temp\\claude\\C--Users-dev-AppData-Local-Temp-orq-poc-runs-claude-probe-1791536783635-work\\6fcfd142-c93f-4d4b-a118-8ba8620616f4\\scratchpad",
+    "hook_event_name": "SessionStart",
+    "source": "startup",
+    "model": "claude-opus-5-5"
+  },
+  "receivedAt": 1791536787325
+}

@@ -1,0 +1,6 @@
+{"type":"user","message":{"role":"user","content":"Responda só: 1"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"1"}]}}
+{"type":"user","message":{"role":"user","content":"Faça uma tabela markdown com as colunas nome e idade e duas linhas de exemplo. Só a tabela."}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"| nome | idade |\n|------|-------|\n| Ana | 28 |\n| Bruno | 35 |"}]}}
+{"type":"user","message":{"role":"user","content":"Quanto é 9 × 9? Só o número."}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"81"}]}}

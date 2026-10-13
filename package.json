@@ -1,0 +1,27 @@
+{
+  "name": "orquestra",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p packages/app",
+    "build:cli": "tsx packages/cli/build.ts",
+    "harness": "tsx dev/harness.ts",
+    "build:host": "tsx packages/host/build.ts",
+    "dev": "npm run build:cli && npm run build:host && tsx dev/run-dev.ts",
+    "e2e": "npm run build:cli && npm run build:host && npm run e2e -w @orquestra/app",
+    "dist": "npm run build:cli && tsx packages/host/pack.ts && npm run dist -w @orquestra/app",
+    "e2e:packaged": "npm run e2e:packaged -w @orquestra/app"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.2",
+    "esbuild": "0.24.0",
+    "tsx": "4.19.2",
+    "typescript": "5.7.2",
+    "vitest": "2.1.8"
+  }
+}

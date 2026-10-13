@@ -1,0 +1,18 @@
+{
+  "agent": "agy",
+  "event": "Stop",
+  "payload": {
+    "artifactDirectoryPath": "C:/Users/dev/.gemini/antigravity-cli/brain/7dea683f-ff8d-4ac2-8872-78fdbf3df914",
+    "conversationId": "7dea683f-ff8d-4ac2-8872-78fdbf3df914",
+    "error": "",
+    "executionNum": 0,
+    "fullyIdle": true,
+    "modelName": "gemini-3.8-flash-high",
+    "terminationReason": "NO_TOOL_CALL",
+    "transcriptPath": "C:/Users/dev/.gemini/antigravity-cli/brain/7dea683f-ff8d-4ac2-8872-78fdbf3df914/.system_generated/logs/transcript_full.jsonl",
+    "workspacePaths": [
+      "C:/Users/dev/AppData/Local/Temp/orq-poc-runs/agy-probe-1791537911294/work"
+    ]
+  },
+  "receivedAt": 1791537928178
+}

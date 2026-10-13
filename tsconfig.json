@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "allowJs": true,
+    "noEmit": true
+  },
+  "include": [
+    "packages/shared/src",
+    "packages/shared/test",
+    "packages/core/src",
+    "packages/core/test",
+    "packages/cli/src",
+    "packages/cli/test",
+    "packages/cli/build.ts",
+    "packages/host/src",
+    "packages/host/test",
+    "packages/host/build.ts",
+    "dev"
+  ]
+}

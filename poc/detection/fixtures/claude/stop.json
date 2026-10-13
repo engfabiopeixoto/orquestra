@@ -1,0 +1,21 @@
+{
+  "agent": "claude",
+  "event": "Stop",
+  "payload": {
+    "session_id": "6fcfd142-c93f-4d4b-a118-8ba8620616f4",
+    "transcript_path": "C:\\Users\\dev\\.claude\\projects\\C--Users-dev-AppData-Local-Temp-orq-poc-runs-claude-probe-1791536783635-work\\6fcfd142-c93f-4d4b-a118-8ba8620616f4.jsonl",
+    "cwd": "C:\\Users\\dev\\AppData\\Local\\Temp\\orq-poc-runs\\claude-probe-1791536783635\\work",
+    "scratchpad_dir": "C:\\Users\\dev\\AppData\\Local\\Temp\\claude\\C--Users-dev-AppData-Local-Temp-orq-poc-runs-claude-probe-1791536783635-work\\6fcfd142-c93f-4d4b-a118-8ba8620616f4\\scratchpad",
+    "prompt_id": "a7e52e32-2ced-40af-9336-0ade8fae35c4",
+    "permission_mode": "auto",
+    "effort": {
+      "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "391",
+    "background_tasks": [],
+    "session_crons": []
+  },
+  "receivedAt": 1791536795150
+}

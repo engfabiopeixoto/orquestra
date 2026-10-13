@@ -1,0 +1,45 @@
+appId: com.orquestra.app
+productName: Orquestra
+
+directories:
+  output: release
+
+files:
+  - out/**
+  - package.json
+
+asar: true
+asarUnpack:
+  - '**/node_modules/pino/**'
+  - '**/node_modules/pino-roll/**'
+  - '**/node_modules/thread-stream/**'
+  - '**/node_modules/sonic-boom/**'
+  - '**/node_modules/pino-abstract-transport/**'
+  - '**/node_modules/real-require/**'
+  - '**/node_modules/on-exit-leak-free/**'
+
+extraResources:
+  - from: build/orquestra-icon.png
+    to: orquestra-icon.png
+  # O electron-builder ignora node_modules dentro de extraResources por padrão; a segunda entrada o copia explicitamente.
+  - from: ../host/dist-pack
+    to: host
+  - from: ../host/dist-pack/node_modules
+    to: host/node_modules
+  - from: ../cli/dist/orq.mjs
+    to: cli/orq.mjs
+
+win:
+  icon: build/orquestra-icon.png
+  target:
+    - target: nsis
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  artifactName: 'Orquestra-Setup-${version}.exe'
