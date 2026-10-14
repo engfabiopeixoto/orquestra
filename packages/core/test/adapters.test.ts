@@ -125,6 +125,15 @@ describe('codexAdapter', () => {
     expect(signals('■Conversation interrupted - use /feedback if something went wrong')).toEqual(['interrupted']);
     expect(signals('› No prompt, explique Turn interrupted e Conversation interrupted no meio da frase.')).toEqual([]);
   });
+
+  it('ignores indented markers from Codex answers and wrapped prompt echoes', () => {
+    expect(signals('• IOTA\n  ■ Conversation interrupted - use /feedback if something went wrong\n  ■ Turn interrupted')).toEqual([]);
+    expect(signals('› texto com oitenta e seis caracteres antes do marcador para quebrar a linha do eco\n  ■Conversation interrupted')).toEqual([]);
+  });
+
+  it('waits on the folder trust dialog of Codex v0.162', () => {
+    expect(signals('  Trust this folder? Codex can read, edit, and run files here, subject to your')).toEqual(['waiting']);
+  });
 });
 
 describe('readAgyTranscript', () => {

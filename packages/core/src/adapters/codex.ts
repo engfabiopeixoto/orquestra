@@ -5,8 +5,9 @@ export const codexAdapter: AgentAdapter = {
   kind: 'codex',
   acceptsPrompts: true,
   screenRules: [
-    { pattern: /Would you like to run|Do you trust|Approve this/, signal: 'waiting' },
-    { pattern: /^[ \t]*■\s*(?:Turn|Conversation) interrupted\b/m, signal: 'interrupted', scope: 'new-occurrence' },
+    { pattern: /Would you like to run|Do you trust|Trust this folder\?|Approve this/, signal: 'waiting' },
+    // A TUI escreve o marcador na coluna 0; respostas e o eco quebrado do prompt vêm recuados.
+    { pattern: /^■\s*(?:Turn|Conversation) interrupted\b/m, signal: 'interrupted', scope: 'new-occurrence' },
     { pattern: /You've hit your usage limit|Usage limit reached/, signal: 'failed', scope: 'new-occurrence' },
   ],
   launch(ctx) {
