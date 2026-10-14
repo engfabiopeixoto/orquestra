@@ -16,7 +16,14 @@ test('três projetos continuam trabalhando, quarta abertura é bloqueada e fecha
   const { app, page, project, dataDir } = await launchApp();
   try {
     await expect(page.getByRole('tab', { name: new RegExp(basename(project)) })).toBeVisible();
+    await expect(page.getByTitle('Máximo de três workspaces simultâneos')).toHaveText('1/3');
+    await expect(page.locator('.titlebar')).toBeVisible();
+    await page.getByRole('button', { name: 'Menu do Orquestra' }).click();
+    await expect(page.getByRole('menuitem')).toHaveCount(4);
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('menu')).toHaveCount(0);
     await createShell(page, 'S');
+    await expect(page.getByTestId(`workspace-${basename(project)}`)).toContainText('1 agentes');
     await page.getByTestId('terminal-header-S').click();
     await expect(page.locator('.react-flow__node.selected')).toHaveCount(1);
     await page.getByTestId('terminal-body-S').click();

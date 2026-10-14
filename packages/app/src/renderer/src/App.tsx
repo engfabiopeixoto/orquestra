@@ -12,7 +12,6 @@ import { NoticeList } from './components/NoticeList';
 import { PersonasDialog } from './components/PersonasDialog';
 import { SettingsDialog } from './components/SettingsDialog';
 import { SubscriptionUsage } from './components/SubscriptionUsage';
-import { WorkspaceTabs } from './components/WorkspaceTabs';
 import { activateWorkspace } from './project';
 import { useWorkspaces } from './workspaces';
 import { suggestNoteName } from './notes/suggest-name';
@@ -167,7 +166,7 @@ export function App() {
         <div className="app">
           <Sidebar onOpenSettings={() => setSettingsOpen(true)} onOpenPersonas={() => setPersonasOpen(true)} />
           <div className="workspace-main">
-          <WorkspaceTabs />
+          <div className="titlebar" />
           <main className="canvas">
             <ReactFlowProvider key={project?.workspaceId ?? 'paused'}>
             <FlowToolbar />

@@ -1,4 +1,5 @@
 import type { ErrorCode, HostEvent } from '@orquestra/shared';
+import type { AppAction } from './app-action';
 import type {
   PortalCreateOptions,
   PortalEvent,
@@ -38,6 +39,8 @@ export interface OrquestraBridge {
   onEvent(listener: (event: HostEvent) => void): () => void;
   pickFolder(): Promise<string | null>;
   openSubscription(provider: 'claude' | 'agy' | 'codex'): Promise<void>;
+  /** Ações do menu da janela (a barra de menu foi removida). */
+  appAction(action: AppAction): Promise<void>;
   reportError(message: string, stack?: string): void;
   /** Área de transferência do sistema, pelo Electron (o navigator.clipboard pede permissão e falha sem foco). */
   readClipboard(): Promise<string>;

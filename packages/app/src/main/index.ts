@@ -3,6 +3,7 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, Notification, she
 import { AGENT_PID_FILE, isHostMethod, OrqError } from '@orquestra/shared';
 import type { CommandResponse } from '../shared/bridge';
 import { ActivityMonitor } from './activity';
+import { appShortcut, handleAppAction } from './app-action';
 import { bundledScripts } from './bundled-paths';
 import { HostProcess } from './host-process';
 import { createAppLogger } from './log';
@@ -94,6 +95,9 @@ function createWindow(): BrowserWindow {
     width: 1400,
     height: 900,
     backgroundColor: '#0d0f13',
+    // Sem barra de título nem menu: ficam só os botões nativos, sobre a faixa .titlebar do renderer.
+    titleBarStyle: 'hidden',
+    titleBarOverlay: { color: '#13161c', symbolColor: '#d6dae2', height: 32 },
     title: isDev ? 'Orquestra (dev)' : 'Orquestra',
     icon: app.isPackaged ? join(process.resourcesPath, 'orquestra-icon.png') : join(__dirname, '../../build/orquestra-icon.png'),
     webPreferences: { preload: join(__dirname, '../preload/index.js'), sandbox: false, contextIsolation: true },
@@ -103,6 +107,13 @@ function createWindow(): BrowserWindow {
       event.preventDefault();
     });
   }
+  // Com o menu removido, o Windows não garante os aceleradores: tratamos as teclas aqui.
+  created.webContents.on('before-input-event', (event, input) => {
+    const action = appShortcut(input);
+    if (!action) return;
+    event.preventDefault();
+    runAppAction(action);
+  });
   created.webContents.on('will-navigate', (event, url) => {
     event.preventDefault();
     if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
@@ -132,25 +143,23 @@ function createWindow(): BrowserWindow {
   return created;
 }
 
-function buildMenu(): void {
-  Menu.setApplicationMenu(
-    Menu.buildFromTemplate([
-      {
-        label: 'Orquestra',
-        submenu: [
-          { label: 'Abrir pasta de logs', click: () => void shell.openPath(logDir) },
-          { type: 'separator' },
-          // Ctrl+R é do terminal (busca no histórico do shell, atalhos dos agentes): recarregar fica em Ctrl+Shift+F5.
-          { role: 'reload', label: 'Recarregar interface', accelerator: 'Ctrl+Shift+F5' },
-          // Ctrl+Shift+I é do terminal: ferramentas do desenvolvedor ficam em F12.
-          { role: 'toggleDevTools', label: 'Ferramentas do desenvolvedor', accelerator: 'F12' },
-          { type: 'separator' },
-          { role: 'quit', label: 'Sair' },
-        ],
-      },
-    ]),
-  );
+function runAppAction(action: unknown): boolean {
+  return handleAppAction(action, {
+    openLogs: () => void shell.openPath(logDir),
+    reload: () => window?.webContents.reload(),
+    toggleDevTools: () => window?.webContents.toggleDevTools(),
+    quit: () => app.quit(),
+    warn: (message) => log.warn({ component: 'app-action' }, message),
+  });
 }
+
+ipcMain.handle('orq:app-action', (event, action: unknown) => {
+  if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) {
+    log.warn({ component: 'app-action' }, 'ação do app recusada: origem inválida');
+    return;
+  }
+  runAppAction(action);
+});
 
 ipcMain.handle('orq:command', async (_event, method: unknown, params: unknown, workspaceId?: string): Promise<CommandResponse> => {
   if (!window || _event.sender !== window.webContents || _event.senderFrame !== window.webContents.mainFrame) return { ok: false, error: { code: 'USAGE', message: 'Origem de comando inválida.' } };
@@ -203,7 +212,8 @@ if (!app.requestSingleInstanceLock()) {
   });
   void app.whenReady().then(async () => {
     app.setAppUserModelId('com.orquestra.app');
-    buildMenu();
+    // Ctrl+R, Ctrl+Shift+I e afins pertencem ao terminal: sem barra de menu, nenhum acelerador do Electron interfere.
+    Menu.setApplicationMenu(null);
     try {
       host = await startHost();
     } catch (error) {
