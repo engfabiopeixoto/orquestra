@@ -56,7 +56,8 @@ type ScrollTerm = {
 /** Converte a roda em linhas inteiras do terminal, guardando a fração (trackpad) para o próximo evento. */
 export function wheelToLines(event: { deltaY: number; deltaMode: number }, cellHeight: number, rows: number, carry: number): { lines: number; carry: number } {
   const unit = event.deltaMode === 1 ? event.deltaY : event.deltaMode === 2 ? event.deltaY * rows : event.deltaY / cellHeight;
-  const total = unit + carry;
+  // Arredonda o ruído de ponto flutuante: 10 × 0,1 linha soma 0,999… e atrasaria a linha em um evento.
+  const total = Math.round((unit + carry) * 1e9) / 1e9;
   const lines = Math.trunc(total);
   return { lines, carry: total - lines };
 }

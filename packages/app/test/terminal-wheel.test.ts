@@ -63,6 +63,15 @@ describe('wheelToLines', () => {
     expect(wheelToLines({ deltaY: 5, deltaMode: 0 }, 15, 24, 0)).toEqual({ lines: 0, carry: 5 / 15 });
   });
 
+  it('soma de frações que fecha uma linha exata gera a linha no mesmo evento', () => {
+    let carry = 0, moved = 0;
+    for (let step = 0; step < 10; step += 1) {
+      const result = wheelToLines({ deltaY: 1.5, deltaMode: 0 }, 15, 24, carry);
+      carry = result.carry; moved += result.lines;
+    }
+    expect(moved).toBe(1);
+  });
+
   it('entende deltaMode de linhas e de páginas', () => {
     expect(wheelToLines({ deltaY: -3, deltaMode: 1 }, 15, 24, 0).lines).toBe(-3);
     expect(wheelToLines({ deltaY: 1, deltaMode: 2 }, 15, 24, 0).lines).toBe(24);
