@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { defaultMonitor, OrqError, reservedArgError, type QueueEntry, type SessionState } from '@orquestra/shared';
 import type { AgentAdapter } from './adapters/types.js';
 import { AskBroker } from './ask-broker.js';
-import { BackgroundJobWatcher, backgroundJobNotice, claudeConfigDir, readBackgroundJob, type ListPipes } from './background-job.js';
+import { BackgroundJobWatcher, backgroundJobNotice, claudeConfigDir, findBackgroundJob, type ListPipes } from './background-job.js';
 import { childEnv, prependPath } from './env.js';
 import { createHandlers, type RegentHandler, type RegentMethod } from './handlers.js';
 import type { Logger } from './log.js';
@@ -19,9 +19,11 @@ import type { BrowserHandler, BrowserNode } from '@orquestra/shared';
 export { type RegentHandler, type RegentMethod } from './handlers.js';
 
 export const RESUME_GRACE_MS = 10_000;
+/** Quantos lançamentos por terminal entram no vínculo com o job em segundo plano. */
+const MAX_SESSION_DIRS = 20;
 
-export type TerminalDescriptor = { id: string; name: string; agent: string; cwd: string; args: string[]; resume: boolean; agentSessionId: string | null; regente: boolean; persona: string | null; monitor: boolean; unloaded?: boolean };
-export type CreateTerminalInput = { name: string; agent: string; cwd: string; id?: string; args?: string[]; resume?: boolean; agentSessionId?: string | null; regente?: boolean; persona?: string | null; monitor?: boolean; unloaded?: boolean };
+export type TerminalDescriptor = { id: string; name: string; agent: string; cwd: string; args: string[]; resume: boolean; agentSessionId: string | null; regente: boolean; persona: string | null; monitor: boolean; unloaded?: boolean; /** Pastas de sessão de cada lançamento (vínculo com o job em segundo plano); não vai para o workspace. */ sessionDirs?: string[] };
+export type CreateTerminalInput = { name: string; agent: string; cwd: string; id?: string; args?: string[]; resume?: boolean; agentSessionId?: string | null; regente?: boolean; persona?: string | null; monitor?: boolean; unloaded?: boolean; sessionDirs?: string[] };
 export type TerminalChanges = { newName?: string; cwd?: string; args?: string[]; resume?: boolean; regente?: boolean; monitor?: boolean };
 
 export type OrquestraOptions = {
@@ -170,10 +172,13 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
     const id = input.id ?? randomUUID();
     const resume = input.resume ?? true;
     const resumeSessionId = resume ? (input.agentSessionId ?? null) : null;
+    // Pastas de sessão dos lançamentos anteriores deste terminal: o job em segundo plano nasce com outro
+    // sessionId e só o --settings do respawnFlags o liga ao terminal. O lançamento atual entra mais abaixo.
+    const sessionDirs = [...(input.sessionDirs ?? [])];
     // Retomar uma conversa que o daemon mantém em segundo plano abriria uma segunda cópia ("nome (2)")
     // sem pipe nem hooks: o terminal nasce descarregado e o aviso explica como trazê-la de volta.
     let unloaded = input.unloaded ?? false;
-    if (!unloaded && adapter.kind === 'claude' && resumeSessionId && readBackgroundJob(claudeDir, resumeSessionId, opts.listPipes)) {
+    if (!unloaded && adapter.kind === 'claude' && resumeSessionId && findBackgroundJob({ claudeDir, sessionDirs, sessionId: resumeSessionId, listPipes: opts.listPipes })) {
       unloaded = true;
       opts.log.warn({ session: input.name, sessionId: resumeSessionId }, 'sessão presa a um job em segundo plano; terminal não retomado para não abrir uma segunda cópia');
     }
@@ -181,6 +186,8 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
     // Pasta por lançamento: o id do terminal se repete a cada relançamento.
     const sessionDir = join(opts.dataDir, 'sessions', randomUUID());
     mkdirSync(sessionDir, { recursive: true });
+    sessionDirs.push(sessionDir);
+    if (sessionDirs.length > MAX_SESSION_DIRS) sessionDirs.splice(0, sessionDirs.length - MAX_SESSION_DIRS);
     const launch = adapter.launch({
       cwd: input.cwd,
       sessionDir,
@@ -220,13 +227,13 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
       if (config) config.agentSessionId = agentId;
       emit({ type: 'agent-session', name: session.name });
     });
-    if (resumeSessionId && !unloaded) watchResume(session, Date.now());
-    const stopWatcher = adapter.kind === 'claude' ? watchBackgroundJob(session, log) : () => {};
+    if (resumeSessionId && !unloaded) watchResume(session, Date.now(), sessionDirs);
+    const stopWatcher = adapter.kind === 'claude' ? watchBackgroundJob(session, log, sessionDirs) : () => {};
     sessions.set(input.name, { session, token, stopOutput, stopWatcher });
     const regente = input.regente ?? false;
     const persona = input.persona ?? null;
     const monitor = input.monitor ?? defaultMonitor(input.agent);
-    configs.set(input.name, { id, agent: input.agent, cwd: input.cwd, args, resume, agentSessionId, regente, persona, monitor, ...(unloaded ? { unloaded: true } : {}) });
+    configs.set(input.name, { id, agent: input.agent, cwd: input.cwd, args, resume, agentSessionId, regente, persona, monitor, sessionDirs, ...(unloaded ? { unloaded: true } : {}) });
     if (!unloaded) tokens.set(token, input.name);
     log.info({ cwd: input.cwd, resumeSessionId, args }, 'terminal criado');
     return session;
@@ -236,11 +243,12 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
    * A conversa do Claude foi para o daemon: o ORQ_PIPE e o ORQ_TOKEN dela ficaram presos ao app antigo,
    * então nem hooks nem pedidos chegam. Avisa no terminal e deixa o broker recusar a entrega.
    */
-  function watchBackgroundJob(session: Session, log: Logger): () => void {
+  function watchBackgroundJob(session: Session, log: Logger, sessionDirs: string[]): () => void {
     const notify = (job: { id8: string; state: string } | null) => emit({ type: 'notice', name: session.name, message: job ? backgroundJobNotice(job) : '' });
     const watcher = new BackgroundJobWatcher({
       claudeDir,
       sessionId: () => session.agentSessionId,
+      sessionDirs: () => sessionDirs,
       log,
       pollMs: opts.backgroundJobPollMs,
       listPipes: opts.listPipes,
@@ -258,12 +266,19 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
   }
 
   /** Spec, seção 5: retomada que falha (agente sai logo) vira sessão nova, com aviso no nó. */
-  function watchResume(session: Session, startedAt: number): void {
+  function watchResume(session: Session, startedAt: number, sessionDirs: string[]): void {
     session.on('state', (state) => {
       if (state !== 'exited' || Date.now() - startedAt > (opts.resumeGraceMs ?? RESUME_GRACE_MS)) return;
       const name = session.name;
       const config = configs.get(name);
       if (!config || config.unloaded || sessions.get(name)?.session !== session) return;
+      // O /bg encerra o processo local logo depois de mover a conversa para o daemon: não é retomada que falhou,
+      // e relançar abriria uma sessão nova (e perderia o vínculo com o job).
+      const job = findBackgroundJob({ claudeDir, sessionDirs, sessionId: session.agentSessionId, listPipes: opts.listPipes });
+      if (job) {
+        opts.log.info({ session: name, job }, 'processo saiu porque a conversa foi para o segundo plano; não relança');
+        return;
+      }
       opts.log.warn({ session: name }, 'retomada falhou; relançando sem retomar');
       void relaunchFresh(name, config);
     });
@@ -273,7 +288,7 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
     const neighbors = topology.neighbors(name);
     await removeTerminal(name, { announce: false });
     try {
-      createTerminal({ name, agent: config.agent, cwd: config.cwd, id: config.id, args: config.args, resume: config.resume, agentSessionId: null, regente: config.regente, persona: config.persona, monitor: config.monitor });
+      createTerminal({ name, agent: config.agent, cwd: config.cwd, id: config.id, args: config.args, resume: config.resume, agentSessionId: null, regente: config.regente, persona: config.persona, monitor: config.monitor, sessionDirs: config.sessionDirs });
       for (const neighbor of neighbors) if (topology.kindOf(neighbor)) topology.connect(name, neighbor);
       emit({ type: 'notice', name, message: 'a sessão anterior não pôde ser retomada. O terminal começou uma sessão nova.' });
       emitState(name);
@@ -325,7 +340,7 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
     await removeTerminal(name, { announce: false });
     let session: Session;
     try {
-      session = createTerminal({ name, agent: config.agent, cwd: config.cwd, id: config.id, args: config.args, resume: config.resume, agentSessionId: config.agentSessionId, regente: config.regente, persona: config.persona, monitor: config.monitor, unloaded: keepUnloaded });
+      session = createTerminal({ name, agent: config.agent, cwd: config.cwd, id: config.id, args: config.args, resume: config.resume, agentSessionId: config.agentSessionId, regente: config.regente, persona: config.persona, monitor: config.monitor, sessionDirs: config.sessionDirs, unloaded: keepUnloaded });
     } catch (error) {
       // O terminal antigo já saiu: sem este aviso a interface ficaria com um nó que não existe mais.
       emit({ type: 'removed', name });
@@ -401,6 +416,8 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
         regente: config.regente,
         persona: config.persona,
         monitor: config.monitor,
+        // Só o Claude tem conversa em segundo plano: os outros agentes não precisam do vínculo.
+        ...(config.agent === 'claude' && config.sessionDirs?.length ? { sessionDirs: [...config.sessionDirs] } : {}),
         ...(config.unloaded ? { unloaded: true } : {}),
       })),
     removeTerminal: (name, opts) => removeTerminal(name, { reason: opts?.reason }),

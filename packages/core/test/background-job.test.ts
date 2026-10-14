@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BackgroundJobWatcher, backgroundJobNotice, claudeConfigDir, readBackgroundJob, type BackgroundJob } from '../src/background-job.js';
+import { BackgroundJobWatcher, backgroundJobNotice, claudeConfigDir, findBackgroundJob, readBackgroundJob, type BackgroundJob } from '../src/background-job.js';
 import { silentLogger } from '../src/log.js';
 import { waitFor } from './helpers/wait.js';
 
@@ -174,6 +174,71 @@ describe('BackgroundJobWatcher', () => {
     try {
       await waitFor(() => onPoll.mock.calls.length >= 2);
       expect(onPoll).toHaveBeenCalledWith({ id8: '793b7407', state: 'working' });
+    } finally { watcher.stop(); }
+  });
+});
+
+// O /bg cria a conversa em segundo plano com um sessionId NOVO: o vínculo com o terminal é a pasta de sessão
+// do lançamento, que aparece no --settings do respawnFlags (formato visto em ~/.claude/jobs/*/state.json).
+describe('findBackgroundJob (vínculo pelo sessionDir do lançamento)', () => {
+  const SESSION_DIR = 'C:\\Users\\USER\\AppData\\Roaming\\Orquestra\\sessions\\e4f7c968-1e2f-49a8-850e-3351b86279bc';
+  const OTHER_DIR = 'C:\\Users\\USER\\AppData\\Roaming\\Orquestra\\sessions\\11111111-2222-3333-4444-555555555555';
+  const JOB_SESSION = 'b845e5a9-1111-2222-3333-444444444444';
+  const JOB_PIPE = 'cc-daemon-bc8e3d6ca88bafb5-pty-b845e5a9';
+  const job = (over: Record<string, unknown> = {}) => ({
+    backend: 'daemon', state: 'blocked', sessionId: JOB_SESSION, resumeSessionId: JOB_SESSION,
+    respawnFlags: ['--settings', `${SESSION_DIR}\\claude-settings.json`, '--permission-mode', 'bypassPermissions'], ...over,
+  });
+  const find = (dir: string, sessionDirs: string[], pipes: string[] = [JOB_PIPE, ...PIPES], sessionId?: string) =>
+    findBackgroundJob({ claudeDir: dir, sessionDirs, ...(sessionId ? { sessionId } : {}), listPipes: () => pipes });
+
+  it('acha o job de sessionId diferente pelo --settings e devolve o id8 do JOB', () => {
+    const dir = claudeDir();
+    writeJob(dir, job());
+    expect(find(dir, [SESSION_DIR])).toEqual({ id8: 'b845e5a9', state: 'blocked' });
+    expect(find(dir, [OTHER_DIR, SESSION_DIR])).toEqual({ id8: 'b845e5a9', state: 'blocked' });
+  });
+
+  it('reconhece --settings=<caminho>, barras e maiúsculas diferentes', () => {
+    const dir = claudeDir();
+    writeJob(dir, job({ respawnFlags: [`--settings=${SESSION_DIR.toUpperCase().replaceAll('\\', '/')}/claude-settings.json`] }));
+    expect(find(dir, [SESSION_DIR])).toEqual({ id8: 'b845e5a9', state: 'blocked' });
+  });
+
+  it('não acha: sessionDir de outro lançamento, job parado ou done, sem pipe vivo ou sem respawnFlags', () => {
+    const dir = claudeDir();
+    writeJob(dir, job());
+    expect(find(dir, [OTHER_DIR])).toBeNull();
+    expect(find(dir, [])).toBeNull();
+    expect(find(dir, [SESSION_DIR], PIPES)).toBeNull();
+    for (const state of ['stopped', 'done']) {
+      writeJob(dir, job({ state }));
+      expect(find(dir, [SESSION_DIR])).toBeNull();
+    }
+    writeJob(dir, job({ respawnFlags: undefined }));
+    expect(find(dir, [SESSION_DIR])).toBeNull();
+    writeJob(dir, job({ backend: 'local' }));
+    expect(find(dir, [SESSION_DIR])).toBeNull();
+  });
+
+  it('mantém o vínculo antigo pelo sessionId quando ele coincide', () => {
+    const dir = claudeDir();
+    writeJob(dir, { backend: 'daemon', state: 'working', sessionId: SESSION });
+    expect(find(dir, [], [LIVE_PIPE], SESSION)).toEqual({ id8: '793b7407', state: 'working' });
+  });
+
+  it('o watcher usa os sessionDirs mesmo sem sessionId e limpa quando o job para', async () => {
+    const dir = claudeDir();
+    writeJob(dir, job());
+    const changes: Array<BackgroundJob | null> = [];
+    const watcher = new BackgroundJobWatcher({ claudeDir: dir, sessionId: () => null, sessionDirs: () => [SESSION_DIR], log: silentLogger(), pollMs: 30, listPipes: () => [JOB_PIPE], onChange: (found) => changes.push(found) });
+    watcher.start();
+    try {
+      await waitFor(() => changes.length === 1);
+      expect(changes[0]).toEqual({ id8: 'b845e5a9', state: 'blocked' });
+      writeJob(dir, job({ state: 'stopped' }));
+      await waitFor(() => changes.length === 2);
+      expect(changes[1]).toBeNull();
     } finally { watcher.stop(); }
   });
 });

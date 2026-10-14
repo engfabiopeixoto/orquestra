@@ -84,6 +84,12 @@ export type HostBridgeOptions = {
   personasFile: string;
   /** Espera depois da última mudança antes de gravar o workspace (padrão 1 s). */
   saveDelayMs?: number;
+  /** Pasta de configuração do Claude Code, onde ficam os jobs em segundo plano (padrão: CLAUDE_CONFIG_DIR ou ~/.claude). */
+  claudeDir?: string;
+  /** Lista os named pipes do sistema; o daemon abre um por conversa viva. Injetável nos testes. */
+  listPipes?: () => string[];
+  /** Intervalo da verificação dos jobs em segundo plano (padrão 5 s). */
+  backgroundJobPollMs?: number;
 };
 
 export type HostBridge = {
@@ -404,6 +410,9 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
     log: opts.log,
     ptyHost: opts.ptyHost,
     readyQuietMs: opts.readyQuietMs,
+    claudeDir: opts.claudeDir,
+    listPipes: opts.listPipes,
+    backgroundJobPollMs: opts.backgroundJobPollMs,
     regent,
     browser,
     browserNodes: () => project?.state.browserNodes() ?? [],
@@ -516,6 +525,7 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
           persona: terminal.persona,
           monitor: terminal.monitor,
           unloaded: terminal.unloaded,
+          sessionDirs: terminal.sessionDirs,
         });
       } catch (error) {
         current.state.forget(terminal.name);

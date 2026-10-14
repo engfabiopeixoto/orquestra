@@ -40,6 +40,11 @@ export const workspaceTerminalSchema = z.object({
   blurred: z.boolean().optional(),
   locked: z.boolean().optional(),
   agentSessionId: z.string().min(1).nullable(),
+  /**
+   * Pastas de sessão dos lançamentos do terminal (até 20). O job em segundo plano do Claude nasce com outro
+   * sessionId e só o --settings dele aponta para o lançamento: guardar as pastas mantém o vínculo ao reabrir o app.
+   */
+  sessionDirs: z.array(z.string().min(1).max(1024)).max(20).optional(),
   position: positionSchema,
   size: sizeSchema,
 });

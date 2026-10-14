@@ -482,3 +482,134 @@ describe('conversa do Claude em segundo plano (daemon)', () => {
     expect(resumed.state).not.toBe('exited');
   });
 });
+
+// Validação real (Claude Code 2.1.299): o /bg cria o job com sessionId novo e o processo local sai em ~3 s.
+describe('conversa em segundo plano com sessionId novo (vínculo pelo sessionDir)', () => {
+  const OLD_SESSION = '606c1b68-0000-4000-8000-000000000001';
+  const JOB_SESSION = 'b845e5a9-0000-4000-8000-000000000002';
+  const JOB_PIPE = 'cc-daemon-bc8e3d6ca88bafb5-pty-b845e5a9';
+  const NOTICE = 'Conversa em segundo plano: sem conexão com o Orquestra. Rode `claude stop b845e5a9` e reinicie este terminal.';
+  const setup = async () => {
+    const claudeDir = mkdtempSync(join(tmpdir(), 'orq-claude-'));
+    const launchDirs: string[] = [];
+    const base = createFakeAdapter();
+    const adapter = { ...base, kind: 'claude', launch: (ctx: Parameters<typeof base.launch>[0]) => { launchDirs.push(ctx.sessionDir); return base.launch(ctx); } };
+    const writeJob = (state: string, dir = launchDirs.at(-1)!) => {
+      mkdirSync(join(claudeDir, 'jobs', 'b845e5a9'), { recursive: true });
+      writeFileSync(join(claudeDir, 'jobs', 'b845e5a9', 'state.json'), JSON.stringify({
+        backend: 'daemon', state, sessionId: JOB_SESSION, resumeSessionId: JOB_SESSION,
+        respawnFlags: ['--settings', join(dir, 'claude-settings.json'), '--permission-mode', 'bypassPermissions'],
+      }));
+    };
+    const env = await setupOrquestra({ adapters: { claude: adapter }, claudeDir, backgroundJobPollMs: 30, listPipes: () => [JOB_PIPE] });
+    return { ...env, launchDirs, writeJob };
+  };
+  const notices = (events: OrquestraEvent[]) => events.filter((event) => event.type === 'notice').map((event) => (event as { message: string }).message);
+
+  it('terminal encerrado pelo /bg com o job vivo: avisa e recusa prompt e brief com a mensagem de segundo plano', async () => {
+    const { orq, host, events, writeJob } = await setup();
+    const session = orq.createTerminal({ name: 'W', agent: 'claude', cwd: tmpdir(), agentSessionId: OLD_SESSION });
+    host.last().emitData('pronto> ');
+    await waitFor(() => session.state === 'idle');
+    writeJob('working');
+    host.last().emitExit(0);
+    expect(session.state).toBe('exited');
+    await waitFor(() => notices(events).includes(NOTICE));
+    expect(session.backgroundJob).toEqual({ id8: 'b845e5a9', state: 'working' });
+    const refused = orq.broker.submit({ asker: 'X', target: 'W', text: 'oi', timeoutMs: 1000 });
+    await expect(refused).rejects.toMatchObject({ code: 'PROMPT_FAILED', message: expect.stringContaining('claude stop b845e5a9') });
+    await expect(refused).rejects.toThrow(/segundo plano/);
+    expect(() => orq.brief('W', 'X', 'função')).toThrow(/segundo plano/);
+  });
+
+  it('reiniciar com o job vivo não lança o claude; com o job parado, retoma normalmente', async () => {
+    const { orq, host, events, writeJob } = await setup();
+    const first = orq.createTerminal({ name: 'W', agent: 'claude', cwd: tmpdir(), agentSessionId: OLD_SESSION });
+    host.last().emitData('pronto> ');
+    writeJob('working');
+    host.last().emitExit(0);
+    await waitFor(() => first.backgroundJob !== null);
+    expect(host.spawned).toHaveLength(1);
+
+    const blocked = await orq.restartTerminal('W');
+    expect(host.spawned).toHaveLength(1);
+    expect(blocked.state).toBe('exited');
+    expect(orq.describeTerminals()[0]).toMatchObject({ name: 'W', unloaded: true, agentSessionId: OLD_SESSION });
+    await waitFor(() => blocked.backgroundJob !== null);
+    // Reiniciar de novo, ainda com o job vivo, continua bloqueado: o vínculo sobrevive ao relançamento.
+    const again = await orq.restartTerminal('W');
+    expect(host.spawned).toHaveLength(1);
+    await waitFor(() => again.backgroundJob !== null);
+
+    writeJob('stopped');
+    await waitFor(() => again.backgroundJob === null);
+    expect(notices(events).at(-1)).toBe('');
+    const resumed = await orq.restartTerminal('W');
+    expect(host.spawned).toHaveLength(2);
+    expect(host.spawned[1]!.spec.args).toContain(OLD_SESSION);
+    expect(resumed.state).not.toBe('exited');
+  });
+
+  it('job vivo cujo --settings aponta para outro lançamento não bloqueia nem avisa', async () => {
+    const { orq, host, events, writeJob } = await setup();
+    const first = orq.createTerminal({ name: 'W', agent: 'claude', cwd: tmpdir(), agentSessionId: OLD_SESSION });
+    writeJob('working', join(tmpdir(), 'sessions', 'de-outro-terminal'));
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(first.backgroundJob).toBeNull();
+    expect(notices(events)).toEqual([]);
+    expect(host.spawned).toHaveLength(1);
+  });
+});
+
+describe('pastas de sessão persistidas (sobrevivem a fechar e abrir o app)', () => {
+  const OLD_SESSION = '606c1b68-0000-4000-8000-000000000001';
+  const JOB_PIPE = 'cc-daemon-bc8e3d6ca88bafb5-pty-b845e5a9';
+  const NOTICE = 'Conversa em segundo plano: sem conexão com o Orquestra. Rode `claude stop b845e5a9` e reinicie este terminal.';
+  const writeJob = (claudeDir: string, state: string, sessionDir: string) => {
+    mkdirSync(join(claudeDir, 'jobs', 'b845e5a9'), { recursive: true });
+    writeFileSync(join(claudeDir, 'jobs', 'b845e5a9', 'state.json'), JSON.stringify({
+      backend: 'daemon', state, sessionId: 'b845e5a9-0000-4000-8000-000000000002',
+      respawnFlags: ['--settings', join(sessionDir, 'claude-settings.json')],
+    }));
+  };
+  const open = (claudeDir: string) => setupOrquestra({ adapters: { claude: { ...createFakeAdapter(), kind: 'claude' } }, claudeDir, backgroundJobPollMs: 30, listPipes: () => [JOB_PIPE] });
+
+  it('describeTerminals publica a pasta de cada lançamento, no máximo 20', async () => {
+    const { orq } = await open(mkdtempSync(join(tmpdir(), 'orq-claude-')));
+    orq.createTerminal({ name: 'W', agent: 'claude', cwd: tmpdir(), agentSessionId: OLD_SESSION });
+    expect(orq.describeTerminals()[0]!.sessionDirs).toHaveLength(1);
+    await orq.restartTerminal('W');
+    const afterRestart = orq.describeTerminals()[0]!.sessionDirs!;
+    expect(afterRestart).toHaveLength(2);
+    expect(new Set(afterRestart).size).toBe(2);
+    for (let index = 0; index < 22; index++) await orq.restartTerminal('W');
+    const capped = orq.describeTerminals()[0]!.sessionDirs!;
+    expect(capped).toHaveLength(20);
+    expect(capped.at(-1)).not.toBe(afterRestart.at(-1));
+  });
+
+  it('reabrir com o job vivo apontando para um sessionDir antigo deixa o terminal descarregado, sem lançar o claude', async () => {
+    const claudeDir = mkdtempSync(join(tmpdir(), 'orq-claude-'));
+    const first = await open(claudeDir);
+    first.orq.createTerminal({ name: 'W', agent: 'claude', cwd: tmpdir(), agentSessionId: OLD_SESSION });
+    // O que o host grava no workspace e lê de volta (snapshot e restore).
+    const saved = JSON.parse(JSON.stringify(first.orq.describeTerminals()[0]));
+    expect(saved.sessionDirs).toHaveLength(1);
+    await first.orq.close();
+
+    // O app reinicia: o job do daemon sobreviveu e aponta para o lançamento antigo.
+    writeJob(claudeDir, 'working', saved.sessionDirs[0]);
+    const second = await open(claudeDir);
+    const session = second.orq.createTerminal({ name: 'W', agent: 'claude', cwd: tmpdir(), id: saved.id, agentSessionId: saved.agentSessionId, resume: saved.resume, sessionDirs: saved.sessionDirs });
+    expect(second.host.spawned).toHaveLength(0);
+    expect(session.state).toBe('exited');
+    expect(second.orq.describeTerminals()[0]).toMatchObject({ name: 'W', unloaded: true });
+    await waitFor(() => second.events.some((event) => event.type === 'notice' && event.message === NOTICE));
+
+    // Sem o campo (workspace antigo), o job não é reconhecido e a retomada segue como antes.
+    await second.orq.removeTerminal('W');
+    const legacy = second.orq.createTerminal({ name: 'W', agent: 'claude', cwd: tmpdir(), agentSessionId: saved.agentSessionId });
+    expect(second.host.spawned).toHaveLength(1);
+    expect(legacy.state).not.toBe('exited');
+  });
+});

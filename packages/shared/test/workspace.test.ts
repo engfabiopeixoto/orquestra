@@ -107,3 +107,19 @@ describe('migrateWorkspace', () => {
     expect(() => migrateWorkspace(raw)).toThrow(/terminals\.0\.position\.x/);
   });
 });
+
+describe('sessionDirs dos terminais (vínculo com a conversa em segundo plano)', () => {
+  const dirs = ['C:/dados/sessions/a', 'C:/dados/sessions/b'];
+
+  it('persiste as pastas de sessão e aceita workspaces salvos sem o campo', () => {
+    const parsed = migrateWorkspace(workspace({ terminals: [{ ...terminal('A'), sessionDirs: dirs }, terminal('B')] }));
+    expect(parsed.terminals[0]!.sessionDirs).toEqual(dirs);
+    expect(parsed.terminals[1]!.sessionDirs).toBeUndefined();
+  });
+
+  it('recusa mais de 20 pastas e caminho vazio', () => {
+    const many = Array.from({ length: 21 }, (_, index) => `C:/dados/sessions/${index}`);
+    expect(() => migrateWorkspace(workspace({ terminals: [{ ...terminal('A'), sessionDirs: many }] }))).toThrow();
+    expect(() => migrateWorkspace(workspace({ terminals: [{ ...terminal('A'), sessionDirs: [''] }] }))).toThrow();
+  });
+});

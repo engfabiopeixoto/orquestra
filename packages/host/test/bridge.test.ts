@@ -19,7 +19,7 @@ afterEach(async () => {
 
 const readWorkspace = (dir: string) => JSON.parse(readFileSync(join(dir, '.orquestra', 'workspace.json'), 'utf8'));
 
-type SetupOptions = { outputIntervalMs?: number; saveDelayMs?: number; adapters?: Record<string, AgentAdapter> };
+type SetupOptions = { outputIntervalMs?: number; saveDelayMs?: number; adapters?: Record<string, AgentAdapter>; claudeDir?: string; listPipes?: () => string[] };
 
 async function setup(opts: SetupOptions = {}) {
   const sent: HostToMain[] = [];
@@ -45,6 +45,9 @@ async function setup(opts: SetupOptions = {}) {
     agyHooksFile: join(mkdtempSync(join(tmpdir(), 'orq-agyhook-')), 'hooks.json'),
     outputIntervalMs,
     agentPidFile,
+    claudeDir: opts.claudeDir,
+    listPipes: opts.listPipes,
+    backgroundJobPollMs: 30,
   } as any);
   const command = async (id: string, method: string, params: unknown) => {
     await bridge!.handle({ kind: 'command', id, method, params });
@@ -573,4 +576,36 @@ describe('regente na ponte', () => {
   });
 });
 
+describe('conversa em segundo plano depois de reabrir o projeto', () => {
+  const SESSION = 'cccccccc-0000-4000-8000-000000000001';
+  const JOB_PIPE = 'cc-daemon-bc8e3d6ca88bafb5-pty-b845e5a9';
+  const claudeAdapter = () => {
+    const base = createFakeAdapter();
+    return { ...base, kind: 'claude', launch: (ctx: Parameters<typeof base.launch>[0]) => ({ ...base.launch(ctx), agentSessionId: SESSION }) };
+  };
 
+  it('grava as pastas de sessão e, ao reabrir com o job vivo, o terminal fica descarregado com o aviso', async () => {
+    const claudeDir = mkdtempSync(join(tmpdir(), 'orq-claude-'));
+    const dir = mkdtempSync(join(tmpdir(), 'orq-proj-'));
+    const first = await setup({ adapters: { claude: claudeAdapter() }, claudeDir, listPipes: () => [JOB_PIPE] });
+    await first.command('1', 'project.open', { dir });
+    await first.command('2', 'terminal.create', { name: 'W', agent: 'claude' });
+    await waitFor(() => { try { return readWorkspace(dir).terminals[0]?.sessionDirs?.length === 1; } catch { return false; } });
+    const saved = readWorkspace(dir).terminals[0];
+    expect(saved.agentSessionId).toBe(SESSION);
+    await bridge!.close();
+    bridge = undefined;
+
+    mkdirSync(join(claudeDir, 'jobs', 'b845e5a9'), { recursive: true });
+    writeFileSync(join(claudeDir, 'jobs', 'b845e5a9', 'state.json'), JSON.stringify({
+      backend: 'daemon', state: 'working', sessionId: 'b845e5a9-0000-4000-8000-000000000002',
+      respawnFlags: ['--settings', join(saved.sessionDirs[0], 'claude-settings.json')],
+    }));
+
+    const second = await setup({ adapters: { claude: claudeAdapter() }, claudeDir, listPipes: () => [JOB_PIPE] });
+    const opened = await second.command('3', 'project.open', { dir });
+    expect(opened).toMatchObject({ result: { terminals: [{ name: 'W', unloaded: true }] } });
+    expect(second.ptyHost.spawned).toHaveLength(0);
+    await waitFor(() => second.sent.some((message) => message.kind === 'event' && message.event.type === 'terminal.notice' && message.event.message.includes('claude stop b845e5a9')));
+  });
+});

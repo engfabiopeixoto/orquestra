@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { workspaceSchema } from '@orquestra/shared/workspace';
 import { WorkspaceState } from '../src/workspace-state.js';
 
 const descriptor = (name: string) => ({
@@ -81,5 +82,17 @@ describe('WorkspaceState', () => {
       connections: [],
     });
     expect(workspace.terminals.map((t) => t.monitor)).toEqual([true, false]);
+  });
+});
+
+describe('WorkspaceState: pastas de sessão', () => {
+  it('captura leva as pastas de sessão do terminal para o workspace e o schema as mantém', () => {
+    const state = new WorkspaceState();
+    const dirs = ['C:/dados/sessions/a', 'C:/dados/sessions/b'];
+    const captured = state.capture({ terminals: [{ ...descriptor('A'), sessionDirs: dirs }, descriptor('B')], notes: [], connections: [] });
+    expect(captured.terminals[0]!.sessionDirs).toEqual(dirs);
+    expect(captured.terminals[1]!.sessionDirs).toBeUndefined();
+    const reloaded = workspaceSchema.parse(JSON.parse(JSON.stringify(captured)));
+    expect(reloaded.terminals[0]!.sessionDirs).toEqual(dirs);
   });
 });
