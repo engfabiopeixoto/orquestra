@@ -33,7 +33,7 @@ test('app empacotado abre, inicia o núcleo, cria shell e grava logs', async () 
 
   const page = await app.firstWindow();
   try {
-  expect(await app.evaluate(({ app }) => app.getVersion())).toBe('0.3.3');
+  expect(await app.evaluate(({ app }) => app.getVersion())).toBe('0.3.4');
   await expect(page.locator('.proj.is-on')).toBeVisible({ timeout: 30_000 });
 
   // Cria um shell
