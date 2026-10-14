@@ -14,6 +14,7 @@ import { appStore, useApp } from '../store';
 import { runAttachTerminal } from './attach';
 import { terminalKeyAction } from './keys';
 import { muteTerminalReplies } from './replies';
+import { forwardWheelToTerminal } from './wheel';
 import { activeWorkspaceId } from '../workspace-context';
 import { recoverGroupLayout } from '../groups/helpers';
 import { NodeConnectors } from '../canvas/NodeConnectors';
@@ -121,6 +122,20 @@ function TerminalBody({ name, readOnly }: { name: string; readOnly: boolean }) {
       term.dispose();
     };
   }, [name]);
+
+  // A camada de zoom (.term-readonly) é irmã do corpo: ela escuta a roda no nó para repassá-la ao xterm.
+  useEffect(() => {
+    const node = host.current?.closest('.term-node');
+    if (!node) return;
+    const onWheel = (event: Event) => {
+      if (!(event.target as Element).closest('.term-readonly')) return;
+      const term = termRef.current;
+      if (term) forwardWheelToTerminal(term, term.element ?? null, event as WheelEvent);
+    };
+    // passive: false, senão o preventDefault é ignorado e a página ainda rola.
+    node.addEventListener('wheel', onWheel, { passive: false });
+    return () => node.removeEventListener('wheel', onWheel);
+  }, []);
 
   useEffect(() => {
     if (termRef.current) termRef.current.options.disableStdin = readOnly;
