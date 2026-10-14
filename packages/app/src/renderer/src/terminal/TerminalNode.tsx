@@ -14,7 +14,7 @@ import { appStore, useApp } from '../store';
 import { runAttachTerminal } from './attach';
 import { terminalKeyAction } from './keys';
 import { muteTerminalReplies } from './replies';
-import { forwardWheelToTerminal } from './wheel';
+import { applyWheelScroll, forwardWheelToTerminal } from './wheel';
 import { activeWorkspaceId } from '../workspace-context';
 import { recoverGroupLayout } from '../groups/helpers';
 import { NodeConnectors } from '../canvas/NodeConnectors';
@@ -33,11 +33,18 @@ const api = createCommandApi(window.orquestra.invoke);
 const STATE_LABEL = { starting: 'iniciando', idle: 'ocioso', busy: 'ocupado', waiting: 'aguardando você', exited: 'encerrado' } as const;
 const RESIZE_DEBOUNCE_MS = 100;
 
+/** Altura de uma linha em pixels de layout (não muda com o zoom do canvas). */
+function cellHeightOf(term: Terminal): number {
+  const screen = term.element?.querySelector('.xterm-screen');
+  return screen && term.rows > 0 ? screen.clientHeight / term.rows : 0;
+}
+
 function TerminalBody({ name, readOnly }: { name: string; readOnly: boolean }) {
   const host = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const readOnlyRef = useRef(readOnly);
   readOnlyRef.current = readOnly;
+  const wheelState = useRef({ carry: 0 });
   const isFocused = useApp((state) => state.focusedTerminal === name);
 
   useEffect(() => {
@@ -83,6 +90,10 @@ function TerminalBody({ name, readOnly }: { name: string; readOnly: boolean }) {
       else pasteClipboard();
     };
     host.current!.addEventListener('contextmenu', onContextMenu);
+    // Em captura, antes do xterm: rola o buffer direto e não perde a roda para a saída que chega junto.
+    const hostElement = host.current!;
+    const onWheel = (event: WheelEvent) => { applyWheelScroll(term, event, cellHeightOf(term), wheelState.current); };
+    hostElement.addEventListener('wheel', onWheel, { capture: true, passive: false });
     const onFocus = () => appStore.getState().setFocus(name);
     const onBlur = () => {
       if (workspaceId !== activeWorkspaceId()) return;
@@ -118,6 +129,7 @@ function TerminalBody({ name, readOnly }: { name: string; readOnly: boolean }) {
       term.textarea?.removeEventListener('focus', onFocus);
       term.textarea?.removeEventListener('blur', onBlur);
       host.current?.removeEventListener('contextmenu', onContextMenu);
+      hostElement.removeEventListener('wheel', onWheel, { capture: true });
       if (window.__orqTerms?.[name] === term) delete window.__orqTerms[name];
       term.dispose();
     };
@@ -130,7 +142,9 @@ function TerminalBody({ name, readOnly }: { name: string; readOnly: boolean }) {
     const onWheel = (event: Event) => {
       if (!(event.target as Element).closest('.term-readonly')) return;
       const term = termRef.current;
-      if (term) forwardWheelToTerminal(term, term.element ?? null, event as WheelEvent);
+      if (!term) return;
+      if (applyWheelScroll(term, event as WheelEvent, cellHeightOf(term), wheelState.current)) return;
+      forwardWheelToTerminal(term, term.element ?? null, event as WheelEvent);
     };
     // passive: false, senão o preventDefault é ignorado e a página ainda rola.
     node.addEventListener('wheel', onWheel, { passive: false });

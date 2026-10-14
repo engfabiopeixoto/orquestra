@@ -72,3 +72,33 @@ test('a roda sobre o terminal rola o histórico do xterm e não move o canvas, c
     expect((await snapshot(page, 'S')).canvas).not.toBe(afterZoomed.canvas);
   } finally { await app.close(); }
 });
+
+// Corrida reproduzida: a roda que chega no mesmo quadro em que a saída do terminal chega era perdida
+// (o xterm rola pelo scrollTop do DOM e a saída nova, com o viewport no fim, o sobrescrevia).
+test('a roda não se perde quando a saída do terminal chega ao mesmo tempo', async () => {
+  test.setTimeout(240_000);
+  const { app, page } = await launchApp();
+  try {
+    await expect(page.locator('.proj.is-on')).toBeVisible();
+    await createShell(page, 'S');
+    await printLines(page, 'S', 200);
+    const lost: string[] = [];
+    for (const delay of [0, 20, 40, 60, 80, 100, 120]) {
+      for (let round = 0; round < 2; round++) {
+        await page.evaluate(() => window.__orqTerms!.S!.scrollToBottom());
+        await page.getByTestId('terminal-body-S').click();
+        // Algumas linhas chegam cerca de 30 ms depois do Enter, perto de quando a roda é aplicada.
+        await page.keyboard.type('Start-Sleep -Milliseconds 30; "a"; "b"; "c"');
+        await page.keyboard.press('Enter');
+        await page.waitForTimeout(delay);
+        await wheelOverTerminal(page, 'S', -120);
+        await page.waitForTimeout(500);
+        const after = await snapshot(page, 'S');
+        if (after.viewportY >= after.baseY) lost.push(`delay ${delay}ms: ${after.viewportY}/${after.baseY}`);
+        let previous = -1;
+        await expect.poll(async () => { const { length } = await snapshot(page, 'S'); const same = length === previous; previous = length; return same; }, { intervals: [300], timeout: 15_000 }).toBe(true);
+      }
+    }
+    expect(lost).toEqual([]);
+  } finally { await app.close(); }
+});

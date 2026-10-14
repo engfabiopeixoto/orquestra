@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
-import { forwardWheelToTerminal } from '../src/renderer/src/terminal/wheel';
+import { applyWheelScroll, forwardWheelToTerminal, wheelToLines } from '../src/renderer/src/terminal/wheel';
 
 const wheel = (init: WheelEventInit = {}) => new WheelEvent('wheel', { deltaY: -120, deltaMode: 0, clientX: 40, clientY: 25, bubbles: true, cancelable: true, ...init });
 const setup = () => {
@@ -51,5 +51,64 @@ describe('forwardWheelToTerminal', () => {
     expect(ctrl.defaultPrevented).toBe(false);
     expect(received).toEqual([]);
     expect(forwardWheelToTerminal(term, null, wheel())).toBe(false);
+  });
+});
+
+describe('wheelToLines', () => {
+  it('converte pixels em linhas acumulando a fração entre eventos', () => {
+    const first = wheelToLines({ deltaY: -400, deltaMode: 0 }, 15, 24, 0);
+    expect(first.lines).toBe(-26);
+    const second = wheelToLines({ deltaY: -10, deltaMode: 0 }, 15, 24, first.carry);
+    expect(second.lines).toBe(-1);
+    expect(wheelToLines({ deltaY: 5, deltaMode: 0 }, 15, 24, 0)).toEqual({ lines: 0, carry: 5 / 15 });
+  });
+
+  it('entende deltaMode de linhas e de páginas', () => {
+    expect(wheelToLines({ deltaY: -3, deltaMode: 1 }, 15, 24, 0).lines).toBe(-3);
+    expect(wheelToLines({ deltaY: 1, deltaMode: 2 }, 15, 24, 0).lines).toBe(24);
+  });
+});
+
+describe('applyWheelScroll', () => {
+  const termWith = (overrides: { type?: string; mouse?: string } = {}) => ({
+    rows: 24,
+    buffer: { active: { type: overrides.type ?? 'normal' } },
+    modes: { mouseTrackingMode: overrides.mouse ?? 'none' },
+    scrollLines: vi.fn(),
+  });
+
+  it('rola o buffer direto, sem depender do scrollTop do DOM, e consome o evento', () => {
+    const term = termWith();
+    const state = { carry: 0 };
+    const event = wheel({ deltaY: -300 });
+    expect(applyWheelScroll(term, event, 15, state)).toBe(true);
+    expect(term.scrollLines).toHaveBeenCalledWith(-20);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('não interfere em tela alternativa nem com mouse tracking: a TUI recebe a roda pelo xterm', () => {
+    for (const term of [termWith({ type: 'alternate' }), termWith({ mouse: 'any' })]) {
+      const event = wheel();
+      expect(applyWheelScroll(term, event, 15, { carry: 0 })).toBe(false);
+      expect(term.scrollLines).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(false);
+    }
+  });
+
+  it('deixa Ctrl e Meta (zoom) e altura de célula desconhecida para o comportamento padrão', () => {
+    const term = termWith();
+    expect(applyWheelScroll(term, wheel({ ctrlKey: true }), 15, { carry: 0 })).toBe(false);
+    expect(applyWheelScroll(term, wheel({ metaKey: true }), 15, { carry: 0 })).toBe(false);
+    expect(applyWheelScroll(term, wheel(), 0, { carry: 0 })).toBe(false);
+    expect(term.scrollLines).not.toHaveBeenCalled();
+  });
+
+  it('um deslocamento menor que uma linha é consumido e fica acumulado', () => {
+    const term = termWith();
+    const state = { carry: 0 };
+    expect(applyWheelScroll(term, wheel({ deltaY: 6 }), 15, state)).toBe(true);
+    expect(term.scrollLines).not.toHaveBeenCalled();
+    expect(applyWheelScroll(term, wheel({ deltaY: 12 }), 15, state)).toBe(true);
+    expect(term.scrollLines).toHaveBeenCalledWith(1);
   });
 });
