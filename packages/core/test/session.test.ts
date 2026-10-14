@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter } from '../src/adapters/types.js';
 import { pino } from 'pino';
 import { silentLogger, type Logger } from '../src/log.js';
@@ -30,7 +30,7 @@ function testAdapter(overrides: Partial<AgentAdapter> = {}): AgentAdapter {
   };
 }
 
-function setup(adapter = testAdapter(), log: Logger = silentLogger()) {
+function setup(adapter = testAdapter(), log: Logger = silentLogger(), codexLongTurnWarningMs?: number) {
   const pty = new FakePty();
   const session = new Session({
     id: 'id1',
@@ -39,6 +39,7 @@ function setup(adapter = testAdapter(), log: Logger = silentLogger()) {
     pty,
     cwd: '.',
     log,
+    codexLongTurnWarningMs,
     readyQuietMs: 50,
     userTurnQuietMs: 200,
     transcriptRetries: 3,
@@ -126,6 +127,48 @@ describe('Session', () => {
     expect(ended).toHaveLength(1);
     await session.handleHook('Stop', { ...stop, 'turn-id': 'turn-2' });
     expect(ended).toHaveLength(2);
+  });
+
+  it('rodapé exato do Codex encerra o turno com resposta do rollout e deduplica notify atrasado', async () => {
+    const adapter = { ...codexAdapter, readScreenCompletion: async () => ({ completionId: 'codex-1:turn-1', text: 'resposta do rollout' }) };
+    const { pty, session, ended } = setup(adapter);
+    session.agentSessionId = 'codex-1';
+    await ready(pty, session);
+    await session.injectPrompt('primeiro', 'a1');
+    pty.emitData('\r\n  Worked for 2s • 05:54\r\n');
+    await waitFor(() => ended.length === 1);
+    expect(ended).toEqual([{ owner: 'broker', answer: 'resposta do rollout' }]);
+    await session.injectPrompt('segundo', 'a2');
+    pty.emitData('\r\n  Worked for 2s • 05:54\r\n');
+    await session.settle();
+    expect(session.state).toBe('busy');
+    expect(ended).toHaveLength(1);
+    await session.handleHook('Stop', { type: 'agent-turn-complete', 'thread-id': 'codex-1', 'turn-id': 'turn-1', 'last-assistant-message': 'resposta antiga' });
+    expect(session.state).toBe('busy');
+    expect(ended).toHaveLength(1);
+  });
+
+  it('rodapé citado em texto do prompt ou da resposta não encerra turno Codex', async () => {
+    const adapter = { ...codexAdapter, readScreenCompletion: async () => ({ completionId: 'codex-1:turn-1', text: 'ok' }) };
+    const { pty, session, ended } = setup(adapter);
+    session.agentSessionId = 'codex-1';
+    await ready(pty, session);
+    await session.injectPrompt('o texto cita Worked for 1s • 17:19 e Conversation interrupted no meio', 'a1');
+    pty.emitData('\r\n  eco do prompt: Worked for 1s • 17:19\r\nA resposta cita   Worked for 2s • 05:54 no meio da frase\r\n');
+    await session.settle();
+    expect(ended).toEqual([]);
+    expect(session.state).toBe('busy');
+  });
+
+  it('registra aviso com terminal e askId se Codex fica ocupado sem sinal', async () => {
+    const warn = vi.fn();
+    const log = { info: vi.fn(), warn, debug: vi.fn(), trace: vi.fn(), error: vi.fn() } as unknown as Logger;
+    const { pty, session } = setup(codexAdapter, log, 5);
+    await ready(pty, session);
+    await session.injectPrompt('pedido longo', 'ask-77');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(warn).toHaveBeenCalledWith({ terminal: 'B', askId: 'ask-77', durationMs: 5 }, 'Codex turn busy without completion signal');
+    await session.handleHook('Stop', { type: 'agent-turn-complete', 'thread-id': 'codex-1', 'turn-id': 'turn-1', 'last-assistant-message': 'fim' });
   });
 
   it('falha na leitura da transcrição libera o turno com no-answer', async () => {

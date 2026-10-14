@@ -81,8 +81,9 @@ export function ContextBar({ name, menu = false, onDone, onOpenMenu }: { name: s
           entries={queue}
           onCancel={(askId) =>
             void run(async () => {
-              const { cancelled } = await api.command('prompt.cancel', { askId });
-              if (!cancelled) appStore.getState().notify('warn', 'Esse pedido já tinha terminado.');
+              const result = await api.command('prompt.cancel', { askId });
+              if (!result.cancelled && result.terminalBusy) appStore.getState().notify('warn', 'O pedido já foi cancelado; o terminal ainda parece ocupado. Use Reiniciar para liberar a fila.');
+              else if (!result.cancelled) appStore.getState().notify('warn', 'Esse pedido já tinha terminado.');
             })
           }
         />

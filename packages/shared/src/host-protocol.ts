@@ -182,7 +182,7 @@ export const hostMethodSchemas = {
   'terminal.snapshot': { params: named, result: z.object({ data: z.string(), cols: z.number().int(), rows: z.number().int() }) },
   'edge.connect': { params: z.object({ a: z.string().min(1), b: z.string().min(1) }), result: empty },
   'edge.disconnect': { params: z.object({ a: z.string().min(1), b: z.string().min(1) }), result: empty },
-  'prompt.cancel': { params: z.object({ askId: z.string().min(1) }), result: z.object({ cancelled: z.boolean() }) },
+  'prompt.cancel': { params: z.object({ askId: z.string().min(1) }), result: z.object({ cancelled: z.boolean(), terminalBusy: z.boolean() }) },
   'layout.update': {
     params: z.object({ nodes: z.array(z.object({ name: z.string().min(1) }).merge(rectSchema)), viewport: viewportSchema.optional(), groupAssignments: z.array(groupAssignmentSchema).optional() }),
     result: empty,

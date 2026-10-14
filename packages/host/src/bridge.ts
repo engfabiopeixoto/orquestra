@@ -801,7 +801,7 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
       changed();
       return {};
     },
-    'prompt.cancel': async ({ askId }) => ({ cancelled: orquestra.broker.cancel(askId) }),
+    'prompt.cancel': async ({ askId }) => orquestra.broker.cancelWithStatus(askId),
     'layout.update': async ({ nodes, viewport, groupAssignments }) => {
       const current = requireProject();
       for (const { name } of nodes) if (!orquestra.topology.kindOf(name)) throw new OrqError('NOT_FOUND', `Elemento ${name} não existe.`);

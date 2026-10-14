@@ -114,8 +114,20 @@ export class AskBroker {
   }
 
   cancel(askId: string): boolean {
+    return this.cancelWithStatus(askId).cancelled;
+  }
+
+  cancelWithStatus(askId: string): { cancelled: boolean; terminalBusy: boolean } {
     const item = this.items.get(askId);
-    if (!item || (item.status.status !== 'queued' && item.status.status !== 'running')) return false;
+    if (!item) return { cancelled: false, terminalBusy: false };
+    if (item.status.status === 'failed' && item.status.reason === 'cancelado' && this.inFlight.get(item.target) === item) {
+      if (this.opts.resolveTarget(item.target)?.state !== 'idle') return { cancelled: false, terminalBusy: true };
+      this.inFlight.delete(item.target);
+      this.notify(item.target, 'cancelled-idle');
+      this.pump(item.target);
+      return { cancelled: true, terminalBusy: false };
+    }
+    if (item.status.status !== 'queued' && item.status.status !== 'running') return { cancelled: false, terminalBusy: false };
     const queue = this.queues.get(item.target) ?? [];
     const index = queue.indexOf(item);
     if (index >= 0) {
@@ -124,7 +136,12 @@ export class AskBroker {
     }
     // Em curso: o agente segue até o fim; o fim do turno libera a fila (não injetamos com ele ocupado).
     this.fail(item, 'cancelado');
-    return true;
+    if (this.inFlight.get(item.target) === item && this.opts.resolveTarget(item.target)?.state === 'idle') {
+      this.inFlight.delete(item.target);
+      this.notify(item.target, 'cancelled-idle');
+      this.pump(item.target);
+    }
+    return { cancelled: true, terminalBusy: false };
   }
 
   /**

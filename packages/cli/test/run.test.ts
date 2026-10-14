@@ -45,6 +45,17 @@ describe('orq', () => {
     expect(result.code).toBe(0);
     expect(received).toEqual({ agent: 'codex', event: 'Stop', payload });
   });
+  it('hook moderno do Codex recebe payload grande pelo stdin sem arg posicional', async () => {
+    const payload = { session_id: 'abc', turn_id: 't1', hook_event_name: 'Stop', last_assistant_message: 'resposta', input_messages: ['x'.repeat(40_000)] };
+    let received: unknown;
+    const result = await cli(['hook', 'codex', 'Stop'], async (method, params) => {
+      expect(method).toBe('hook');
+      received = params;
+      return {};
+    }, { stdin: JSON.stringify(payload) });
+    expect(result.code).toBe(0);
+    expect(received).toEqual({ agent: 'codex', event: 'Stop', payload });
+  });
   it('prompt imprime a resposta e sai com 0', async () => {
     let received: unknown;
     const result = await cli(['prompt', 'B', 'quanto é 2+2?'], async (_m, params) => {

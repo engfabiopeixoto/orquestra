@@ -8,7 +8,8 @@ export type HookSignal =
   | { kind: 'session-start'; agentSessionId: string | null }
   | { kind: 'ignored' };
 
-export type ScreenSignal = 'waiting' | 'interrupted' | 'failed';
+export type ScreenSignal = 'waiting' | 'interrupted' | 'failed' | 'turn-end';
+export type ScreenCompletion = { completionId: string | null; text: string | null };
 
 export type LaunchContext = {
   cwd: string;
@@ -33,6 +34,7 @@ export interface AgentAdapter {
   interpretHook(event: string, payload: unknown): HookSignal;
   /** Resposta final do turno atual, ou null se ainda não existe. */
   readTranscript?(path: string): Promise<string | null>;
+  readScreenCompletion?(agentSessionId: string): Promise<ScreenCompletion | null>;
   preparePrompt(text: string, ctx: { cwd: string; askId: string }): string;
   encodeInput?(body: string): string;
 }

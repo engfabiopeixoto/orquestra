@@ -37,6 +37,7 @@ export type SessionOptions = {
   userTurnQuietMs?: number;
   transcriptRetries?: number;
   transcriptRetryMs?: number;
+  codexLongTurnWarningMs?: number;
   agentSessionId?: string | null;
   unloaded?: boolean;
 };
@@ -57,11 +58,13 @@ export class Session extends EventEmitter<SessionEvents> {
   private userInputAt = 0;
   private readyTimer: NodeJS.Timeout | undefined;
   private userTurnTimer: NodeJS.Timeout | undefined;
+  private turnWarningTimer: NodeJS.Timeout | undefined;
   private provisionalUserTurn = false;
   private inputHasText = false;
   private pasting = false;
   private resolvingTurn: number | null = null;
   private submittingTurn: number | null = null;
+  private screenCompletionTurn: number | null = null;
   private readonly completedHooks = new Set<string>();
   /** Cresce a cada turno: uma continuação assíncrona de um turno antigo não pode mexer no atual. */
   private turnSeq = 0;
@@ -215,8 +218,7 @@ export class Session extends EventEmitter<SessionEvents> {
     if (signal.kind !== 'turn-end') return;
     if (signal.completionId) {
       if (this.completedHooks.has(signal.completionId)) return;
-      this.completedHooks.add(signal.completionId);
-      if (this.completedHooks.size > 256) this.completedHooks.delete(this.completedHooks.values().next().value!);
+      this.rememberCompletion(signal.completionId);
     }
     this.learnAgentSession(signal.agentSessionId);
     this.waitingByHook = false;
@@ -231,6 +233,7 @@ export class Session extends EventEmitter<SessionEvents> {
       this.emit('turnEnded', { owner, answer: null });
       return;
     }
+    clearTimeout(this.turnWarningTimer);
     const turn = this.turnSeq;
     if (this.resolvingTurn === turn) return;
     this.resolvingTurn = turn;
@@ -313,6 +316,10 @@ export class Session extends EventEmitter<SessionEvents> {
     if (turn !== this.turnSeq) return;
     this.waitingOnScreen = visible.has('waiting');
     const failure: TurnFailure | null = appeared.includes('interrupted') ? 'interrupted' : appeared.includes('failed') ? 'agent-error' : null;
+    if (appeared.includes('turn-end') && this.adapter.readScreenCompletion) {
+      void this.finishScreenTurn(turn);
+      return;
+    }
     if (failure && this.owner !== null) {
       const owner = this.owner;
       this.opts.log.info({ owner, askId: this.currentAskId, failure }, 'turno terminou sem resposta');
@@ -329,9 +336,40 @@ export class Session extends EventEmitter<SessionEvents> {
     this.emit('agentSession', id);
   }
 
+  private async finishScreenTurn(turn: number): Promise<void> {
+    if (this.screenCompletionTurn === turn || turn !== this.turnSeq || this.owner === null) return;
+    this.screenCompletionTurn = turn;
+    const owner = this.owner;
+    let completion: Awaited<ReturnType<NonNullable<AgentAdapter['readScreenCompletion']>>> = null;
+    try {
+      if (this.agentSessionId) completion = await this.adapter.readScreenCompletion!(this.agentSessionId);
+    } catch (error) {
+      this.opts.log.warn({ err: error, terminal: this.name, askId: this.currentAskId }, 'falha ao recuperar resposta do rollout Codex');
+    }
+    if (turn !== this.turnSeq || owner !== this.owner) return;
+    if (completion?.completionId && this.completedHooks.has(completion.completionId)) {
+      this.opts.log.warn({ terminal: this.name, askId: this.currentAskId, completionId: completion.completionId }, 'Codex footer matches an earlier turn; ignored');
+      this.screenCompletionTurn = null;
+      return;
+    }
+    clearTimeout(this.turnWarningTimer);
+    if (completion?.completionId) this.rememberCompletion(completion.completionId);
+    this.opts.log.info({ terminal: this.name, askId: this.currentAskId, completionId: completion?.completionId ?? null }, 'fim de turno Codex confirmado pela tela');
+    this.endTurn();
+    const answer = completion?.text?.trim() ? completion.text : null;
+    if (owner === 'broker' && answer === null) this.emit('turnFailed', { owner, reason: 'no-answer' });
+    else this.emit('turnEnded', { owner, answer: owner === 'broker' ? answer : null });
+  }
+
+  private rememberCompletion(completionId: string): void {
+    this.completedHooks.add(completionId);
+    if (this.completedHooks.size > 256) this.completedHooks.delete(this.completedHooks.values().next().value!);
+  }
+
   private onExit(code: number): void {
     clearTimeout(this.readyTimer);
     clearTimeout(this.userTurnTimer);
+    clearTimeout(this.turnWarningTimer);
     const owner = this.owner;
     this.owner = null;
     this.turnSeq++;
@@ -355,9 +393,18 @@ export class Session extends EventEmitter<SessionEvents> {
     clearTimeout(this.userTurnTimer);
     this.provisionalUserTurn = false;
     this.turnSeq++;
+    this.screenCompletionTurn = null;
     this.owner = owner;
     this.currentAskId = askId;
     this.setState('busy', `turn-start:${owner}`);
+    clearTimeout(this.turnWarningTimer);
+    if (this.adapter.kind === 'codex' && owner === 'broker') {
+      const turn = this.turnSeq;
+      this.turnWarningTimer = setTimeout(() => {
+        if (turn !== this.turnSeq || this.owner !== owner) return;
+        this.opts.log.warn({ terminal: this.name, askId, durationMs: this.opts.codexLongTurnWarningMs ?? 120_000 }, 'Codex turn busy without completion signal');
+      }, this.opts.codexLongTurnWarningMs ?? 120_000).unref();
+    }
   }
 
   private armUserTurn(): void {
@@ -372,6 +419,7 @@ export class Session extends EventEmitter<SessionEvents> {
 
   private endTurn(): void {
     clearTimeout(this.userTurnTimer);
+    clearTimeout(this.turnWarningTimer);
     this.turnSeq++;
     this.owner = null;
     this.currentAskId = null;

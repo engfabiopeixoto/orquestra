@@ -289,6 +289,27 @@ describe('AskBroker', () => {
     await expect(outcome).rejects.toMatchObject({ message: expect.stringMatching(/cancelado/) });
   });
 
+  it('cancelar em curso libera a fila assim que o terminal comprovadamente fica idle', async () => {
+    const { broker, t } = setup();
+    const first = broker.submit({ asker: 'A', target: 'B', text: 'primeiro', timeoutMs: 60_000 });
+    void first.catch(() => {});
+    void broker.submit({ asker: 'C', target: 'B', text: 'segundo', timeoutMs: 60_000 });
+    expect(broker.cancel('id1')).toBe(true);
+    expect(broker.queued('B')).toBe(2);
+    t('B').state = 'idle';
+    expect(broker.cancel('id1')).toBe(true);
+    expect(t('B').injected.map((item) => item.text)).toEqual(['primeiro', 'segundo']);
+    expect(broker.list('B')).toMatchObject([{ askId: 'id2', status: 'running' }]);
+  });
+
+  it('segundo cancelamento não libera a fila se o alvo segue busy', async () => {
+    const { broker } = setup();
+    const first = broker.submit({ asker: 'A', target: 'B', text: 'primeiro', timeoutMs: 60_000 });
+    void first.catch(() => {});
+    expect(broker.cancel('id1')).toBe(true);
+    expect(broker.cancelWithStatus('id1')).toEqual({ cancelled: false, terminalBusy: true });
+  });
+
   it('quando quem perguntou desconecta, a resposta é entregue depois no terminal dele', async () => {
     const { broker, finish, t } = setup();
     const abort = new AbortController();
