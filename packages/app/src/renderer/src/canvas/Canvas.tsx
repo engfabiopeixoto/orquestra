@@ -47,6 +47,68 @@ async function connect(a: string, b: string, api: CommandApi) {
   }
 }
 
+export interface CanvasDeleteParams {
+  deletedNodes: CanvasFlowNode[];
+  deletedEdges: Edge[];
+  api: CommandApi;
+  workspaceId?: string;
+  selectedEdges?: ReadonlySet<string>;
+  onRemoveRequest(name: string): void;
+}
+
+export function filterEdgesToDelete<E extends Edge>(
+  deletedEdges: E[],
+  deletedNodes: Array<{ id: string }>,
+  selectedEdgeIds?: ReadonlySet<string>,
+): E[] {
+  const deletedNodeIds = new Set(deletedNodes.map((node) => node.id));
+  return deletedEdges.filter(
+    (edge) =>
+      Boolean(edge.selected || selectedEdgeIds?.has(edge.id)) &&
+      !deletedNodeIds.has(edge.source) &&
+      !deletedNodeIds.has(edge.target),
+  );
+}
+
+export async function handleCanvasDelete({
+  deletedNodes,
+  deletedEdges,
+  api,
+  workspaceId,
+  selectedEdges,
+  onRemoveRequest,
+}: CanvasDeleteParams): Promise<boolean> {
+  for (const node of deletedNodes) {
+    if (node.type === 'groupFrame') {
+      try { appStore.getState().applyGroupLayout(await api.command('group.remove', { id: node.data.groupId })); }
+      catch (error) { await recoverGroupLayout(api, error); }
+    } else if (node.type === 'note') {
+      if (window.confirm(`Apagar a nota ${node.id}?`)) {
+        try {
+          await api.command('note.remove', { name: node.id });
+          appStore.getState().removeNote(node.id);
+        } catch (error) {
+          appStore.getState().notify('error', (error as Error).message);
+        }
+      }
+    } else if (node.type === 'dataFlow') {
+      try { appStore.getState().applyFlow(await api.command('flow.remove', { id: node.data.flowId })); }
+      catch (error) { appStore.getState().notify('error', (error as Error).message); }
+    } else if (node.type === 'portal') {
+      if (window.confirm(`Fechar o portal ${node.id}?`)) {
+        void window.orquestra?.portal?.destroy(node.id, workspaceId);
+        portalStore.getState().removePortal(node.id);
+      }
+    } else {
+      // Terminais são removidos pelo fluxo com confirmação
+      onRemoveRequest(node.id);
+    }
+  }
+  const standaloneEdges = filterEdgesToDelete(deletedEdges, deletedNodes, selectedEdges);
+  for (const edge of standaloneEdges) await disconnectEdge(edge, api);
+  return false;
+}
+
 export function Canvas({ snapToGrid = true, onRemoveRequest, onNewGroup }: { snapToGrid?: boolean; onRemoveRequest(name: string): void; onNewGroup?(selection: boolean, position?: Position): void }) {
   const workspaceId = activeWorkspaceId();
   const api = useMemo(() => createCommandApi(window.orquestra.invoke, () => workspaceId), [workspaceId]);
@@ -140,36 +202,8 @@ export function Canvas({ snapToGrid = true, onRemoveRequest, onNewGroup }: { sna
     return () => window.removeEventListener('keydown', onKey);
   }, [zoomTo, fitView, getViewport]);
 
-  const onBeforeDelete: OnBeforeDelete<CanvasFlowNode, Edge> = async ({ nodes: deletedNodes, edges: deletedEdges }) => {
-    for (const node of deletedNodes) {
-      if (node.type === 'groupFrame') {
-        try { appStore.getState().applyGroupLayout(await api.command('group.remove', { id: node.data.groupId })); }
-        catch (error) { await recoverGroupLayout(api, error); }
-      } else if (node.type === 'note') {
-        if (window.confirm(`Apagar a nota ${node.id}?`)) {
-          try {
-            await api.command('note.remove', { name: node.id });
-            appStore.getState().removeNote(node.id);
-          } catch (error) {
-            appStore.getState().notify('error', (error as Error).message);
-          }
-        }
-      } else if (node.type === 'dataFlow') {
-        try { appStore.getState().applyFlow(await api.command('flow.remove', { id: node.data.flowId })); }
-        catch (error) { appStore.getState().notify('error', (error as Error).message); }
-      } else if (node.type === 'portal') {
-        if (window.confirm(`Fechar o portal ${node.id}?`)) {
-          void window.orquestra?.portal?.destroy(node.id, workspaceId);
-          portalStore.getState().removePortal(node.id);
-        }
-      } else {
-        // Terminais são removidos pelo fluxo com confirmação
-        onRemoveRequest(node.id);
-      }
-    }
-    for (const edge of deletedEdges) await disconnectEdge(edge, api);
-    return false;
-  };
+  const onBeforeDelete: OnBeforeDelete<CanvasFlowNode, Edge> = ({ nodes: deletedNodes, edges: deletedEdges }) =>
+    handleCanvasDelete({ deletedNodes, deletedEdges, api, workspaceId, selectedEdges, onRemoveRequest });
 
   return (
     <DisconnectEdgeContext.Provider value={disconnect}>

@@ -53,7 +53,7 @@ export async function closeWorkspace(id: string): Promise<void> {
   if (workspaceStore.getState().changing) return;
   const workspace = workspaceStore.getState().workspaces.find((item) => item.id === id);
   if (!workspace) return;
-  if (workspace.terminalCount && !window.confirm(`Fechar ${workspace.name} salva o canvas e encerra seus ${workspace.terminalCount} terminais. Continuar?`)) return;
+  if (workspace.terminalCount && !window.confirm(`Fechar ${workspace.name} salva o canvas e encerra ${workspace.terminalCount === 1 ? 'seu 1 terminal' : `seus ${workspace.terminalCount} terminais`}. Continuar?`)) return;
   workspaceStore.setState({ changing: true });
   try {
     const scoped = createCommandApi((...args) => window.orquestra.invoke(...args), () => id);

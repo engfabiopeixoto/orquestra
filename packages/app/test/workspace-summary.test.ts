@@ -14,6 +14,11 @@ describe('workspaceSummary', () => {
     expect(workspaceSummary(workspace({ terminalCount: 5, waiting: 1 }))).toBe('5 agentes · 1 aguardando');
     expect(workspaceSummary(workspace({ terminalCount: 5, busy: 2, waiting: 1 }))).toBe('5 agentes · 2 ativos · 1 aguardando');
   });
+  it('usa singular para 1 agente e 1 ativo', () => {
+    expect(workspaceSummary(workspace({ terminalCount: 1 }))).toBe('1 agente');
+    expect(workspaceSummary(workspace({ terminalCount: 1, busy: 1 }))).toBe('1 agente · 1 ativo');
+    expect(workspaceSummary(workspace({ terminalCount: 1, waiting: 1 }))).toBe('1 agente · 1 aguardando');
+  });
 });
 
 describe('workspaceDot', () => {

@@ -6,7 +6,10 @@ export const workspaceStore = createStore<{ workspaces: WorkspaceInfo[]; selecte
 /** Texto da segunda linha do projeto na sidebar. */
 export function workspaceSummary(workspace: WorkspaceInfo): string {
   if (workspace.status === 'paused') return 'pausado';
-  return `${workspace.terminalCount} agentes${workspace.busy ? ` · ${workspace.busy} ativos` : ''}${workspace.waiting ? ` · ${workspace.waiting} aguardando` : ''}`;
+  const agents = workspace.terminalCount === 1 ? '1 agente' : `${workspace.terminalCount} agentes`;
+  const busy = workspace.busy ? ` · ${workspace.busy === 1 ? '1 ativo' : `${workspace.busy} ativos`}` : '';
+  const waiting = workspace.waiting ? ` · ${workspace.waiting} aguardando` : '';
+  return `${agents}${busy}${waiting}`;
 }
 
 /** Classe do ponto de status: aguardando vence ativo, que vence o status do workspace. */
