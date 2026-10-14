@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter } from '../src/adapters/types.js';
 import { pino } from 'pino';
 import { silentLogger, type Logger } from '../src/log.js';
@@ -8,6 +11,13 @@ import { FakePty } from './helpers/fake-pty.js';
 import { waitFor } from './helpers/wait.js';
 import { claudeAdapter } from '../src/adapters/claude.js';
 import { codexAdapter } from '../src/adapters/codex.js';
+
+const codexSessions: Session[] = [];
+const codexHomes: string[] = [];
+afterEach(async () => {
+  await Promise.all(codexSessions.splice(0).map((session) => session.kill()));
+  for (const home of codexHomes.splice(0)) rmSync(home, { recursive: true, force: true });
+});
 
 function testAdapter(overrides: Partial<AgentAdapter> = {}): AgentAdapter {
   return {
@@ -32,6 +42,8 @@ function testAdapter(overrides: Partial<AgentAdapter> = {}): AgentAdapter {
 
 function setup(adapter = testAdapter(), log: Logger = silentLogger(), codexLongTurnWarningMs?: number) {
   const pty = new FakePty();
+  const codexHome = adapter.kind === 'codex' ? mkdtempSync(join(tmpdir(), 'codex-session-unit-')) : undefined;
+  if (codexHome) codexHomes.push(codexHome);
   const session = new Session({
     id: 'id1',
     name: 'B',
@@ -40,11 +52,13 @@ function setup(adapter = testAdapter(), log: Logger = silentLogger(), codexLongT
     cwd: '.',
     log,
     codexLongTurnWarningMs,
+    codexHome,
     readyQuietMs: 50,
     userTurnQuietMs: 200,
     transcriptRetries: 3,
     transcriptRetryMs: 10,
   });
+  if (adapter.kind === 'codex') codexSessions.push(session);
   const ended: Array<{ owner: TurnOwner; answer: string | null }> = [];
   const failed: Array<{ owner: TurnOwner; reason: TurnFailure }> = [];
   session.on('turnEnded', (event) => ended.push(event));
@@ -127,61 +141,6 @@ describe('Session', () => {
     expect(ended).toHaveLength(1);
     await session.handleHook('Stop', { ...stop, 'turn-id': 'turn-2' });
     expect(ended).toHaveLength(2);
-  });
-
-  it('rodapé exato do Codex encerra o turno com resposta do rollout e deduplica notify atrasado', async () => {
-    const adapter = { ...codexAdapter, readScreenCompletion: async () => ({ completionId: 'codex-1:turn-1', text: 'resposta do rollout' }) };
-    const { pty, session, ended } = setup(adapter);
-    session.agentSessionId = 'codex-1';
-    await ready(pty, session);
-    await session.injectPrompt('primeiro', 'a1');
-    pty.emitData('\r\n  Worked for 2s • 05:54\r\n');
-    await waitFor(() => ended.length === 1);
-    expect(ended).toEqual([{ owner: 'broker', answer: 'resposta do rollout' }]);
-    await session.injectPrompt('segundo', 'a2');
-    pty.emitData('\r\n  Worked for 2s • 05:54\r\n');
-    await session.settle();
-    expect(session.state).toBe('busy');
-    expect(ended).toHaveLength(1);
-    await session.handleHook('Stop', { type: 'agent-turn-complete', 'thread-id': 'codex-1', 'turn-id': 'turn-1', 'last-assistant-message': 'resposta antiga' });
-    expect(session.state).toBe('busy');
-    expect(ended).toHaveLength(1);
-  });
-
-  it('fallback do rodapé encerra dois turnos seguidos com histórico curto', async () => {
-    let completion = 0;
-    const adapter = {
-      ...codexAdapter,
-      readScreenCompletion: async () => {
-        completion++;
-        return { completionId: `codex-1:turn-${completion}`, text: `resposta ${completion}` };
-      },
-    };
-    const { pty, session, ended } = setup(adapter);
-    session.agentSessionId = 'codex-1';
-    await ready(pty, session);
-    await session.injectPrompt('primeiro', 'a1');
-    pty.emitData('\r\n  Worked for 2s • 05:54\r\n');
-    await waitFor(() => ended.length === 1);
-    await session.injectPrompt('segundo', 'a2');
-    pty.emitData('\r\n  Worked for 1s • 17:19\r\n');
-    await waitFor(() => ended.length === 2);
-    expect(ended).toEqual([
-      { owner: 'broker', answer: 'resposta 1' },
-      { owner: 'broker', answer: 'resposta 2' },
-    ]);
-  });
-
-  it('rodapé citado em texto do prompt ou da resposta não encerra turno Codex', async () => {
-    const adapter = { ...codexAdapter, readScreenCompletion: async () => ({ completionId: 'codex-1:turn-1', text: 'ok' }) };
-    const { pty, session, ended } = setup(adapter);
-    session.agentSessionId = 'codex-1';
-    await ready(pty, session);
-    await session.injectPrompt('o texto cita Worked for 1s • 17:19 e Conversation interrupted no meio', 'a1');
-    pty.emitData('\r\n  eco do prompt: Worked for 1s • 17:19\r\nA resposta cita   Worked for 2s • 05:54 no meio da frase\r\n');
-    await session.settle();
-    expect(ended).toEqual([]);
-    expect(session.state).toBe('busy');
   });
 
   it('registra aviso com terminal e askId se Codex fica ocupado sem sinal', async () => {

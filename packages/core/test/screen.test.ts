@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { agyAdapter } from '../src/adapters/agy.js';
 import { claudeAdapter } from '../src/adapters/claude.js';
-import { codexAdapter } from '../src/adapters/codex.js';
 import { Screen } from '../src/screen.js';
 import { ScreenWatcher } from '../src/screen-watcher.js';
 
@@ -77,8 +76,6 @@ describe('ScreenWatcher', () => {
 
   it('ignora rodapés e marcadores antigos deslocados por 1, 3 ou 10 linhas', () => {
     const cases = [
-      { rule: codexAdapter.screenRules.find((entry) => entry.signal === 'turn-end')!, line: '  Worked for 3s • 18:38' },
-      { rule: codexAdapter.screenRules.find((entry) => entry.signal === 'interrupted')!, line: '■ Conversation interrupted' },
       { rule: claudeAdapter.screenRules.find((entry) => entry.signal === 'interrupted')!, line: '  ⎿  Interrupted · What should Claude do instead?' },
       { rule: agyAdapter.screenRules.find((entry) => entry.signal === 'interrupted')!, line: '  ⎿  Interrupted · What should Antigravity CLI do instead?' },
     ];
@@ -98,8 +95,6 @@ describe('ScreenWatcher', () => {
 
   it('reconhece nova ocorrência quando a antiga sai em um update e a nova entra no seguinte', () => {
     const cases = [
-      { rule: codexAdapter.screenRules.find((entry) => entry.signal === 'turn-end')!, line: '  Worked for 3s • 18:38' },
-      { rule: codexAdapter.screenRules.find((entry) => entry.signal === 'interrupted')!, line: '■ Conversation interrupted' },
       { rule: claudeAdapter.screenRules.find((entry) => entry.signal === 'interrupted')!, line: '  ⎿  Interrupted · What should Claude do instead?' },
       { rule: agyAdapter.screenRules.find((entry) => entry.signal === 'interrupted')!, line: '  ⎿  Interrupted · What should Antigravity CLI do instead?' },
     ];

@@ -120,19 +120,15 @@ describe('agyAdapter', () => {
 describe('codexAdapter', () => {
   const signals = (text: string) => codexAdapter.screenRules.filter((rule) => rule.pattern.test(text)).map((rule) => rule.signal);
 
-  it('recognizes only Codex TUI interruption markers and ignores echoed prompt text', () => {
-    expect(signals('■ Turn interrupted')).toEqual(['interrupted']);
-    expect(signals('■Conversation interrupted - use /feedback if something went wrong')).toEqual(['interrupted']);
-    expect(signals('› No prompt, explique Turn interrupted e Conversation interrupted no meio da frase.')).toEqual([]);
-  });
-
-  it('ignores indented markers from Codex answers and wrapped prompt echoes', () => {
-    expect(signals('• IOTA\n  ■ Conversation interrupted - use /feedback if something went wrong\n  ■ Turn interrupted')).toEqual([]);
-    expect(signals('› texto com oitenta e seis caracteres antes do marcador para quebrar a linha do eco\n  ■Conversation interrupted')).toEqual([]);
-  });
-
-  it('waits on the folder trust dialog of Codex v0.162', () => {
+  it('usa a tela apenas para diálogos de espera, incluindo Hooks need review com linhas vazias', () => {
+    const hooksDialog = [
+      'Hooks need review', '', '2 hooks are new or changed.', '',
+      '1. Review hooks', '', '2. Trust all and continue', '', '3. Continue without trusting (hooks won\'t run)',
+    ].join('\n');
+    expect(signals(hooksDialog)).toEqual(['waiting']);
     expect(signals('  Trust this folder? Codex can read, edit, and run files here, subject to your')).toEqual(['waiting']);
+    expect(signals('  Worked for 1m 21s • 17:19')).toEqual([]);
+    expect(signals('■ Conversation interrupted - use /feedback if something went wrong')).toEqual([]);
   });
 });
 

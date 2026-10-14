@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { defaultMonitor, OrqError, reservedArgError, type QueueEntry, type SessionState } from '@orquestra/shared';
 import type { AgentAdapter } from './adapters/types.js';
 import { AskBroker } from './ask-broker.js';
+import { CLAUDE_CLEAR_INPUT, ClaudeStatusWatcher } from './adapters/claude-status.js';
 import { BackgroundJobWatcher, backgroundJobNotice, claudeConfigDir, findBackgroundJob, type ListPipes } from './background-job.js';
 import { childEnv, prependPath } from './env.js';
 import { createHandlers, type RegentHandler, type RegentMethod } from './handlers.js';
@@ -39,6 +40,10 @@ export type OrquestraOptions = {
   claudeDir?: string;
   /** Intervalo da verificação periódica dos jobs em segundo plano (padrão 5 s). */
   backgroundJobPollMs?: number;
+  /** Intervalo da leitura do status da sessão do Claude enquanto há turno em curso (padrão 200 ms). */
+  claudeStatusPollMs?: number;
+  /** Tolerância ao hook de fim de turno depois que o status do Claude volta a idle (padrão 2,5 s). */
+  claudeIdleGraceMs?: number;
   /** Lista os named pipes do sistema (o daemon abre um por conversa viva); injetável nos testes. */
   listPipes?: ListPipes;
   typingGuardMs?: number;
@@ -207,7 +212,7 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
     }
     const log = opts.log.child({ session: input.name, sessionId: id, agent: adapter.kind });
     const agentSessionId = unloaded ? input.agentSessionId ?? null : launch.agentSessionId ?? input.agentSessionId ?? null;
-    const session = new Session({ id, name: input.name, adapter, pty, cwd: input.cwd, log, readyQuietMs: opts.readyQuietMs, agentSessionId, unloaded });
+    const session = new Session({ id, name: input.name, adapter, pty, cwd: input.cwd, log, readyQuietMs: opts.readyQuietMs, agentSessionId, unloaded, idleGraceMs: opts.claudeIdleGraceMs });
     // session.name, não input.name: o terminal pode ser renomeado depois.
     const stopOutput = session.onOutput((data) => emit({ type: 'output', name: session.name, data }));
     session.on('state', () => {
@@ -228,7 +233,9 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
       emit({ type: 'agent-session', name: session.name });
     });
     if (resumeSessionId && !unloaded) watchResume(session, Date.now(), sessionDirs);
-    const stopWatcher = adapter.kind === 'claude' ? watchBackgroundJob(session, log, sessionDirs) : () => {};
+    const stopJobWatcher = adapter.kind === 'claude' ? watchBackgroundJob(session, log, sessionDirs) : () => {};
+    const stopStatusWatcher = adapter.kind === 'claude' && !unloaded ? watchClaudeStatus(session, log) : () => {};
+    const stopWatcher = () => { stopJobWatcher(); stopStatusWatcher(); };
     sessions.set(input.name, { session, token, stopOutput, stopWatcher });
     const regente = input.regente ?? false;
     const persona = input.persona ?? null;
@@ -237,6 +244,27 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
     if (!unloaded) tokens.set(token, input.name);
     log.info({ cwd: input.cwd, resumeSessionId, args }, 'terminal criado');
     return session;
+  }
+
+  /**
+   * Esc antes do primeiro token: o Claude Code desfaz o turno sem Stop nem "Interrupted". O status da sessão
+   * (~/.claude/sessions/<pid>.json) volta de busy para idle; sem hook de fim de turno, o turno falha como
+   * interrompido e a fila destrava. Só lê o arquivo enquanto o terminal está ocupado.
+   */
+  function watchClaudeStatus(session: Session, log: Logger): () => void {
+    const watcher = new ClaudeStatusWatcher({
+      sessionsDir: join(claudeDir, 'sessions'),
+      who: () => ({ pid: session.pid, sessionId: session.agentSessionId }),
+      log,
+      pollMs: opts.claudeStatusPollMs,
+      onBusy: () => session.agentBusy(),
+      // Só o pedido do broker: o texto devolvido num turno do próprio usuário é dele, para editar.
+      onIdle: () => session.agentIdle((owner) => { if (owner === 'broker') session.sendControl(CLAUDE_CLEAR_INPUT); }),
+    });
+    const sync = () => { if (session.state === 'busy') watcher.start(); else watcher.stop(); };
+    session.on('state', sync);
+    sync();
+    return () => { session.off('state', sync); watcher.stop(); };
   }
 
   /**

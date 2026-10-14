@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { OrqError, type SessionState } from '@orquestra/shared';
 import type { AgentAdapter, HookSignal, ScreenSignal } from './adapters/types.js';
 import type { BackgroundJob } from './background-job.js';
+import { CodexRolloutWatcher, type CodexRolloutEvent } from './codex-rollout-watcher.js';
 import { incompleteEscapeTail } from './escape-tail.js';
 import { writePrompt } from './input.js';
 import type { Logger } from './log.js';
@@ -38,8 +39,13 @@ export type SessionOptions = {
   transcriptRetries?: number;
   transcriptRetryMs?: number;
   codexLongTurnWarningMs?: number;
+  codexHome?: string;
+  codexRolloutPollMs?: number;
+  codexRolloutStartedAt?: number;
   agentSessionId?: string | null;
   unloaded?: boolean;
+  /** Tolerância para o hook de fim de turno depois que o agente informa ocioso (agentIdle). Padrão 2,5 s. */
+  idleGraceMs?: number;
 };
 
 export class Session extends EventEmitter<SessionEvents> {
@@ -63,9 +69,11 @@ export class Session extends EventEmitter<SessionEvents> {
   private inputHasText = false;
   private pasting = false;
   private resolvingTurn: number | null = null;
+  private idleGraceTimer: NodeJS.Timeout | undefined;
   private submittingTurn: number | null = null;
-  private screenCompletionTurn: number | null = null;
   private readonly completedHooks = new Set<string>();
+  private codexTurnId: string | null = null;
+  private readonly codexRolloutWatcher: CodexRolloutWatcher | null;
   /** Cresce a cada turno: uma continuação assíncrona de um turno antigo não pode mexer no atual. */
   private turnSeq = 0;
   private currentAskId: string | null = null;
@@ -98,6 +106,19 @@ export class Session extends EventEmitter<SessionEvents> {
     opts.pty.onError((error) => this.opts.log.warn({ err: error }, 'falha ao escrever no terminal'));
     if (opts.unloaded) this.currentState = 'exited';
     else this.armReady();
+    this.codexRolloutWatcher = this.adapter.kind === 'codex' && !opts.unloaded
+      ? new CodexRolloutWatcher({
+        codexHome: opts.codexHome,
+        cwd: opts.cwd,
+        terminalName: opts.name,
+        sessionId: this.agentSessionId,
+        startedAt: opts.codexRolloutStartedAt,
+        pollMs: opts.codexRolloutPollMs,
+        log: opts.log,
+        onEvent: (event) => this.onCodexRollout(event),
+      })
+      : null;
+    this.codexRolloutWatcher?.start();
   }
 
   /** PID do processo raiz do terminal (para encerrar a árvore se o núcleo cair). */
@@ -184,6 +205,8 @@ export class Session extends EventEmitter<SessionEvents> {
       return;
     }
     this.opts.log.info({ event, signal: signal.kind, askId: this.currentAskId }, 'hook recebido');
+    // Qualquer hook reconhecido mostra que o agente segue vivo e que o fim, se vier, vem pelo hook.
+    this.agentBusy();
     if (this.currentState === 'exited') return;
     if ((signal.kind === 'turn-end' || signal.kind === 'turn-failed') && this.submittingTurn === this.turnSeq) {
       this.opts.log.warn({ event, askId: this.currentAskId }, 'fim de turno anterior durante a colagem; ignorado');
@@ -218,6 +241,11 @@ export class Session extends EventEmitter<SessionEvents> {
     if (signal.kind !== 'turn-end') return;
     if (signal.completionId) {
       if (this.completedHooks.has(signal.completionId)) return;
+      const hookTurnId = signal.completionId.slice(signal.completionId.lastIndexOf(':') + 1);
+      if (this.adapter.kind === 'codex' && this.codexTurnId !== null && hookTurnId !== this.codexTurnId) {
+        this.opts.log.warn({ event, askId: this.currentAskId, completionId: signal.completionId, activeTurnId: this.codexTurnId }, 'Stop atrasado de outro turno Codex; ignorado');
+        return;
+      }
       this.rememberCompletion(signal.completionId);
     }
     this.learnAgentSession(signal.agentSessionId);
@@ -250,13 +278,46 @@ export class Session extends EventEmitter<SessionEvents> {
     else this.emit('turnEnded', { owner, answer });
   }
 
+  /**
+   * Fonte externa (ex.: status da sessão do Claude) diz que o agente ficou ocioso. Se o hook de fim de turno não
+   * chegar dentro da tolerância, o turno foi desfeito sem aviso (Esc antes do primeiro token): falha como
+   * interrompido e libera a fila. `onExpired` roda antes, com o terminal ainda ocupado e a fila presa
+   * (a hora de limpar a caixa de entrada que o agente restaurou).
+   */
+  agentIdle(onExpired?: (owner: TurnOwner) => void): void {
+    if (this.owner === null || this.currentState === 'exited' || this.idleGraceTimer) return;
+    const turn = this.turnSeq;
+    this.idleGraceTimer = setTimeout(() => {
+      this.idleGraceTimer = undefined;
+      const owner = this.owner;
+      if (turn !== this.turnSeq || owner === null || this.currentState === 'exited') return;
+      this.opts.log.info({ owner, askId: this.currentAskId }, 'agente ocioso sem fim de turno; turno interrompido');
+      onExpired?.(owner);
+      this.endTurn();
+      this.emit('turnFailed', { owner, reason: 'interrupted' });
+    }, this.opts.idleGraceMs ?? 2500);
+  }
+
+  /** Escreve uma tecla de controle no terminal sem contar como digitação do usuário (não atrasa a fila). */
+  sendControl(data: string): void {
+    this.opts.pty.write(data);
+  }
+
+  /** O agente voltou a trabalhar (ou um hook chegou): cancela a espera de agentIdle. */
+  agentBusy(): void {
+    clearTimeout(this.idleGraceTimer);
+    this.idleGraceTimer = undefined;
+  }
+
   async kill(): Promise<void> {
     await this.opts.pty.kill();
+    await this.codexRolloutWatcher?.stop();
   }
 
   async unload(): Promise<void> {
     await this.opts.pty.kill();
     if (this.currentState !== 'exited') this.onExit(0);
+    await this.codexRolloutWatcher?.stop();
   }
 
   /** Ajusta o tamanho do terminal. O ConPTY redesenha a tela inteira no tamanho novo. */
@@ -316,10 +377,6 @@ export class Session extends EventEmitter<SessionEvents> {
     if (turn !== this.turnSeq) return;
     this.waitingOnScreen = visible.has('waiting');
     const failure: TurnFailure | null = appeared.includes('interrupted') ? 'interrupted' : appeared.includes('failed') ? 'agent-error' : null;
-    if (appeared.includes('turn-end') && this.adapter.readScreenCompletion) {
-      void this.finishScreenTurn(turn);
-      return;
-    }
     if (failure && this.owner !== null) {
       const owner = this.owner;
       this.opts.log.info({ owner, askId: this.currentAskId, failure }, 'turno terminou sem resposta');
@@ -333,30 +390,34 @@ export class Session extends EventEmitter<SessionEvents> {
   private learnAgentSession(id: string | null): void {
     if (id === null || id === this.agentSessionId) return;
     this.agentSessionId = id;
+    this.codexRolloutWatcher?.setSessionId(id);
     this.emit('agentSession', id);
   }
 
-  private async finishScreenTurn(turn: number): Promise<void> {
-    if (this.screenCompletionTurn === turn || turn !== this.turnSeq || this.owner === null) return;
-    this.screenCompletionTurn = turn;
-    const owner = this.owner;
-    let completion: Awaited<ReturnType<NonNullable<AgentAdapter['readScreenCompletion']>>> = null;
-    try {
-      if (this.agentSessionId) completion = await this.adapter.readScreenCompletion!(this.agentSessionId);
-    } catch (error) {
-      this.opts.log.warn({ err: error, terminal: this.name, askId: this.currentAskId }, 'falha ao recuperar resposta do rollout Codex');
-    }
-    if (turn !== this.turnSeq || owner !== this.owner) return;
-    if (completion?.completionId && this.completedHooks.has(completion.completionId)) {
-      this.opts.log.warn({ terminal: this.name, askId: this.currentAskId, completionId: completion.completionId }, 'Codex footer matches an earlier turn; ignored');
-      this.screenCompletionTurn = null;
+  private onCodexRollout(event: CodexRolloutEvent): void {
+    this.learnAgentSession(event.sessionId);
+    if (event.kind === 'session') return;
+    const completionId = `${event.sessionId}:${event.turnId}`;
+    if (event.kind === 'task-started') {
+      if (this.completedHooks.has(completionId)) return;
+      clearTimeout(this.userTurnTimer);
+      this.provisionalUserTurn = false;
+      this.waitingByHook = false;
+      this.waitingOnScreen = false;
+      if (this.owner === null) this.startTurn('user', null);
+      else if (this.currentState === 'waiting') this.setState('busy', 'rollout-task-started');
+      this.codexTurnId = event.turnId;
       return;
     }
-    clearTimeout(this.turnWarningTimer);
-    if (completion?.completionId) this.rememberCompletion(completion.completionId);
-    this.opts.log.info({ terminal: this.name, askId: this.currentAskId, completionId: completion?.completionId ?? null }, 'fim de turno Codex confirmado pela tela');
+    if (this.codexTurnId !== event.turnId || this.owner === null || this.completedHooks.has(completionId)) return;
+    this.rememberCompletion(completionId);
+    const owner = this.owner;
     this.endTurn();
-    const answer = completion?.text?.trim() ? completion.text : null;
+    if (event.kind === 'turn-aborted') {
+      this.emit('turnFailed', { owner, reason: event.reason === 'interrupted' ? 'interrupted' : 'agent-error' });
+      return;
+    }
+    const answer = event.answer?.trim() ? event.answer : null;
     if (owner === 'broker' && answer === null) this.emit('turnFailed', { owner, reason: 'no-answer' });
     else this.emit('turnEnded', { owner, answer: owner === 'broker' ? answer : null });
   }
@@ -367,9 +428,11 @@ export class Session extends EventEmitter<SessionEvents> {
   }
 
   private onExit(code: number): void {
+    this.agentBusy();
     clearTimeout(this.readyTimer);
     clearTimeout(this.userTurnTimer);
     clearTimeout(this.turnWarningTimer);
+    void this.codexRolloutWatcher?.stop();
     const owner = this.owner;
     this.owner = null;
     this.turnSeq++;
@@ -394,7 +457,7 @@ export class Session extends EventEmitter<SessionEvents> {
     this.provisionalUserTurn = false;
     this.watcher.beginTurn(this.screen.text());
     this.turnSeq++;
-    this.screenCompletionTurn = null;
+    this.codexTurnId = null;
     this.owner = owner;
     this.currentAskId = askId;
     this.setState('busy', `turn-start:${owner}`);
@@ -419,9 +482,11 @@ export class Session extends EventEmitter<SessionEvents> {
   }
 
   private endTurn(): void {
+    this.agentBusy();
     clearTimeout(this.userTurnTimer);
     clearTimeout(this.turnWarningTimer);
     this.turnSeq++;
+    this.codexTurnId = null;
     this.owner = null;
     this.currentAskId = null;
     this.waitingByHook = false;

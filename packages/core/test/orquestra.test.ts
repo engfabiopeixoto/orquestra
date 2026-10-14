@@ -613,3 +613,77 @@ describe('pastas de sessão persistidas (sobrevivem a fechar e abrir o app)', ()
     expect(legacy.state).not.toBe('exited');
   });
 });
+
+// Claude Code 2.1.300: Esc antes do primeiro token desfaz o turno, devolve o texto à caixa de entrada e
+// não dispara Stop nem mostra "Interrupted". A fonte confiável é o status em ~/.claude/sessions/<pid>.json.
+describe('Esc antes do primeiro token (status da sessão do Claude)', () => {
+  const SESSION = 'fa074cce-7d86-4ac6-a126-f21d6319d70e';
+  const setup = async () => {
+    const claudeDir = mkdtempSync(join(tmpdir(), 'orq-claude-'));
+    mkdirSync(join(claudeDir, 'sessions'), { recursive: true });
+    const setStatus = (pid: number, status: string) => writeFileSync(join(claudeDir, 'sessions', `${pid}.json`), JSON.stringify({ pid, sessionId: SESSION, status, kind: 'interactive' }));
+    const env = await setupOrquestra({ adapters: { claude: { ...createFakeAdapter(), kind: 'claude' } }, claudeDir, claudeStatusPollMs: 20, claudeIdleGraceMs: 150, listPipes: () => [] });
+    const session = env.orq.createTerminal({ name: 'W', agent: 'claude', cwd: tmpdir(), agentSessionId: SESSION });
+    env.host.last().emitData('pronto> ');
+    await waitFor(() => session.state === 'idle');
+    return { ...env, session, setStatus, pid: session.pid };
+  };
+
+  it('o pedido em curso falha como interrompido e a fila destrava', async () => {
+    const { orq, host, session, setStatus, pid } = await setup();
+    const first = orq.broker.submit({ asker: 'S', target: 'W', text: 'primeiro', timeoutMs: 10_000 });
+    const second = orq.broker.submit({ asker: 'S', target: 'W', text: 'segundo', timeoutMs: 10_000 });
+    const failure = expect(first).rejects.toMatchObject({ code: 'PROMPT_FAILED', message: expect.stringContaining('interrompido') });
+    await waitFor(() => host.last().written.includes('\r'));
+    expect(orq.broker.queued('W')).toBe(2);
+    setStatus(pid, 'busy');
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    setStatus(pid, 'idle');
+    await failure;
+    // O segundo pedido é entregue ao terminal liberado.
+    await waitFor(() => host.last().written.filter((text) => text === '\r').length === 2);
+    expect(session.state).toBe('busy');
+    void second.catch(() => {});
+    // O Claude devolve o texto do pedido desfeito à caixa de entrada: Ctrl+C a limpa antes do próximo pedido.
+    const ctrlC = String.fromCharCode(3);
+    const written = host.last().written;
+    expect(written.filter((text) => text === ctrlC)).toHaveLength(1);
+    expect(written.indexOf(ctrlC)).toBeGreaterThan(written.indexOf('\r'));
+    expect(written.lastIndexOf('\r')).toBeGreaterThan(written.indexOf(ctrlC));
+  });
+
+  it('turno do próprio usuário interrompido não tem a caixa limpa: o texto devolvido é dele', async () => {
+    const { host, session, setStatus, pid } = await setup();
+    session.userInput('meu pedido');
+    session.userInput('\r');
+    expect(session.state).toBe('busy');
+    setStatus(pid, 'busy');
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    setStatus(pid, 'idle');
+    await waitFor(() => session.state === 'idle');
+    expect(host.last().written).not.toContain(String.fromCharCode(3));
+  });
+
+  it('turno que termina com Stop logo depois do idle é respondido, não interrompido', async () => {
+    const { orq, host, session, setStatus, pid } = await setup();
+    const answer = orq.broker.submit({ asker: 'S', target: 'W', text: 'pedido', timeoutMs: 10_000 });
+    await waitFor(() => host.last().written.includes('\r'));
+    setStatus(pid, 'busy');
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    setStatus(pid, 'idle');
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    await session.handleHook('Stop', { last_assistant_message: 'pronto' });
+    await expect(answer).resolves.toMatchObject({ status: 'answered', answer: 'pronto' });
+  });
+
+  it('idle antes de qualquer ocupado (claude ainda processando o prompt) não interrompe o turno', async () => {
+    const { orq, host, session, setStatus, pid } = await setup();
+    const answer = orq.broker.submit({ asker: 'S', target: 'W', text: 'pedido', timeoutMs: 10_000 });
+    await waitFor(() => host.last().written.includes('\r'));
+    setStatus(pid, 'idle');
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(session.state).toBe('busy');
+    await session.handleHook('Stop', { last_assistant_message: 'ok' });
+    await expect(answer).resolves.toMatchObject({ answer: 'ok' });
+  });
+});
