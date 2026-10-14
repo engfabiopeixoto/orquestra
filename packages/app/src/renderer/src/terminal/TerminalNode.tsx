@@ -14,7 +14,7 @@ import { appStore, useApp } from '../store';
 import { runAttachTerminal } from './attach';
 import { terminalKeyAction } from './keys';
 import { muteTerminalReplies } from './replies';
-import { applyWheelScroll, forwardWheelToTerminal } from './wheel';
+import { applyWheelScroll, forwardWheelToCanvas, forwardWheelToTerminal } from './wheel';
 import { activeWorkspaceId } from '../workspace-context';
 import { recoverGroupLayout } from '../groups/helpers';
 import { NodeConnectors } from '../canvas/NodeConnectors';
@@ -92,7 +92,11 @@ function TerminalBody({ name, readOnly }: { name: string; readOnly: boolean }) {
     host.current!.addEventListener('contextmenu', onContextMenu);
     // Em captura, antes do xterm: rola o buffer direto e não perde a roda para a saída que chega junto.
     const hostElement = host.current!;
-    const onWheel = (event: WheelEvent) => { applyWheelScroll(term, event, cellHeightOf(term), wheelState.current); };
+    const onWheel = (event: WheelEvent) => {
+      // Ctrl+roda é zoom do canvas em qualquer zoom: nunca rola o histórico nem chega ao agente.
+      if (forwardWheelToCanvas(event, hostElement.closest('.term-node'))) return;
+      applyWheelScroll(term, event, cellHeightOf(term), wheelState.current);
+    };
     hostElement.addEventListener('wheel', onWheel, { capture: true, passive: false });
     const onFocus = () => appStore.getState().setFocus(name);
     const onBlur = () => {

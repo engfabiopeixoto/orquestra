@@ -77,3 +77,31 @@ export function applyWheelScroll(term: ScrollTerm, event: WheelEvent, cellHeight
   if (lines !== 0) term.scrollLines(lines);
   return true;
 }
+
+/**
+ * Ctrl (ou Meta) + roda é sempre zoom do canvas. O corpo do terminal tem `nowheel`, então o React Flow ignora
+ * qualquer roda cujo alvo esteja nele e o xterm a trataria (rolar o histórico ou enviá-la ao agente).
+ * Esta função consome o evento e o reemite a partir de um elemento fora do `nowheel` (o nó), de onde sobe ao canvas.
+ */
+export function forwardWheelToCanvas(event: WheelEvent, canvasTarget: Element | null): boolean {
+  if (!canvasTarget || !(event.ctrlKey || event.metaKey)) return false;
+  event.preventDefault();
+  event.stopPropagation();
+  canvasTarget.dispatchEvent(new WheelEvent('wheel', {
+    deltaX: event.deltaX,
+    deltaY: event.deltaY,
+    deltaZ: event.deltaZ,
+    deltaMode: event.deltaMode,
+    clientX: event.clientX,
+    clientY: event.clientY,
+    screenX: event.screenX,
+    screenY: event.screenY,
+    ctrlKey: event.ctrlKey,
+    metaKey: event.metaKey,
+    shiftKey: event.shiftKey,
+    altKey: event.altKey,
+    bubbles: true,
+    cancelable: true,
+  }));
+  return true;
+}

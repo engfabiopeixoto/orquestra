@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
-import { applyWheelScroll, forwardWheelToTerminal, wheelToLines } from '../src/renderer/src/terminal/wheel';
+import { applyWheelScroll, forwardWheelToCanvas, forwardWheelToTerminal, wheelToLines } from '../src/renderer/src/terminal/wheel';
 
 const wheel = (init: WheelEventInit = {}) => new WheelEvent('wheel', { deltaY: -120, deltaMode: 0, clientX: 40, clientY: 25, bubbles: true, cancelable: true, ...init });
 const setup = () => {
@@ -110,5 +110,40 @@ describe('applyWheelScroll', () => {
     expect(term.scrollLines).not.toHaveBeenCalled();
     expect(applyWheelScroll(term, wheel({ deltaY: 12 }), 15, state)).toBe(true);
     expect(term.scrollLines).toHaveBeenCalledWith(1);
+  });
+});
+
+describe('forwardWheelToCanvas', () => {
+  const setupCanvas = () => {
+    const parent = document.createElement('div');
+    const node = document.createElement('div');
+    parent.append(node);
+    const seen: Array<{ ctrlKey: boolean; metaKey: boolean; deltaY: number; deltaMode: number; clientX: number; clientY: number; cancelable: boolean; bubbles: boolean }> = [];
+    parent.addEventListener('wheel', (event) => {
+      const { ctrlKey, metaKey, deltaY, deltaMode, clientX, clientY, cancelable, bubbles } = event as WheelEvent;
+      seen.push({ ctrlKey, metaKey, deltaY, deltaMode, clientX, clientY, cancelable, bubbles });
+    });
+    return { node, seen };
+  };
+
+  it('Ctrl+roda vira uma roda nova no nó, que sobe até o canvas, e o evento original é consumido', () => {
+    const { node, seen } = setupCanvas();
+    const original = wheel({ ctrlKey: true, deltaY: 180, deltaMode: 0 });
+    const stop = vi.spyOn(original, 'stopPropagation');
+    expect(forwardWheelToCanvas(original, node)).toBe(true);
+    expect(stop).toHaveBeenCalled();
+    expect(original.defaultPrevented).toBe(true);
+    expect(seen).toEqual([{ ctrlKey: true, metaKey: false, deltaY: 180, deltaMode: 0, clientX: 40, clientY: 25, cancelable: true, bubbles: true }]);
+  });
+
+  it('Meta também é zoom; roda sem modificador e alvo ausente não são tratados', () => {
+    const { node, seen } = setupCanvas();
+    expect(forwardWheelToCanvas(wheel({ metaKey: true }), node)).toBe(true);
+    expect(seen).toHaveLength(1);
+    const plain = wheel();
+    expect(forwardWheelToCanvas(plain, node)).toBe(false);
+    expect(plain.defaultPrevented).toBe(false);
+    expect(forwardWheelToCanvas(wheel({ ctrlKey: true }), null)).toBe(false);
+    expect(seen).toHaveLength(1);
   });
 });

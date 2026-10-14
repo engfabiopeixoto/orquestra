@@ -102,3 +102,29 @@ test('a roda não se perde quando a saída do terminal chega ao mesmo tempo', as
     expect(lost).toEqual([]);
   } finally { await app.close(); }
 });
+
+// Ctrl+roda é sempre zoom do canvas sobre o terminal. A 100% o corpo tem nowheel e o xterm tratava a roda:
+// o shell rolava o histórico e o agente recebia a roda.
+test('Ctrl+roda sobre o terminal dá zoom no canvas, também a 100%, sem rolar nem enviar nada ao agente', async () => {
+  test.setTimeout(180_000);
+  const { app, page } = await launchApp();
+  try {
+    await expect(page.locator('.proj.is-on')).toBeVisible();
+    await createShell(page, 'S');
+    await printLines(page, 'S', 200);
+    await page.getByTestId('terminal-body-S').click();
+    await expect(page.locator('.term-readonly')).toHaveCount(0);
+    await page.evaluate(() => { (window as unknown as { __sent: string[] }).__sent = []; window.__orqTerms!.S!.onData((data) => (window as unknown as { __sent: string[] }).__sent.push(data)); });
+    const before = await snapshot(page, 'S');
+
+    await page.keyboard.down('Control');
+    await wheelOverTerminal(page, 'S', -300);
+    await page.keyboard.up('Control');
+
+    const after = await snapshot(page, 'S');
+    expect(after.canvas).not.toBe(before.canvas);
+    expect(after.viewportY).toBe(before.viewportY);
+    expect(after.baseY).toBe(before.baseY);
+    expect(await page.evaluate(() => (window as unknown as { __sent: string[] }).__sent)).toEqual([]);
+  } finally { await app.close(); }
+});
