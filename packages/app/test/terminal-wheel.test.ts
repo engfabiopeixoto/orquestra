@@ -60,7 +60,9 @@ describe('wheelToLines', () => {
     expect(first.lines).toBe(-26);
     const second = wheelToLines({ deltaY: -10, deltaMode: 0 }, 15, 24, first.carry);
     expect(second.lines).toBe(-1);
-    expect(wheelToLines({ deltaY: 5, deltaMode: 0 }, 15, 24, 0)).toEqual({ lines: 0, carry: 5 / 15 });
+    const partial = wheelToLines({ deltaY: 5, deltaMode: 0 }, 15, 24, 0);
+    expect(partial.lines).toBe(0);
+    expect(partial.carry).toBeCloseTo(5 / 15, 9);
   });
 
   it('soma de frações que fecha uma linha exata gera a linha no mesmo evento', () => {
