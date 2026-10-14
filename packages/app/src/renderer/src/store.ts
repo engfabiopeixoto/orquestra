@@ -193,7 +193,8 @@ export function createAppStore() {
         });
       } else if (event.type === 'terminal.notice') {
         const view = get().terminals[event.name];
-        if (view) set({ terminals: { ...get().terminals, [event.name]: { ...view, notice: event.message } } });
+        // Mensagem vazia limpa o aviso (ex.: a conversa voltou do segundo plano).
+        if (view) set({ terminals: { ...get().terminals, [event.name]: { ...view, notice: event.message || null } } });
       } else if (event.type === 'notice') {
         get().notify(event.level, event.message);
       } else if (event.type === 'note.changed') {

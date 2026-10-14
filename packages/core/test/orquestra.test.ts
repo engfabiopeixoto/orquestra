@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -21,6 +21,7 @@ async function setupOrquestra(extra: Partial<OrquestraOptions> = {}) {
   orquestra = await createOrquestra({
     pipePath: `\\\\.\\pipe\\orq-unit-${randomBytes(4).toString('hex')}`,
     dataDir: mkdtempSync(join(tmpdir(), 'orq-unit-')),
+    claudeDir: mkdtempSync(join(tmpdir(), 'orq-claude-')),
     cliScript: 'C:/orq/bin/orq.mjs',
     adapters: { fake: createFakeAdapter() },
     log: silentLogger(),
@@ -370,5 +371,114 @@ describe('Orquestra (PTY falso)', () => {
     session.emit('turnFailed', { owner: 'broker', reason: 'interrupted' });
     expect(events).toContainEqual({ type: 'turn', name: 'A', owner: 'user', outcome: 'ended' });
     expect(events).toContainEqual({ type: 'turn', name: 'A', owner: 'broker', outcome: 'failed' });
+  });
+});
+
+describe('conversa do Claude em segundo plano (daemon)', () => {
+  const SESSION = '793b7407-bcc4-4c5a-ac40-180664d399cd';
+  const NOTICE = 'Conversa em segundo plano: sem conexão com o Orquestra. Rode `claude stop 793b7407` e reinicie este terminal.';
+  const LIVE_PIPE = 'cc-daemon-bc8e3d6ca88bafb5-pty-793b7407';
+  const claudeAdapters = () => ({ claude: { ...createFakeAdapter(), kind: 'claude' } });
+  const setup = async () => {
+    let pipes = [LIVE_PIPE];
+    const setPipes = (next: string[]) => { pipes = next; };
+    const claudeDir = mkdtempSync(join(tmpdir(), 'orq-claude-'));
+    const writeJob = (state: Record<string, unknown>) => {
+      const id = String(state.sessionId ?? SESSION).slice(0, 8);
+      mkdirSync(join(claudeDir, 'jobs', id), { recursive: true });
+      writeFileSync(join(claudeDir, 'jobs', id, 'state.json'), JSON.stringify(state));
+    };
+    const removeJob = (id8 = SESSION.slice(0, 8)) => rmSync(join(claudeDir, 'jobs', id8), { recursive: true, force: true });
+    const env = await setupOrquestra({ adapters: claudeAdapters(), claudeDir, backgroundJobPollMs: 30, listPipes: () => pipes });
+    return { ...env, writeJob, removeJob, setPipes };
+  };
+  const notices = (events: OrquestraEvent[]) => events.filter((event) => event.type === 'notice').map((event) => (event as { message: string }).message);
+
+  it('avisa no terminal, registra o job na sessão e recusa prompts sem tirar o terminal de idle', async () => {
+    const { orq, host, events, writeJob } = await setup();
+    const session = orq.createTerminal({ name: 'A', agent: 'claude', cwd: tmpdir(), agentSessionId: SESSION });
+    host.last().emitData('pronto> ');
+    await waitFor(() => session.state === 'idle');
+    writeJob({ backend: 'daemon', state: 'working', sessionId: SESSION });
+    await waitFor(() => notices(events).includes(NOTICE));
+    expect(session.backgroundJob).toEqual({ id8: '793b7407', state: 'working' });
+    expect(session.state).toBe('idle');
+    await expect(orq.broker.submit({ asker: 'B', target: 'A', text: 'oi', timeoutMs: 1000 })).rejects.toMatchObject({ code: 'PROMPT_FAILED', message: expect.stringContaining('claude stop 793b7407') });
+    expect(host.last().written).toEqual([]);
+  });
+
+  it('limpa o aviso quando o job some e volta a atender prompts', async () => {
+    const { orq, host, events, writeJob, removeJob } = await setup();
+    const session = orq.createTerminal({ name: 'A', agent: 'claude', cwd: tmpdir(), agentSessionId: SESSION });
+    host.last().emitData('pronto> ');
+    await waitFor(() => session.state === 'idle');
+    writeJob({ backend: 'daemon', state: 'working', sessionId: SESSION });
+    await waitFor(() => session.backgroundJob !== null);
+    removeJob();
+    await waitFor(() => session.backgroundJob === null);
+    expect(notices(events).at(-1)).toBe('');
+    void orq.broker.submit({ asker: 'B', target: 'A', text: 'de volta', timeoutMs: 1000 }).catch(() => {});
+    await waitFor(() => host.last().written.includes('\r'));
+  });
+
+  it('ignora o job de outra sessão (mesmo prefixo de id)', async () => {
+    const { orq, host, events, writeJob } = await setup();
+    const session = orq.createTerminal({ name: 'A', agent: 'claude', cwd: tmpdir(), agentSessionId: SESSION });
+    host.last().emitData('pronto> ');
+    writeJob({ backend: 'daemon', state: 'working', sessionId: '793b7407-ffff-ffff-ffff-ffffffffffff' });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(session.backgroundJob).toBeNull();
+    expect(notices(events)).toEqual([]);
+  });
+
+  it('job antigo sem processo vivo não avisa nem bloqueia a retomada (done, ou working sem pipe)', async () => {
+    const { orq, host, events, writeJob, setPipes } = await setup();
+    writeJob({ backend: 'daemon', state: 'done', sessionId: SESSION });
+    const done = orq.createTerminal({ name: 'A', agent: 'claude', cwd: tmpdir(), agentSessionId: SESSION });
+    expect(host.spawned).toHaveLength(1);
+    expect(done.state).not.toBe('exited');
+    setPipes([]);
+    writeJob({ backend: 'daemon', state: 'working', sessionId: SESSION });
+    const dead = orq.createTerminal({ name: 'B', agent: 'claude', cwd: tmpdir(), agentSessionId: SESSION });
+    expect(host.spawned).toHaveLength(2);
+    expect(dead.state).not.toBe('exited');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(notices(events)).toEqual([]);
+    expect(done.backgroundJob).toBeNull();
+    expect(dead.backgroundJob).toBeNull();
+  });
+
+  it('reemite o aviso a cada verificação enquanto o job existir (a interface pode ter recarregado)', async () => {
+    const { orq, events, writeJob } = await setup();
+    orq.createTerminal({ name: 'A', agent: 'claude', cwd: tmpdir(), agentSessionId: SESSION });
+    writeJob({ backend: 'daemon', state: 'working', sessionId: SESSION });
+    await waitFor(() => notices(events).filter((message) => message === NOTICE).length >= 3);
+  });
+
+  it('não abre uma segunda cópia ao retomar uma sessão presa ao daemon: o terminal fica descarregado com o aviso', async () => {
+    const { orq, host, events, writeJob } = await setup();
+    writeJob({ backend: 'daemon', state: 'working', sessionId: SESSION });
+    const session = orq.createTerminal({ name: 'A', agent: 'claude', cwd: tmpdir(), agentSessionId: SESSION });
+    expect(host.spawned).toHaveLength(0);
+    expect(session.state).toBe('exited');
+    expect(orq.describeTerminals()[0]).toMatchObject({ name: 'A', unloaded: true, agentSessionId: SESSION });
+    await waitFor(() => notices(events).includes(NOTICE));
+  });
+
+  it('reiniciar volta a lançar claude --resume depois que o job parou', async () => {
+    const { orq, host, writeJob, removeJob } = await setup();
+    const first = orq.createTerminal({ name: 'A', agent: 'claude', cwd: tmpdir(), agentSessionId: SESSION });
+    host.last().emitData('pronto> ');
+    writeJob({ backend: 'daemon', state: 'working', sessionId: SESSION });
+    await waitFor(() => first.backgroundJob !== null);
+    const blocked = await orq.restartTerminal('A');
+    expect(blocked.state).toBe('exited');
+    expect(host.spawned).toHaveLength(1);
+    removeJob();
+    await waitFor(() => blocked.backgroundJob === null);
+    const resumed = await orq.restartTerminal('A');
+    expect(host.spawned).toHaveLength(2);
+    expect(host.spawned[1]!.spec.args).toContain(SESSION);
+    expect(resumed.state).not.toBe('exited');
   });
 });

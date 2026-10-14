@@ -7,6 +7,7 @@ class Target implements BrokerTarget {
   state: SessionState = 'idle';
   lastUserInputAt = 0;
   acceptsPrompts = true;
+  backgroundJob: { id8: string; state: string } | null = null;
   failNext = false;
   readonly injected: Array<{ text: string; askId: string }> = [];
   constructor(readonly name: string) {}
@@ -42,6 +43,44 @@ function setup(guardMs = 0) {
 describe('AskBroker', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
+
+  describe('conversa em segundo plano', () => {
+    const job = { id8: '793b7407', state: 'working' };
+
+    it('recusa pedido e entrega para um terminal em segundo plano, com a mensagem de como voltar', async () => {
+      const { broker, t } = setup();
+      t('B').backgroundJob = job;
+      const rejected = broker.submit({ asker: 'A', target: 'B', text: 'oi', timeoutMs: 60_000 });
+      await expect(rejected).rejects.toMatchObject({ code: 'PROMPT_FAILED', message: expect.stringContaining('claude stop 793b7407') });
+      expect(() => broker.brief('B', 'A', 'função')).toThrow(/segundo plano/);
+      expect(broker.queued('B')).toBe(0);
+      expect(t('B').injected).toHaveLength(0);
+    });
+
+    it('falha os pedidos já enfileirados quando o terminal sai para o segundo plano e nunca injeta', async () => {
+      const { broker, t } = setup();
+      t('B').state = 'busy';
+      const pending = broker.submit({ asker: 'A', target: 'B', text: 'espera', timeoutMs: 60_000 });
+      const failure = expect(pending).rejects.toMatchObject({ code: 'PROMPT_FAILED', message: expect.stringContaining('segundo plano') });
+      t('B').backgroundJob = job;
+      t('B').state = 'idle';
+      broker.backgroundJobChanged('B');
+      await failure;
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(t('B').injected).toHaveLength(0);
+      expect(broker.queued('B')).toBe(0);
+    });
+
+    it('volta a atender quando o job some', async () => {
+      const { broker, t } = setup();
+      t('B').backgroundJob = job;
+      await expect(broker.submit({ asker: 'A', target: 'B', text: 'x', timeoutMs: 60_000 })).rejects.toThrow();
+      t('B').backgroundJob = null;
+      broker.backgroundJobChanged('B');
+      void broker.submit({ asker: 'A', target: 'B', text: 'de novo', timeoutMs: 60_000 });
+      expect(t('B').injected).toHaveLength(1);
+    });
+  });
 
   it('reavalia fila pendente se a notificação de idle não chegou, sem injetar em busy', async () => {
     const { broker, t } = setup();

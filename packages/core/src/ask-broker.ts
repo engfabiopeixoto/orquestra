@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { OrqError, type QueueEntry, type SessionState } from '@orquestra/shared';
+import { backgroundJobError, type BackgroundJob } from './background-job.js';
 import type { Logger } from './log.js';
 
 export interface BrokerTarget {
@@ -8,6 +9,8 @@ export interface BrokerTarget {
   readonly lastUserInputAt: number;
   /** Shell não recebe prompts: nunca digitamos texto de agente nele (viraria comando). */
   readonly acceptsPrompts: boolean;
+  /** Conversa do Claude mantida em segundo plano pelo daemon: sem hooks nem pipe, não dá para entregar. */
+  readonly backgroundJob?: BackgroundJob | null;
   injectPrompt(text: string, askId: string): Promise<void>;
 }
 
@@ -64,6 +67,7 @@ export class AskBroker {
     if (target.state === 'exited') {
       throw new OrqError('PROMPT_FAILED', `${input.target} está encerrado. Reinicie o terminal e tente de novo.`);
     }
+    if (target.backgroundJob) throw new OrqError('PROMPT_FAILED', backgroundJobError(input.target, target.backgroundJob));
     // Quem pergunta está atendendo um pedido do próprio destino: o destino só fica livre quando este responder.
     if (this.closesCycle(input.asker, input.target)) {
       throw new OrqError(
@@ -137,6 +141,11 @@ export class AskBroker {
     this.pump(name);
   }
 
+  /** O job em segundo plano do terminal apareceu ou sumiu: o que está na fila não tem como ser entregue. */
+  backgroundJobChanged(name: string): void {
+    this.pump(name);
+  }
+
   turnEnded(name: string, answer: string): void {
     const item = this.inFlight.get(name);
     if (!item) return;
@@ -161,6 +170,7 @@ export class AskBroker {
     if (!session) throw new OrqError('NOT_FOUND', `Terminal ${target} não existe.`);
     if (!session.acceptsPrompts) throw new OrqError('UNSUPPORTED', `${target} é um shell e não recebe prompts.`);
     if (session.state === 'exited') throw new OrqError('PROMPT_FAILED', `${target} está encerrado. Reinicie o terminal.`);
+    if (session.backgroundJob) throw new OrqError('PROMPT_FAILED', backgroundJobError(target, session.backgroundJob));
     const item: Item = { askId: this.newId(), kind: 'delivery', asker: from, target, text, status: { status: 'queued' } };
     this.items.set(item.askId, item);
     this.opts.log.info({ askId: item.askId, from, target }, 'entrega enfileirada');
@@ -239,6 +249,7 @@ export class AskBroker {
     }
     const target = this.opts.resolveTarget(name);
     if (!target || target.state === 'exited') return this.failQueue(name, 'o terminal foi encerrado');
+    if (target.backgroundJob) return this.failQueue(name, `a conversa está em segundo plano; rode \`claude stop ${target.backgroundJob.id8}\` e reinicie o terminal`);
     if (target.state !== 'idle') {
       this.blocked(name, target.state);
       // Recupera uma notificação de idle perdida; nunca força o fim de um turno.

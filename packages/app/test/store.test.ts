@@ -13,6 +13,15 @@ describe('estado da interface', () => {
     expect(store.getState().queues.A).toHaveLength(1);
   });
 
+  it('aviso do terminal aparece e uma mensagem vazia o limpa', () => {
+    const store = createAppStore();
+    store.getState().addTerminal(info('A'));
+    store.getState().applyEvent({ type: 'terminal.notice', name: 'A', message: 'Conversa em segundo plano' });
+    expect(store.getState().terminals.A!.notice).toBe('Conversa em segundo plano');
+    store.getState().applyEvent({ type: 'terminal.notice', name: 'A', message: '' });
+    expect(store.getState().terminals.A!.notice).toBeNull();
+  });
+
   it('remoção limpa conexões e fila', () => {
     const store = createAppStore();
     store.getState().addTerminal(info('A'));

@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { OrqError, type SessionState } from '@orquestra/shared';
 import type { AgentAdapter, HookSignal, ScreenSignal } from './adapters/types.js';
+import type { BackgroundJob } from './background-job.js';
 import { incompleteEscapeTail } from './escape-tail.js';
 import { writePrompt } from './input.js';
 import type { Logger } from './log.js';
@@ -45,6 +46,8 @@ export class Session extends EventEmitter<SessionEvents> {
   name: string;
   readonly adapter: AgentAdapter;
   agentSessionId: string | null = null;
+  /** Conversa do Claude mantida em segundo plano pelo daemon (sem pipe nem hooks); não altera o estado do terminal. */
+  backgroundJob: BackgroundJob | null = null;
 
   private currentState: SessionState = 'starting';
   private owner: TurnOwner | null = null;

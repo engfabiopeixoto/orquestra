@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { defaultMonitor, OrqError, reservedArgError, type QueueEntry, type SessionState } from '@orquestra/shared';
 import type { AgentAdapter } from './adapters/types.js';
 import { AskBroker } from './ask-broker.js';
+import { BackgroundJobWatcher, backgroundJobNotice, claudeConfigDir, readBackgroundJob, type ListPipes } from './background-job.js';
 import { childEnv, prependPath } from './env.js';
 import { createHandlers, type RegentHandler, type RegentMethod } from './handlers.js';
 import type { Logger } from './log.js';
@@ -32,6 +33,12 @@ export type OrquestraOptions = {
   log: Logger;
   ptyHost?: PtyHost;
   readyQuietMs?: number;
+  /** Pasta de configuração do Claude Code (jobs em segundo plano). Padrão: CLAUDE_CONFIG_DIR ou ~/.claude. */
+  claudeDir?: string;
+  /** Intervalo da verificação periódica dos jobs em segundo plano (padrão 5 s). */
+  backgroundJobPollMs?: number;
+  /** Lista os named pipes do sistema (o daemon abre um por conversa viva); injetável nos testes. */
+  listPipes?: ListPipes;
   typingGuardMs?: number;
   resumeGraceMs?: number;
   onEvent?: (event: OrquestraEvent) => void;
@@ -98,7 +105,8 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
   const host = opts.ptyHost ?? nodePtyHost;
   const topology = new Topology();
   const notes = new NoteStore();
-  const sessions = new Map<string, { session: Session; token: string; stopOutput: () => void }>();
+  const sessions = new Map<string, { session: Session; token: string; stopOutput: () => void; stopWatcher: () => void }>();
+  const claudeDir = opts.claudeDir ?? claudeConfigDir();
   const tokens = new Map<string, string>();
   const broker = new AskBroker({
     resolveTarget: (name) => sessions.get(name)?.session,
@@ -162,6 +170,13 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
     const id = input.id ?? randomUUID();
     const resume = input.resume ?? true;
     const resumeSessionId = resume ? (input.agentSessionId ?? null) : null;
+    // Retomar uma conversa que o daemon mantém em segundo plano abriria uma segunda cópia ("nome (2)")
+    // sem pipe nem hooks: o terminal nasce descarregado e o aviso explica como trazê-la de volta.
+    let unloaded = input.unloaded ?? false;
+    if (!unloaded && adapter.kind === 'claude' && resumeSessionId && readBackgroundJob(claudeDir, resumeSessionId, opts.listPipes)) {
+      unloaded = true;
+      opts.log.warn({ session: input.name, sessionId: resumeSessionId }, 'sessão presa a um job em segundo plano; terminal não retomado para não abrir uma segunda cópia');
+    }
     const token = randomBytes(32).toString('hex');
     // Pasta por lançamento: o id do terminal se repete a cada relançamento.
     const sessionDir = join(opts.dataDir, 'sessions', randomUUID());
@@ -177,15 +192,15 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
     const args = input.args ?? [];
     const env = prependPath({ ...childEnv(process.env), ...launch.env, ORQ_PIPE: opts.pipePath, ORQ_TOKEN: token }, binDir);
     let pty: PtyProcess;
-    if (input.unloaded) {
+    if (unloaded) {
       pty = { pid: 0, write: () => {}, resize: () => {}, onData: () => {}, onExit: () => {}, onError: () => {}, kill: async () => {} };
     } else {
       const executable = resolveExecutable(launch.command);
       pty = host.spawn({ file: executable.file, args: [...executable.argsPrefix, ...launch.args, ...args], cwd: input.cwd, env });
     }
     const log = opts.log.child({ session: input.name, sessionId: id, agent: adapter.kind });
-    const agentSessionId = input.unloaded ? input.agentSessionId ?? null : launch.agentSessionId ?? input.agentSessionId ?? null;
-    const session = new Session({ id, name: input.name, adapter, pty, cwd: input.cwd, log, readyQuietMs: opts.readyQuietMs, agentSessionId, unloaded: input.unloaded });
+    const agentSessionId = unloaded ? input.agentSessionId ?? null : launch.agentSessionId ?? input.agentSessionId ?? null;
+    const session = new Session({ id, name: input.name, adapter, pty, cwd: input.cwd, log, readyQuietMs: opts.readyQuietMs, agentSessionId, unloaded });
     // session.name, não input.name: o terminal pode ser renomeado depois.
     const stopOutput = session.onOutput((data) => emit({ type: 'output', name: session.name, data }));
     session.on('state', () => {
@@ -205,15 +220,41 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
       if (config) config.agentSessionId = agentId;
       emit({ type: 'agent-session', name: session.name });
     });
-    if (resumeSessionId && !input.unloaded) watchResume(session, Date.now());
-    sessions.set(input.name, { session, token, stopOutput });
+    if (resumeSessionId && !unloaded) watchResume(session, Date.now());
+    const stopWatcher = adapter.kind === 'claude' ? watchBackgroundJob(session, log) : () => {};
+    sessions.set(input.name, { session, token, stopOutput, stopWatcher });
     const regente = input.regente ?? false;
     const persona = input.persona ?? null;
     const monitor = input.monitor ?? defaultMonitor(input.agent);
-    configs.set(input.name, { id, agent: input.agent, cwd: input.cwd, args, resume, agentSessionId, regente, persona, monitor, ...(input.unloaded ? { unloaded: true } : {}) });
-    if (!input.unloaded) tokens.set(token, input.name);
+    configs.set(input.name, { id, agent: input.agent, cwd: input.cwd, args, resume, agentSessionId, regente, persona, monitor, ...(unloaded ? { unloaded: true } : {}) });
+    if (!unloaded) tokens.set(token, input.name);
     log.info({ cwd: input.cwd, resumeSessionId, args }, 'terminal criado');
     return session;
+  }
+
+  /**
+   * A conversa do Claude foi para o daemon: o ORQ_PIPE e o ORQ_TOKEN dela ficaram presos ao app antigo,
+   * então nem hooks nem pedidos chegam. Avisa no terminal e deixa o broker recusar a entrega.
+   */
+  function watchBackgroundJob(session: Session, log: Logger): () => void {
+    const notify = (job: { id8: string; state: string } | null) => emit({ type: 'notice', name: session.name, message: job ? backgroundJobNotice(job) : '' });
+    const watcher = new BackgroundJobWatcher({
+      claudeDir,
+      sessionId: () => session.agentSessionId,
+      log,
+      pollMs: opts.backgroundJobPollMs,
+      listPipes: opts.listPipes,
+      onChange: (job) => {
+        session.backgroundJob = job;
+        notify(job);
+        broker.backgroundJobChanged(session.name);
+        emitState(session.name);
+      },
+      // O renderer perde o aviso ao recarregar ou reiniciar o nó: reemite enquanto o job existir.
+      onPoll: notify,
+    });
+    watcher.start();
+    return () => watcher.stop();
   }
 
   /** Spec, seção 5: retomada que falha (agente sai logo) vira sessão nova, com aviso no nó. */
@@ -252,6 +293,7 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
     topology.remove(name);
     configs.delete(name);
     entry.stopOutput();
+    entry.stopWatcher();
     entry.session.removeAllListeners();
     if (removeOpts.announce !== false) emit({ type: 'removed', name });
     await entry.session.kill();
@@ -302,6 +344,8 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
     broker.sessionRemoved(name, `${name} foi descarregado`);
     tokens.delete(entry.token);
     entry.stopOutput();
+    entry.stopWatcher();
+    entry.session.backgroundJob = null;
     entry.session.removeAllListeners();
     await entry.session.unload();
     emitState(name);
