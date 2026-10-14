@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { agyAdapter, agyHookGroup, isUnsafeForAgy, readAgyTranscript } from '../src/adapters/agy.js';
 import { claudeAdapter, claudeHookSettings } from '../src/adapters/claude.js';
+import { codexAdapter } from '../src/adapters/codex.js';
 import { readClaudeTranscript } from '../src/adapters/claude-transcript.js';
 import { shellAdapter } from '../src/adapters/shell.js';
 
@@ -113,6 +114,16 @@ describe('agyAdapter', () => {
     const match = (text: string) => agyAdapter.screenRules.filter((rule) => rule.pattern.test(text)).map((rule) => rule.signal);
     expect(match('Requesting permission for:\n   Get-ChildItem')).toEqual(['waiting']);
     expect(match('⎿  Interrupted · What should Antigravity CLI do instead?')).toEqual(['interrupted']);
+  });
+});
+
+describe('codexAdapter', () => {
+  const signals = (text: string) => codexAdapter.screenRules.filter((rule) => rule.pattern.test(text)).map((rule) => rule.signal);
+
+  it('recognizes only Codex TUI interruption markers and ignores echoed prompt text', () => {
+    expect(signals('■ Turn interrupted')).toEqual(['interrupted']);
+    expect(signals('■Conversation interrupted - use /feedback if something went wrong')).toEqual(['interrupted']);
+    expect(signals('› No prompt, explique Turn interrupted e Conversation interrupted no meio da frase.')).toEqual([]);
   });
 });
 

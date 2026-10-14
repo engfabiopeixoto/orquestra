@@ -6,7 +6,7 @@ export const codexAdapter: AgentAdapter = {
   acceptsPrompts: true,
   screenRules: [
     { pattern: /Would you like to run|Do you trust|Approve this/, signal: 'waiting' },
-    { pattern: /Turn interrupted/, signal: 'interrupted', scope: 'new-occurrence' },
+    { pattern: /^[ \t]*■\s*(?:Turn|Conversation) interrupted\b/m, signal: 'interrupted', scope: 'new-occurrence' },
     { pattern: /You've hit your usage limit|Usage limit reached/, signal: 'failed', scope: 'new-occurrence' },
   ],
   launch(ctx) {
