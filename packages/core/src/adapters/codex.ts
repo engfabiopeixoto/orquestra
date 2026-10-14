@@ -63,6 +63,7 @@ export const codexAdapter: AgentAdapter = {
   kind: 'codex',
   acceptsPrompts: true,
   screenRules: [
+    { pattern: /^[ \t]*Hooks need review[ \t]*\n[ \t]*2 hooks are new or changed\.[ \t]*\n[ \t]*Hooks can run outside the sandbox after you trust them\.[ \t]*\n[ \t]*› 1\. Review hooks[ \t]*\n[ \t]*2\. Trust all and continue[ \t]*\n[ \t]*3\. Continue without trusting \(hooks won't run\)/m, signal: 'waiting' },
     { pattern: /Would you like to run|Do you trust|Trust this folder\?|Approve this/, signal: 'waiting' },
     { pattern: /^  Worked for (?:(?:\d+h )?\d+m(?: \d+s)?|\d+s) • \d{1,2}:\d{2}[ \t]*$/m, signal: 'turn-end', scope: 'new-occurrence' },
     // A TUI escreve o marcador na coluna 0; respostas e o eco quebrado do prompt vêm recuados.

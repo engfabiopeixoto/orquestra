@@ -392,6 +392,7 @@ export class Session extends EventEmitter<SessionEvents> {
     clearTimeout(this.readyTimer);
     clearTimeout(this.userTurnTimer);
     this.provisionalUserTurn = false;
+    this.watcher.beginTurn(this.screen.text());
     this.turnSeq++;
     this.screenCompletionTurn = null;
     this.owner = owner;

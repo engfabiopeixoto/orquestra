@@ -81,4 +81,18 @@ describe('Codex', () => {
     expect(rule.pattern.test('A resposta contém   Worked for 2s • 05:54 no meio')).toBe(false);
     expect(rule.pattern.test('  eco do prompt: Worked for 1s • 17:19')).toBe(false);
   });
+
+  it('reconhece o diálogo real de revisão de hooks como espera', () => {
+    const dialog = [
+      '  Hooks need review',
+      '  2 hooks are new or changed.',
+      '  Hooks can run outside the sandbox after you trust them.',
+      '› 1. Review hooks',
+      '  2. Trust all and continue',
+      "  3. Continue without trusting (hooks won't run)",
+    ].join('\n');
+    const rule = codexAdapter.screenRules.find((entry) => entry.signal === 'waiting')!;
+    expect(rule.pattern.test(dialog)).toBe(true);
+    expect(rule.pattern.test('The answer says “Hooks need review” but continues with the task.')).toBe(false);
+  });
 });

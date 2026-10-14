@@ -148,6 +148,30 @@ describe('Session', () => {
     expect(ended).toHaveLength(1);
   });
 
+  it('fallback do rodapé encerra dois turnos seguidos com histórico curto', async () => {
+    let completion = 0;
+    const adapter = {
+      ...codexAdapter,
+      readScreenCompletion: async () => {
+        completion++;
+        return { completionId: `codex-1:turn-${completion}`, text: `resposta ${completion}` };
+      },
+    };
+    const { pty, session, ended } = setup(adapter);
+    session.agentSessionId = 'codex-1';
+    await ready(pty, session);
+    await session.injectPrompt('primeiro', 'a1');
+    pty.emitData('\r\n  Worked for 2s • 05:54\r\n');
+    await waitFor(() => ended.length === 1);
+    await session.injectPrompt('segundo', 'a2');
+    pty.emitData('\r\n  Worked for 1s • 17:19\r\n');
+    await waitFor(() => ended.length === 2);
+    expect(ended).toEqual([
+      { owner: 'broker', answer: 'resposta 1' },
+      { owner: 'broker', answer: 'resposta 2' },
+    ]);
+  });
+
   it('rodapé citado em texto do prompt ou da resposta não encerra turno Codex', async () => {
     const adapter = { ...codexAdapter, readScreenCompletion: async () => ({ completionId: 'codex-1:turn-1', text: 'ok' }) };
     const { pty, session, ended } = setup(adapter);
@@ -413,9 +437,7 @@ describe('Session', () => {
     pty.emitData('\r\nInterrompido!\r\n> ');
     await waitFor(() => failed.length === 1);
     await session.injectPrompt('y', 'a2');
-    pty.emitData('\x1b[2J\x1b[H');
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    pty.emitData('Interrompido!\r\n> ');
+    pty.emitData('\x1b[2J\x1b[H\r\nInterrompido!\r\n> ');
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(failed).toHaveLength(1);
     expect(session.state).toBe('busy');
