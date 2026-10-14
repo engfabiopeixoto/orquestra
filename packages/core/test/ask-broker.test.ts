@@ -43,6 +43,63 @@ describe('AskBroker', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
+  it('reavalia fila pendente se a notificação de idle não chegou, sem injetar em busy', async () => {
+    const { broker, t } = setup();
+    t('B').state = 'busy';
+    void broker.submit({ asker: 'A', target: 'B', text: 'pedido', timeoutMs: 60_000 });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(t('B').injected).toHaveLength(0);
+    t('B').state = 'idle';
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(t('B').injected).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(t('B').injected).toHaveLength(1);
+  });
+
+  it('rejeição atrasada da injeção antiga não apaga o pedido novo após recarregar', async () => {
+    const { broker, t, finish } = setup();
+    let reject!: (error: Error) => void;
+    t('B').injectPrompt = () => new Promise<void>((_resolve, fail) => { reject = fail; });
+    const old = broker.submit({ asker: 'A', target: 'B', text: 'antigo', timeoutMs: 60_000 });
+    const failed = expect(old).rejects.toMatchObject({ code: 'PROMPT_FAILED' });
+    broker.sessionRemoved('B');
+    await failed;
+    t('B').injectPrompt = Target.prototype.injectPrompt;
+    const next = broker.submit({ asker: 'C', target: 'B', text: 'novo', timeoutMs: 60_000 });
+    reject(new Error('PTY antigo encerrado'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(broker.list('B')).toMatchObject([{ askId: 'id2', status: 'running' }]);
+    finish('B', 'resposta nova');
+    await expect(next).resolves.toMatchObject({ answer: 'resposta nova' });
+    expect(broker.status('id1')).toMatchObject({ status: 'failed', reason: 'B foi removido' });
+  });
+
+  it('recusa ciclo de espera com três remetentes', async () => {
+    const { broker } = setup();
+    void broker.submit({ asker: 'A', target: 'B', text: '1', timeoutMs: 60_000 });
+    void broker.submit({ asker: 'B', target: 'C', text: '2', timeoutMs: 60_000 });
+    const cycle = broker.submit({ asker: 'C', target: 'A', text: '3', timeoutMs: 10 });
+    const rejected = expect(cycle).rejects.toMatchObject({ code: 'USAGE' });
+    await vi.advanceTimersByTimeAsync(10);
+    await rejected;
+  });
+
+  it('signal já abortado devolve pending imediatamente', async () => {
+    const { broker } = setup();
+    const controller = new AbortController(); controller.abort();
+    const outcome = vi.fn();
+    void broker.submit({ asker: 'A', target: 'B', text: 'pedido', timeoutMs: 60_000, signal: controller.signal }).then(outcome);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(outcome).toHaveBeenCalledWith({ status: 'pending', askId: 'id1' });
+  });
+
+  it('brief para terminal encerrado não cria fila impossível de entregar', () => {
+    const { broker, t } = setup();
+    t('B').state = 'exited';
+    expect(() => broker.brief('B', 'A', 'papel')).toThrow();
+    expect(broker.queued('B')).toBe(0);
+  });
+
   it('lista a fila do destino e avisa cada mudança', async () => {
     const { broker, changes, finish } = setup();
     void broker.submit({ asker: 'A', target: 'B', text: 'primeiro pedido', timeoutMs: 60_000 });

@@ -169,7 +169,7 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
     const launch = adapter.launch({
       cwd: input.cwd,
       sessionDir,
-      hookCommand: (event) => `node ${opts.cliScript} hook ${adapter.kind} ${event}`,
+      hookCommand: (event) => `node "${opts.cliScript}" hook ${adapter.kind} ${event}`,
       resumeSessionId,
       terminalName: input.name,
       regente: input.regente ?? false,

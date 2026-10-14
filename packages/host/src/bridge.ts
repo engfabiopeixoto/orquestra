@@ -245,7 +245,7 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
     const current = requireProject();
     if (input.agent === 'agy') {
       const result = await ensureAgyGlobalHook({
-        command: `node ${opts.cliScript} hook agy Stop`,
+        command: `node "${opts.cliScript}" hook agy Stop`,
         confirm: requestConfirm,
         ...(opts.agyHooksFile ? { hooksFile: opts.agyHooksFile } : {}),
       });

@@ -1,5 +1,5 @@
 import type { AgentAdapter } from './types.js';
-import { orquestraGuide } from '@orquestra/shared';
+import { orquestraGuide, parseArgs } from '@orquestra/shared';
 
 export const codexAdapter: AgentAdapter = {
   kind: 'codex',
@@ -11,7 +11,7 @@ export const codexAdapter: AgentAdapter = {
   ],
   launch(ctx) {
     // notify appends its JSON payload as the last argument, rather than stdin.
-    const command = ctx.hookCommand('Stop').split(' ');
+    const command = parseArgs(ctx.hookCommand('Stop'));
     const config = [
       '-c', `notify=${JSON.stringify(command)}`,
       '-c', 'disable_paste_burst=true',
@@ -39,6 +39,7 @@ export const codexAdapter: AgentAdapter = {
       text: typeof data['last-assistant-message'] === 'string' ? data['last-assistant-message'] : null,
       transcriptPath: null,
       agentSessionId: typeof data['thread-id'] === 'string' ? data['thread-id'] : null,
+      ...(typeof data['turn-id'] === 'string' ? { completionId: `${data['thread-id'] ?? ''}:${data['turn-id']}` } : {}),
     };
   },
   preparePrompt: (text) => text,

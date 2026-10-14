@@ -18,6 +18,10 @@ export function claudeHookSettings(hookCommand: (event: string) => string): obje
   return {
     hooks: {
       Stop: [{ hooks: [handler('Stop')] }],
+      UserPromptSubmit: [{ hooks: [handler('UserPromptSubmit')] }],
+      PostToolUse: [{ hooks: [handler('PostToolUse')] }],
+      PostToolUseFailure: [{ hooks: [handler('PostToolUseFailure')] }],
+      StopFailure: [{ hooks: [handler('StopFailure')] }],
       Notification: [{ matcher: 'permission_prompt|elicitation_dialog', hooks: [handler('Notification')] }],
       SessionStart: [{ hooks: [handler('SessionStart')] }],
     },
@@ -45,6 +49,12 @@ export const claudeAdapter: AgentAdapter = {
     return { command: 'claude', args: [...settings, '--session-id', id], env: {}, agentSessionId: id };
   },
   interpretHook: (event, payload): HookSignal => {
+    if (['UserPromptSubmit', 'PostToolUse', 'PostToolUseFailure', 'StopFailure'].includes(event)) {
+      if (!payload || typeof payload !== 'object') return { kind: 'ignored' };
+      // Hooks de subagentes não encerram nem abrem o turno do terminal principal.
+      if ('agent_id' in payload) return { kind: 'ignored' };
+      return { kind: event === 'StopFailure' ? 'turn-failed' : 'activity' };
+    }
     if (event === 'Stop') {
       const parsed = stopPayload.safeParse(payload);
       if (!parsed.success) return { kind: 'ignored' };
@@ -57,6 +67,7 @@ export const claudeAdapter: AgentAdapter = {
     }
     if (event === 'Notification') {
       const parsed = notificationPayload.safeParse(payload);
+      if (parsed.success && parsed.data.notification_type && !['permission_prompt', 'elicitation_dialog'].includes(parsed.data.notification_type)) return { kind: 'ignored' };
       return parsed.success ? { kind: 'waiting', detail: parsed.data.message ?? parsed.data.notification_type ?? '' } : { kind: 'ignored' };
     }
     if (event === 'SessionStart') {

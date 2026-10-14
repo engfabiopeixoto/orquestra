@@ -34,6 +34,28 @@ async function setupOrquestra(extra: Partial<OrquestraOptions> = {}) {
 }
 
 describe('Orquestra (PTY falso)', () => {
+  it('hook aponta para o CLI inteiro quando a instalação tem espaços', async () => {
+    const { orq, host } = await setupOrquestra({ cliScript: 'C:/Program Files/Orquestra/orq.mjs' });
+    orq.createTerminal({ name: 'A', agent: 'fake', cwd: tmpdir() });
+    expect(host.spawned[0]!.spec.env.FAKE_HOOK_CMD).toBe('node "C:/Program Files/Orquestra/orq.mjs" hook fake Stop');
+  });
+
+  it('fila durante starting drena em ordem e publica contagem zero no fim', async () => {
+    const { orq, host, events } = await setupOrquestra();
+    const b = orq.createTerminal({ name: 'B', agent: 'fake', cwd: tmpdir() });
+    const first = orq.broker.submit({ asker: 'A', target: 'B', text: 'primeiro', timeoutMs: 10_000 });
+    const second = orq.broker.submit({ asker: 'C', target: 'B', text: 'segundo', timeoutMs: 10_000 });
+    expect(orq.broker.queued('B')).toBe(2);
+    await waitFor(() => host.spawned[0]!.pty.written.includes('\r'));
+    await b.handleHook('Stop', { last_assistant_message: 'resposta 1' });
+    await expect(first).resolves.toMatchObject({ answer: 'resposta 1' });
+    await waitFor(() => host.spawned[0]!.pty.written.filter((text) => text === '\r').length === 2);
+    await b.handleHook('Stop', { last_assistant_message: 'resposta 2' });
+    await expect(second).resolves.toMatchObject({ answer: 'resposta 2' });
+    expect(orq.broker.queued('B')).toBe(0);
+    expect(events.filter((event) => event.type === 'state').at(-1)).toMatchObject({ name: 'B', state: 'idle', queued: 0 });
+    expect(events.filter((event) => event.type === 'queue').at(-1)).toMatchObject({ name: 'B', entries: [] });
+  });
   it('descarregar mantém o nó, invalida a credencial antiga e recarrega com as conexões', async () => {
     const { orq, host } = await setupOrquestra();
     const a = orq.createTerminal({ name: 'A', agent: 'fake', cwd: tmpdir(), agentSessionId: 'history-A' });

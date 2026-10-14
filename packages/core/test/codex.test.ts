@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { codexAdapter } from '../src/adapters/codex.js';
 
 describe('Codex', () => {
+  it('notify preserva o caminho do hook com espaços', () => {
+    const args = codexAdapter.launch({ ...context, hookCommand: (event) => `node "C:/Program Files/Orquestra/orq.mjs" hook codex ${event}` }).args;
+    expect(JSON.parse(args[1]!.slice('notify='.length))).toEqual(['node', 'C:/Program Files/Orquestra/orq.mjs', 'hook', 'codex', 'Stop']);
+  });
   const context = { cwd: 'C:/project', sessionDir: 'C:/session', hookCommand: (event: string) => `node C:/orq/orq.mjs hook codex ${event}`, resumeSessionId: null as string | null };
   it('configura notify e retoma somente a sessão associada ao terminal', () => {
     const launch = codexAdapter.launch(context);

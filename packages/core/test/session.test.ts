@@ -6,6 +6,8 @@ import { Screen } from '../src/screen.js';
 import { Session, type TurnFailure, type TurnOwner } from '../src/session.js';
 import { FakePty } from './helpers/fake-pty.js';
 import { waitFor } from './helpers/wait.js';
+import { claudeAdapter } from '../src/adapters/claude.js';
+import { codexAdapter } from '../src/adapters/codex.js';
 
 function testAdapter(overrides: Partial<AgentAdapter> = {}): AgentAdapter {
   return {
@@ -55,6 +57,96 @@ async function ready(pty: FakePty, session: Session) {
 }
 
 describe('Session', () => {
+  it('saída antiga ainda pendente no xterm não interrompe o turno seguinte', async () => {
+    const { pty, session, failed } = setup();
+    await ready(pty, session);
+    await session.injectPrompt('primeiro', 'a1');
+    pty.emitData('\r\nInterrompido!');
+    await session.handleHook('Stop', { text: 'fim' });
+    await expect(session.injectPrompt('segundo', 'a2')).resolves.toBeUndefined();
+    await session.settle();
+    expect(failed).toEqual([]);
+    expect(session.state).toBe('busy');
+    await session.handleHook('Stop', { text: 'fim 2' });
+  });
+
+  it('Stop anterior recebido antes do Enter da nova injeção não a conclui', async () => {
+    const { pty, session, ended } = setup();
+    await ready(pty, session);
+    await session.injectPrompt('primeiro', 'a1');
+    await session.handleHook('Stop', { text: 'fim' });
+    const next = session.injectPrompt('segundo', 'a2');
+    await session.handleHook('Stop', { text: 'fim' });
+    await expect(next).resolves.toBeUndefined();
+    expect(ended).toHaveLength(1);
+    expect(session.state).toBe('busy');
+    await session.handleHook('Stop', { text: 'fim 2' });
+  });
+
+  it('prompt do usuário permanece busy durante trabalho silencioso', async () => {
+    const { pty, session } = setup();
+    await ready(pty, session);
+    session.userInput('trabalho demorado');
+    session.userInput('\r');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(session.state).toBe('busy');
+    await session.handleHook('Stop', { text: 'fim' });
+  });
+
+  it('prompt enviado durante starting não vira idle pelo timer de partida', async () => {
+    const { session } = setup();
+    session.userInput('trabalho\r');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(session.state).toBe('busy');
+    await session.handleHook('Stop', { text: 'fim' });
+  });
+
+  it('Claude anuncia um turno autônomo e a continuação após permissão', async () => {
+    const { pty, session } = setup(claudeAdapter);
+    await ready(pty, session);
+    await session.handleHook('UserPromptSubmit', { session_id: 'claude-1', prompt: 'tarefa em background concluída' });
+    expect(session.state).toBe('busy');
+    await session.handleHook('Notification', { notification_type: 'permission_prompt' });
+    expect(session.state).toBe('waiting');
+    await session.handleHook('PostToolUse', { session_id: 'claude-1', tool_name: 'Bash' });
+    expect(session.state).toBe('busy');
+    await session.handleHook('Stop', { last_assistant_message: 'fim' });
+    expect(session.state).toBe('idle');
+  });
+
+  it('Stop duplicado do Codex não encerra o pedido seguinte', async () => {
+    const { pty, session, ended } = setup(codexAdapter);
+    await ready(pty, session);
+    const stop = { type: 'agent-turn-complete', 'thread-id': 'codex-1', 'turn-id': 'turn-1', 'last-assistant-message': 'primeira' };
+    await session.injectPrompt('primeiro', 'a1');
+    await session.handleHook('Stop', stop);
+    await session.injectPrompt('segundo', 'a2');
+    await session.handleHook('Stop', stop);
+    expect(session.state).toBe('busy');
+    expect(ended).toHaveLength(1);
+    await session.handleHook('Stop', { ...stop, 'turn-id': 'turn-2' });
+    expect(ended).toHaveLength(2);
+  });
+
+  it('falha na leitura da transcrição libera o turno com no-answer', async () => {
+    const { pty, session, failed } = setup(testAdapter({ readTranscript: async () => { throw new Error('EIO'); } }));
+    await ready(pty, session);
+    await session.injectPrompt('pedido', 'a1');
+    await expect(session.handleHook('Stop', { transcript: 't.jsonl' })).resolves.toBeUndefined();
+    expect(session.state).toBe('idle');
+    expect(failed).toEqual([{ owner: 'broker', reason: 'no-answer' }]);
+  });
+
+  it('saída do processo durante a colagem impede o Enter atrasado', async () => {
+    const { pty, session } = setup();
+    await ready(pty, session);
+    const injecting = session.injectPrompt('pedido', 'a1');
+    pty.emitExit(1);
+    await expect(injecting).rejects.toThrow();
+    expect(pty.written).not.toContain('\r');
+    expect(session.state).toBe('exited');
+  });
+
   it('o id da sessão do agente vem também do Stop e avisa quando muda', async () => {
     const adapter = testAdapter({
       interpretHook: () => ({ kind: 'turn-end', text: 'ok', transcriptPath: null, agentSessionId: 'conv-2' }),

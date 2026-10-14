@@ -19,6 +19,14 @@ function jsonl(lines: unknown[]): string {
 }
 
 describe('claudeAdapter', () => {
+  it('registra início, retomada e falha; subagentes não terminam o turno principal', () => {
+    const settings = claudeHookSettings(hook) as { hooks: Record<string, unknown> };
+    for (const event of ['UserPromptSubmit', 'PostToolUse', 'PostToolUseFailure', 'StopFailure']) expect(settings.hooks[event]).toBeDefined();
+    expect(claudeAdapter.interpretHook('StopFailure', { error: 'rate_limit' })).toEqual({ kind: 'turn-failed' });
+    expect(claudeAdapter.interpretHook('SubagentStop', { agent_id: 'sub' })).toEqual({ kind: 'ignored' });
+    expect(claudeAdapter.interpretHook('PostToolUse', { agent_id: 'sub' })).toEqual({ kind: 'ignored' });
+    expect(claudeAdapter.interpretHook('Notification', { notification_type: 'idle_prompt' })).toEqual({ kind: 'ignored' });
+  });
   it('reconhece limite de uso e erro de API como falha do agente', () => {
     const signals = (text: string) => claudeAdapter.screenRules.filter((rule) => rule.pattern.test(text)).map((rule) => rule.signal);
     expect(signals("You've hit your session limit · resets 10:20am (America/Sao_Paulo)")).toEqual(['failed']);

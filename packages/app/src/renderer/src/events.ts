@@ -30,6 +30,7 @@ export function routeEvent(event: HostEvent, deps: { store: Pick<AppActions, 'ap
   }
   if (event.workspaceId && event.workspaceId !== activeWorkspaceId()) return;
   if (event.type === 'terminal.output') return deps.bus.publish(outputKey(event.name, event.workspaceId), event.data);
+  if (event.workspaceId && event.sequence !== undefined && event.sequence <= (sequences.get(event.workspaceId) ?? 0)) return;
   deps.store.applyEvent(event);
   if (event.workspaceId && event.sequence !== undefined) sequences.set(event.workspaceId, event.sequence);
 }

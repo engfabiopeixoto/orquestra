@@ -19,7 +19,7 @@ export type AskStatus =
   | { status: 'answered'; answer: string }
   | { status: 'failed'; reason: string };
 
-type Waiter = { resolve: (outcome: AskOutcome) => void; reject: (error: OrqError) => void; timer: NodeJS.Timeout };
+type Waiter = { resolve: (outcome: AskOutcome) => void; reject: (error: OrqError) => void; timer: NodeJS.Timeout; detach?: () => void };
 
 type Item = {
   askId: string;
@@ -45,6 +45,7 @@ export class AskBroker {
   private readonly inFlight = new Map<string, Item>();
   private readonly items = new Map<string, Item>();
   private readonly retryTimers = new Map<string, NodeJS.Timeout>();
+  private readonly blockedReasons = new Map<string, string>();
   private readonly typingGuardMs: number;
   private readonly newId: () => string;
 
@@ -59,11 +60,12 @@ export class AskBroker {
     }
     const target = this.opts.resolveTarget(input.target);
     if (!target) throw new OrqError('NOT_FOUND', `Terminal ${input.target} não existe. Veja os conectados com orq peers.`);
+    if (!target.acceptsPrompts) throw new OrqError('UNSUPPORTED', `${input.target} é um shell e não recebe prompts.`);
     if (target.state === 'exited') {
       throw new OrqError('PROMPT_FAILED', `${input.target} está encerrado. Reinicie o terminal e tente de novo.`);
     }
     // Quem pergunta está atendendo um pedido do próprio destino: o destino só fica livre quando este responder.
-    if (this.inFlight.get(input.asker)?.asker === input.target) {
+    if (this.closesCycle(input.asker, input.target)) {
       throw new OrqError(
         'USAGE',
         `${input.target} está esperando a sua resposta e não pode atender agora. Responda primeiro e pergunte depois.`,
@@ -74,19 +76,24 @@ export class AskBroker {
     const outcome = new Promise<AskOutcome>((resolve, reject) => {
       const timer = setTimeout(() => {
         if (!item.waiter) return;
+        item.waiter.detach?.();
         item.waiter = undefined;
         this.opts.log.info({ askId: item.askId, target: item.target }, 'prazo do pedido esgotado; resposta será entregue depois');
         resolve({ status: 'pending', askId: item.askId });
       }, input.timeoutMs);
       item.waiter = { resolve, reject, timer };
       // Quem perguntou desconectou (o orq foi morto): ninguém lê mais a resposta direta; ela vai para o terminal dele.
-      input.signal?.addEventListener('abort', () => {
+      const disconnect = () => {
         if (!item.waiter) return;
         clearTimeout(item.waiter.timer);
+        item.waiter.detach?.();
         item.waiter = undefined;
         this.opts.log.info({ askId: item.askId, target: item.target }, 'quem perguntou desconectou; resposta será entregue depois');
         resolve({ status: 'pending', askId: item.askId });
-      });
+      };
+      item.waiter.detach = () => input.signal?.removeEventListener('abort', disconnect);
+      if (input.signal?.aborted) disconnect();
+      else input.signal?.addEventListener('abort', disconnect, { once: true });
     });
     this.opts.log.info({ askId: item.askId, asker: input.asker, target: input.target }, 'pedido recebido');
     this.enqueue(item);
@@ -108,7 +115,7 @@ export class AskBroker {
     const index = queue.indexOf(item);
     if (index >= 0) {
       queue.splice(index, 1);
-      this.notify(item.target);
+      this.notify(item.target, 'cancelled');
     }
     // Em curso: o agente segue até o fim; o fim do turno libera a fila (não injetamos com ele ocupado).
     this.fail(item, 'cancelado');
@@ -134,7 +141,7 @@ export class AskBroker {
     const item = this.inFlight.get(name);
     if (!item) return;
     this.inFlight.delete(name);
-    this.notify(name);
+    this.notify(name, 'turn-ended');
     if (item.kind === 'prompt' && item.status.status === 'running') this.succeed(item, answer);
     this.pump(name);
   }
@@ -143,13 +150,17 @@ export class AskBroker {
     const item = this.inFlight.get(name);
     if (!item) return;
     this.inFlight.delete(name);
-    this.notify(name);
+    this.notify(name, 'turn-failed');
     if (item.kind === 'prompt' && item.status.status === 'running') this.fail(item, reason);
     this.pump(name);
   }
 
   /** Entrega um texto ao terminal sem esperar resposta (função, guia do regente). */
   brief(target: string, from: string, text: string): string {
+    const session = this.opts.resolveTarget(target);
+    if (!session) throw new OrqError('NOT_FOUND', `Terminal ${target} não existe.`);
+    if (!session.acceptsPrompts) throw new OrqError('UNSUPPORTED', `${target} é um shell e não recebe prompts.`);
+    if (session.state === 'exited') throw new OrqError('PROMPT_FAILED', `${target} está encerrado. Reinicie o terminal.`);
     const item: Item = { askId: this.newId(), kind: 'delivery', asker: from, target, text, status: { status: 'queued' } };
     this.items.set(item.askId, item);
     this.opts.log.info({ askId: item.askId, from, target }, 'entrega enfileirada');
@@ -174,17 +185,34 @@ export class AskBroker {
     }));
   }
 
-  private notify(target: string): void {
+  private notify(target: string, reason: string): void {
+    this.opts.log.info({ terminal: target, reason, state: this.opts.resolveTarget(target)?.state, queued: this.queues.get(target)?.length ?? 0, askId: this.inFlight.get(target)?.askId ?? null }, 'fila atualizada');
     this.opts.onQueueChange?.(target);
+  }
+
+  /** Segue dependências ativas, inclusive pedidos que ainda esperam na fila. */
+  private closesCycle(asker: string, target: string): boolean {
+    const pending = [target];
+    const visited = new Set<string>();
+    const active = [...this.inFlight.values(), ...[...this.queues.values()].flat()];
+    while (pending.length) {
+      const name = pending.pop()!;
+      if (name === asker) return true;
+      if (visited.has(name)) continue;
+      visited.add(name);
+      for (const item of active) if (item.kind === 'prompt' && item.asker === name && item.status.status !== 'failed') pending.push(item.target);
+    }
+    return false;
   }
 
   private failQueue(name: string, reason: string): void {
     clearTimeout(this.retryTimers.get(name));
     this.retryTimers.delete(name);
+    this.blockedReasons.delete(name);
     const pending = [...(this.inFlight.has(name) ? [this.inFlight.get(name)!] : []), ...(this.queues.get(name) ?? [])];
     this.inFlight.delete(name);
     this.queues.delete(name);
-    if (pending.length > 0) this.notify(name);
+    if (pending.length > 0) this.notify(name, reason);
     for (const item of pending) {
       if (item.kind === 'prompt' && (item.status.status === 'queued' || item.status.status === 'running')) {
         this.fail(item, reason);
@@ -196,33 +224,56 @@ export class AskBroker {
     const queue = this.queues.get(item.target) ?? [];
     queue.push(item);
     this.queues.set(item.target, queue);
-    this.notify(item.target);
+    this.notify(item.target, 'enqueued');
     this.pump(item.target);
   }
 
   private pump(name: string): void {
-    if (this.inFlight.has(name)) return;
+    if (this.inFlight.has(name)) { this.blocked(name, 'in-flight'); return; }
     const queue = this.queues.get(name);
-    if (!queue || queue.length === 0) return;
+    if (!queue || queue.length === 0) {
+      clearTimeout(this.retryTimers.get(name));
+      this.retryTimers.delete(name);
+      this.blockedReasons.delete(name);
+      return;
+    }
     const target = this.opts.resolveTarget(name);
-    if (!target || target.state !== 'idle') return;
+    if (!target || target.state === 'exited') return this.failQueue(name, 'o terminal foi encerrado');
+    if (target.state !== 'idle') {
+      this.blocked(name, target.state);
+      // Recupera uma notificação de idle perdida; nunca força o fim de um turno.
+      this.retryLater(name, 1000);
+      return;
+    }
     const sinceTyping = Date.now() - target.lastUserInputAt;
     if (sinceTyping < this.typingGuardMs) {
+      this.blocked(name, 'user-typing');
       this.retryLater(name, this.typingGuardMs - sinceTyping);
       return;
     }
     const item = queue.shift()!;
+    this.blockedReasons.delete(name);
+    clearTimeout(this.retryTimers.get(name));
+    this.retryTimers.delete(name);
     this.inFlight.set(name, item);
     if (item.kind === 'prompt') item.status = { status: 'running' };
-    this.notify(name);
+    this.notify(name, 'injecting');
     this.opts.log.info({ askId: item.askId, target: name, kind: item.kind }, 'injetando no terminal');
     target.injectPrompt(item.text, item.askId).catch((error: unknown) => {
       this.opts.log.error({ askId: item.askId, err: error }, 'falha ao digitar no terminal');
+      // O PTY antigo pode rejeitar depois de remover/recarregar ou de terminar o turno.
+      if (this.inFlight.get(name) !== item) return;
       this.inFlight.delete(name);
-      this.notify(name);
-      if (item.kind === 'prompt') this.fail(item, 'falha ao digitar no terminal');
+      this.notify(name, 'injection-failed');
+      if (item.kind === 'prompt' && item.status.status === 'running') this.fail(item, 'falha ao digitar no terminal');
       this.pump(name);
     });
+  }
+
+  private blocked(name: string, reason: string): void {
+    if (this.blockedReasons.get(name) === reason) return;
+    this.blockedReasons.set(name, reason);
+    this.opts.log.info({ terminal: name, reason, queued: this.queues.get(name)?.length ?? 0, askId: this.inFlight.get(name)?.askId ?? null }, 'entrega bloqueada');
   }
 
   private retryLater(name: string, ms: number): void {
@@ -232,7 +283,7 @@ export class AskBroker {
       setTimeout(() => {
         this.retryTimers.delete(name);
         this.pump(name);
-      }, ms),
+      }, ms).unref(),
     );
   }
 
@@ -241,6 +292,7 @@ export class AskBroker {
     this.opts.log.info({ askId: item.askId, target: item.target }, 'pedido respondido');
     if (item.waiter) {
       clearTimeout(item.waiter.timer);
+      item.waiter.detach?.();
       item.waiter.resolve({ status: 'answered', askId: item.askId, answer });
       item.waiter = undefined;
       return;
@@ -253,6 +305,7 @@ export class AskBroker {
     this.opts.log.info({ askId: item.askId, target: item.target, reason }, 'pedido falhou');
     if (item.waiter) {
       clearTimeout(item.waiter.timer);
+      item.waiter.detach?.();
       item.waiter.reject(new OrqError('PROMPT_FAILED', `O pedido para ${item.target} falhou: ${reason}.`));
       item.waiter = undefined;
       return;

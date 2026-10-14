@@ -30,8 +30,8 @@ export type SessionOptions = {
   /** Silêncio na saída para considerar a TUI pronta: teclas enviadas antes disso são perdidas. */
   readyQuietMs?: number;
   /**
-   * Turno aberto por um Enter do usuário que não produz saída por este tempo volta a idle:
-   * Enter vazio, /help ou um menu não disparam Stop. Agentes trabalhando mostram um indicador que atualiza a tela.
+   * Enter vazio pode não abrir turno. Só esse caso provisório (e shell, sem hooks)
+   * usa silêncio como fallback; trabalho de agente pode ficar silencioso por minutos.
    */
   userTurnQuietMs?: number;
   transcriptRetries?: number;
@@ -54,6 +54,12 @@ export class Session extends EventEmitter<SessionEvents> {
   private userInputAt = 0;
   private readyTimer: NodeJS.Timeout | undefined;
   private userTurnTimer: NodeJS.Timeout | undefined;
+  private provisionalUserTurn = false;
+  private inputHasText = false;
+  private pasting = false;
+  private resolvingTurn: number | null = null;
+  private submittingTurn: number | null = null;
+  private readonly completedHooks = new Set<string>();
   /** Cresce a cada turno: uma continuação assíncrona de um turno antigo não pode mexer no atual. */
   private turnSeq = 0;
   private currentAskId: string | null = null;
@@ -119,10 +125,21 @@ export class Session extends EventEmitter<SessionEvents> {
     this.userInputAt = Date.now();
     this.waitingByHook = false;
     this.opts.pty.write(data);
-    if (data.includes('\r') && this.currentState === 'idle') {
-      this.startTurn('user', null);
-      this.armUserTurn();
-      return;
+    // Guarda somente a presença de texto, sem registrar o conteúdo. Histórico é conservador:
+    // um comando recuperado pode estar trabalhando mesmo sem produzir saída.
+    for (const key of data.match(/\x1b\[[0-9;?]*[A-Za-z~]|[\s\S]/g) ?? []) {
+      if (key === '\x1b[200~') { this.pasting = true; continue; }
+      if (key === '\x1b[201~') { this.pasting = false; continue; }
+      if (key === '\r' && !this.pasting) {
+        if (this.currentState === 'idle' || this.currentState === 'starting') {
+          const provisional = !this.inputHasText || !this.acceptsPrompts;
+          this.startTurn('user', null);
+          this.provisionalUserTurn = provisional;
+          if (provisional) this.armUserTurn();
+        }
+        this.inputHasText = false;
+      } else if (key === '\x03' || key === '\x15') this.inputHasText = false;
+      else if (key === '\x1b[A' || key === '\x1b[B' || (!key.startsWith('\x1b') && /[^\s\x00-\x1f\x7f]/.test(key))) this.inputHasText = true;
     }
     this.refreshWaiting();
   }
@@ -133,10 +150,16 @@ export class Session extends EventEmitter<SessionEvents> {
     }
     const prepared = this.adapter.preparePrompt(text, { cwd: this.opts.cwd, askId });
     this.startTurn('broker', askId);
+    const turn = this.turnSeq;
+    this.submittingTurn = turn;
     try {
-      await writePrompt(this.opts.pty, prepared, { encode: this.adapter.encodeInput?.bind(this.adapter) });
+      await writePrompt({ write: (data) => {
+        if (turn !== this.turnSeq || this.currentState === 'exited') throw new OrqError('PROMPT_FAILED', 'O turno terminou durante a escrita no terminal.');
+        if (data === '\r') this.submittingTurn = null;
+        this.opts.pty.write(data);
+      } }, prepared, { encode: this.adapter.encodeInput?.bind(this.adapter) });
     } catch (error) {
-      this.endTurn();
+      if (turn === this.turnSeq) this.endTurn();
       throw error;
     }
   }
@@ -155,6 +178,28 @@ export class Session extends EventEmitter<SessionEvents> {
       return;
     }
     this.opts.log.info({ event, signal: signal.kind, askId: this.currentAskId }, 'hook recebido');
+    if (this.currentState === 'exited') return;
+    if ((signal.kind === 'turn-end' || signal.kind === 'turn-failed') && this.submittingTurn === this.turnSeq) {
+      this.opts.log.warn({ event, askId: this.currentAskId }, 'fim de turno anterior durante a colagem; ignorado');
+      return;
+    }
+    if (signal.kind === 'activity') {
+      this.waitingByHook = false;
+      this.waitingOnScreen = false;
+      this.provisionalUserTurn = false;
+      clearTimeout(this.userTurnTimer);
+      if (this.owner === null) this.startTurn('user', null);
+      else this.setState('busy', 'hook-activity');
+      return;
+    }
+    if (signal.kind === 'turn-failed') {
+      const owner = this.owner;
+      if (owner !== null) {
+        this.endTurn();
+        this.emit('turnFailed', { owner, reason: 'agent-error' });
+      }
+      return;
+    }
     if (signal.kind === 'waiting') {
       this.waitingByHook = true;
       this.refreshWaiting();
@@ -165,6 +210,11 @@ export class Session extends EventEmitter<SessionEvents> {
       return;
     }
     if (signal.kind !== 'turn-end') return;
+    if (signal.completionId) {
+      if (this.completedHooks.has(signal.completionId)) return;
+      this.completedHooks.add(signal.completionId);
+      if (this.completedHooks.size > 256) this.completedHooks.delete(this.completedHooks.values().next().value!);
+    }
     this.learnAgentSession(signal.agentSessionId);
     this.waitingByHook = false;
     const owner = this.owner;
@@ -179,7 +229,12 @@ export class Session extends EventEmitter<SessionEvents> {
       return;
     }
     const turn = this.turnSeq;
-    const answer = await this.resolveAnswer(signal);
+    if (this.resolvingTurn === turn) return;
+    this.resolvingTurn = turn;
+    let answer: string | null = null;
+    try { answer = await this.resolveAnswer(signal); }
+    catch (error) { this.opts.log.warn({ err: error, askId: this.currentAskId, turn }, 'falha ao ler resposta do turno'); }
+    finally { if (this.resolvingTurn === turn) this.resolvingTurn = null; }
     if (turn !== this.turnSeq || this.owner !== owner) {
       this.opts.log.warn({ event, turn }, 'resposta de um turno que já terminou; descartada');
       return;
@@ -241,15 +296,18 @@ export class Session extends EventEmitter<SessionEvents> {
   }
 
   private handleOutput(data: string): void {
+    const turn = this.turnSeq;
     this.pendingEscape = incompleteEscapeTail(this.pendingEscape + data);
     for (const listener of this.outputListeners) listener(data);
     if (this.currentState === 'starting') this.armReady();
-    if (this.owner === 'user') this.armUserTurn();
-    void this.screen.write(data).then(() => this.onScreen());
+    if (this.owner === 'user' && this.provisionalUserTurn) this.armUserTurn();
+    void this.screen.write(data).then(() => this.onScreen(turn));
   }
 
-  private onScreen(): void {
+  private onScreen(turn: number): void {
     const { appeared, visible } = this.watcher.update(this.screen.visible(), this.screen.text());
+    // O xterm processa a saída de modo assíncrono: ela pode pertencer a um turno já encerrado.
+    if (turn !== this.turnSeq) return;
     this.waitingOnScreen = visible.has('waiting');
     const failure: TurnFailure | null = appeared.includes('interrupted') ? 'interrupted' : appeared.includes('failed') ? 'agent-error' : null;
     if (failure && this.owner !== null) {
@@ -275,7 +333,7 @@ export class Session extends EventEmitter<SessionEvents> {
     this.owner = null;
     this.turnSeq++;
     this.opts.log.info({ code }, 'processo do terminal saiu');
-    this.setState('exited');
+    this.setState('exited', 'process-exit');
     if (owner) this.emit('turnFailed', { owner, reason: 'exited' });
   }
 
@@ -285,21 +343,24 @@ export class Session extends EventEmitter<SessionEvents> {
       if (this.currentState !== 'starting') return;
       if (this.waitingOnScreen) return this.setState('waiting');
       this.everIdle = true;
-      this.setState('idle');
+      this.setState('idle', 'startup-quiet');
     }, this.opts.readyQuietMs ?? 1500);
   }
 
   private startTurn(owner: TurnOwner, askId: string | null): void {
+    clearTimeout(this.readyTimer);
+    clearTimeout(this.userTurnTimer);
+    this.provisionalUserTurn = false;
     this.turnSeq++;
     this.owner = owner;
     this.currentAskId = askId;
-    this.setState('busy');
+    this.setState('busy', `turn-start:${owner}`);
   }
 
   private armUserTurn(): void {
     clearTimeout(this.userTurnTimer);
     this.userTurnTimer = setTimeout(() => {
-      if (this.owner !== 'user' || this.currentState === 'waiting') return;
+      if (this.owner !== 'user' || !this.provisionalUserTurn || this.currentState === 'waiting') return;
       this.opts.log.debug('turno do usuário sem saída; voltando a idle');
       this.endTurn();
       this.emit('turnEnded', { owner: 'user', answer: null });
@@ -314,27 +375,31 @@ export class Session extends EventEmitter<SessionEvents> {
     this.waitingByHook = false;
     if (this.currentState === 'exited') return;
     this.everIdle = true;
-    this.setState('idle');
+    this.setState('idle', 'turn-end');
   }
 
   private refreshWaiting(): void {
     if (this.currentState === 'exited') return;
     const waiting = this.waitingOnScreen || this.waitingByHook;
     if (waiting) {
-      if (this.currentState !== 'waiting') this.setState('waiting');
+      if (this.currentState !== 'waiting') this.setState('waiting', this.waitingByHook ? 'permission-hook' : 'permission-screen');
       return;
     }
     if (this.currentState !== 'waiting') return;
-    if (this.owner) return this.setState('busy');
-    if (this.everIdle) return this.setState('idle');
+    if (this.owner) {
+      this.setState('busy', 'permission-cleared');
+      if (this.provisionalUserTurn) this.armUserTurn();
+      return;
+    }
+    if (this.everIdle) return this.setState('idle', 'permission-cleared');
     // Diálogo respondido durante a partida: espera a TUI silenciar de novo antes de aceitar teclas.
     this.setState('starting');
     this.armReady();
   }
 
-  private setState(state: SessionState): void {
+  private setState(state: SessionState, reason = 'screen-or-hook'): void {
     if (state === this.currentState) return;
-    this.opts.log.debug({ from: this.currentState, to: state }, 'estado do terminal');
+    this.opts.log.info({ terminal: this.name, from: this.currentState, to: state, reason, owner: this.owner, askId: this.currentAskId, turn: this.turnSeq }, 'estado do terminal');
     this.currentState = state;
     this.emit('state', state);
   }

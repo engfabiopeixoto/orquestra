@@ -1,7 +1,9 @@
 import type { ScreenRule } from '../screen-watcher.js';
 
 export type HookSignal =
-  | { kind: 'turn-end'; text: string | null; transcriptPath: string | null; agentSessionId: string | null }
+  | { kind: 'turn-end'; text: string | null; transcriptPath: string | null; agentSessionId: string | null; completionId?: string }
+  | { kind: 'activity' }
+  | { kind: 'turn-failed' }
   | { kind: 'waiting'; detail: string }
   | { kind: 'session-start'; agentSessionId: string | null }
   | { kind: 'ignored' };

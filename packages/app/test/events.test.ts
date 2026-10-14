@@ -7,6 +7,17 @@ import { OutputBus } from '../src/renderer/src/output-bus';
 afterEach(() => { setActiveWorkspace(undefined); workspaceStore.setState({ changing: false }); flushWorkspaceEvents({ applyEvent: () => {} }); });
 
 describe('roteamento de eventos', () => {
+  it('evento atrasado não reverte estado nem fila após o snapshot', () => {
+    setActiveWorkspace('sequencia');
+    const bus = new OutputBus();
+    const store = { applyEvent: vi.fn() };
+    flushWorkspaceEvents(store, 'sequencia', 10);
+    const current = { type: 'terminal.state' as const, name: 'S', state: 'busy' as const, queued: 1, workspaceId: 'sequencia', sequence: 12 };
+    routeEvent(current, { store, bus });
+    routeEvent({ ...current, state: 'idle', queued: 0, sequence: 11 }, { store, bus });
+    routeEvent(current, { store, bus });
+    expect(store.applyEvent.mock.calls).toEqual([[current]]);
+  });
   it('reaplica somente eventos posteriores ao snapshot durante a troca de aba', () => {
     setActiveWorkspace('origem');
     workspaceStore.setState({ changing: true });
