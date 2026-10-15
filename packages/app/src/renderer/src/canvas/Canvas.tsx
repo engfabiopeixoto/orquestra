@@ -14,6 +14,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { groupDropTarget } from '@orquestra/shared/group-layout';
+import type { CanvasMotion } from '@orquestra/shared/args';
 import type { Position } from '@orquestra/shared/workspace';
 import { createCommandApi, type CommandApi } from '../api';
 import { activeWorkspaceId } from '../workspace-context';
@@ -109,7 +110,7 @@ export async function handleCanvasDelete({
   return false;
 }
 
-export function Canvas({ snapToGrid = true, onRemoveRequest, onNewGroup }: { snapToGrid?: boolean; onRemoveRequest(name: string): void; onNewGroup?(selection: boolean, position?: Position): void }) {
+export function Canvas({ snapToGrid = true, motion = 'contained', onRemoveRequest, onNewGroup }: { snapToGrid?: boolean; motion?: CanvasMotion; onRemoveRequest(name: string): void; onNewGroup?(selection: boolean, position?: Position): void }) {
   const workspaceId = activeWorkspaceId();
   const api = useMemo(() => createCommandApi(window.orquestra.invoke, () => workspaceId), [workspaceId]);
   const terminals = useApp((state) => state.terminals);
@@ -212,6 +213,7 @@ export function Canvas({ snapToGrid = true, onRemoveRequest, onNewGroup }: { sna
       edges={edges}
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
+      data-motion={motion}
       onEdgesChange={(changes) => {
         if (workspaceId !== activeWorkspaceId()) return;
         const picks = changes.flatMap((change) => change.type === 'select' ? [change] : []);

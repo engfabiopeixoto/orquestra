@@ -44,16 +44,26 @@ describe('reservedArgError', () => {
 
 describe('emptySettings', () => {
   it('padrões começam vazios', () => {
-    expect(emptySettings()).toEqual({ defaultArgs: { claude: [], agy: [], codex: [] }, canvas: { snapToGrid: true } });
+    expect(emptySettings()).toEqual({ defaultArgs: { claude: [], agy: [], codex: [] }, canvas: { snapToGrid: true, motion: 'contained' } });
   });
 });
 
 describe('settingsSchema', () => {
-  it('configura o grid magnético por padrão em configurações antigas', async () => {
+  it('configura o grid magnético e o movimento contido por padrão em configurações antigas', async () => {
     const { settingsSchema } = await import('../src/args.js');
     expect(settingsSchema.parse({ defaultArgs: { claude: [], agy: [] } })).toEqual({
       defaultArgs: { claude: [], agy: [], codex: [] },
-      canvas: { snapToGrid: true },
+      canvas: { snapToGrid: true, motion: 'contained' },
     });
+  });
+
+  it('completa o movimento em um canvas salvo antes do campo existir', async () => {
+    const { settingsSchema } = await import('../src/args.js');
+    expect(settingsSchema.parse({ defaultArgs: { claude: [], agy: [] }, canvas: { snapToGrid: false } }).canvas).toEqual({ snapToGrid: false, motion: 'contained' });
+  });
+
+  it('recusa um movimento desconhecido', async () => {
+    const { settingsSchema } = await import('../src/args.js');
+    expect(() => settingsSchema.parse({ defaultArgs: { claude: [], agy: [] }, canvas: { snapToGrid: true, motion: 'turbo' } })).toThrow();
   });
 });
