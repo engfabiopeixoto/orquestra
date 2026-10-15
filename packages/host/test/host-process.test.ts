@@ -22,6 +22,7 @@ function startHost() {
       ORQ_CLI_SCRIPT: CLI_SCRIPT,
       ORQ_DATA_DIR: mkdtempSync(join(tmpdir(), 'orq-hostdata-')),
       ORQ_BIN_DIR: mkdtempSync(join(tmpdir(), 'orq-hostbin-')),
+      ORQ_AGY_HOOKS_FILE: join(mkdtempSync(join(tmpdir(), 'orq-hostagy-')), 'hooks.json'),
       ORQ_PIPE_PATH: `\\\\.\\pipe\\orq-hostproc-${randomBytes(4).toString('hex')}`,
     },
   });

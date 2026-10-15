@@ -9,6 +9,7 @@ export async function launchApp(opts: { project?: string; dataDir?: string; binD
   const project = opts.project ?? mkdtempSync(join(tmpdir(), 'orq-e2e-proj-'));
   const dataDir = opts.dataDir ?? mkdtempSync(join(tmpdir(), 'orq-e2e-data-'));
   const binDir = opts.binDir ?? mkdtempSync(join(tmpdir(), 'orq-e2e-bin-'));
+  const agyHooksFile = join(mkdtempSync(join(tmpdir(), 'orq-e2e-agy-hooks-')), 'hooks.json');
   const app = await electron.launch({
     args: ['.'],
     // O pacote do app não é "type": "module" (principal e preload em CJS): o Playwright transpila para CJS.
@@ -18,6 +19,7 @@ export async function launchApp(opts: { project?: string; dataDir?: string; binD
       ORQ_E2E_PROJECT: project,
       ORQ_DATA_DIR: dataDir,
       ORQ_BIN_DIR: binDir,
+      ORQ_AGY_HOOKS_FILE: agyHooksFile,
       ORQ_PIPE_PATH: `\\\\.\\pipe\\orq-e2e-${randomBytes(4).toString('hex')}`,
       ...opts.env,
     },

@@ -6,6 +6,7 @@ import { defaultPipePath } from '@orquestra/shared';
 import { buildCli } from '../packages/cli/build.js';
 import {
   agyAdapter,
+  agyStopHookCommand,
   claudeAdapter,
   createLogger,
   createOrquestra,
@@ -77,7 +78,7 @@ for (;;) {
       if (!name || !agent || !cwd) throw new Error('Uso: new <nome> <claude|agy|shell> <pasta>');
       if (agent === 'agy') {
         const result = await ensureAgyGlobalHook({
-          command: `node ${script} hook agy Stop`,
+          command: agyStopHookCommand(script),
           confirm: async (message) => (await rl.question(`${message} (s/n) `)).trim().toLowerCase() === 's',
         });
         if (result === 'declined') throw new Error('Sem o hook, o Orquestra não sabe quando o agy termina. Terminal não criado.');

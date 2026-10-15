@@ -28,6 +28,19 @@ async function setup(opts: SetupOptions = {}) {
   const settingsFile = join(mkdtempSync(join(tmpdir(), 'orq-settings-')), 'settings.json');
   const personasFile = join(mkdtempSync(join(tmpdir(), 'orq-personas-')), 'personas.json');
   const ptyHost = new FakePtyHost();
+  const agyHooksFile = join(mkdtempSync(join(tmpdir(), 'orq-agyhook-')), 'hooks.json');
+  const logCalls: Array<{ fields: unknown; message: string }> = [];
+  const baseLog = silentLogger();
+  const log = new Proxy(baseLog, {
+    get(target, property, receiver) {
+      if (property === 'info') return (...args: unknown[]) => {
+        if (args[1] === 'comando da interface') logCalls.push({ fields: args[0], message: String(args[1]) });
+        return target.info(...args as Parameters<typeof target.info>);
+      };
+      const value = Reflect.get(target, property, receiver) as unknown;
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
   const outputIntervalMs = opts.outputIntervalMs ?? 5;
   bridge = await startHostBridge({
     send: (message: HostToMain) => sent.push(message),
@@ -39,10 +52,10 @@ async function setup(opts: SetupOptions = {}) {
     cliScript: 'C:/orq/bin/orq.mjs',
     pipePath: `\\\\.\\pipe\\orq-bridge-${randomBytes(4).toString('hex')}`,
     dataDir: mkdtempSync(join(tmpdir(), 'orq-bridge-')),
-    log: silentLogger(),
+    log,
     ptyHost,
     readyQuietMs: 20,
-    agyHooksFile: join(mkdtempSync(join(tmpdir(), 'orq-agyhook-')), 'hooks.json'),
+    agyHooksFile,
     outputIntervalMs,
     agentPidFile,
     claudeDir: opts.claudeDir,
@@ -53,7 +66,7 @@ async function setup(opts: SetupOptions = {}) {
     await bridge!.handle({ kind: 'command', id, method, params });
     return sent.find((message) => (message.kind === 'response' || message.kind === 'response-error') && message.id === id);
   };
-  return { sent, ptyHost, command, agentPidFile, recentFile, settingsFile, personasFile };
+  return { sent, ptyHost, command, agentPidFile, recentFile, settingsFile, personasFile, agyHooksFile, logCalls };
 }
 
 describe('ponte do núcleo', () => {
@@ -261,6 +274,36 @@ describe('ponte do núcleo', () => {
     expect(confirm).toBeDefined();
     await bridge!.handle({ kind: 'confirm-reply', id: confirm!.kind === 'confirm' ? confirm!.id : '', approved: false });
     expect(await pending).toMatchObject({ kind: 'response-error', error: { code: 'USAGE', message: expect.stringMatching(/hook global/) } });
+  });
+
+  it('instala o hook do agy no arquivo configurado sem aspas no comando', async () => {
+    const { command, sent, agyHooksFile } = await setup();
+    await command('agy-project', 'project.open', { dir: mkdtempSync(join(tmpdir(), 'orq-proj-')) });
+    const pending = command('agy-terminal', 'terminal.create', { name: 'B', agent: 'agy' });
+    await waitFor(() => sent.some((message) => message.kind === 'confirm'));
+    const confirm = sent.find((message) => message.kind === 'confirm');
+    if (confirm?.kind !== 'confirm') throw new Error('Confirmação do hook do agy não chegou.');
+    await bridge!.handle({ kind: 'confirm-reply', id: confirm.id, approved: true });
+    expect(await pending).toMatchObject({ kind: 'response' });
+    expect(JSON.parse(readFileSync(agyHooksFile, 'utf8'))).toEqual({
+      orquestra: { Stop: [{ type: 'command', command: 'node C:/orq/bin/orq.mjs hook agy Stop', timeout: 10 }] },
+    });
+  });
+
+  it('registra comandos da interface para ciclo do terminal e chaves de atualização', async () => {
+    const { command, logCalls } = await setup();
+    await command('log-project', 'project.open', { dir: mkdtempSync(join(tmpdir(), 'orq-proj-')) });
+    await command('log-create', 'terminal.create', { name: 'A', agent: 'shell' });
+    await command('log-update', 'terminal.update', { name: 'A', monitor: false });
+    await command('log-restart', 'terminal.restart', { name: 'A' });
+    await command('log-unload', 'terminal.unload', { name: 'A' });
+    await command('log-remove', 'terminal.remove', { name: 'A' });
+    expect(logCalls).toEqual([
+      { fields: { terminal: 'A', method: 'terminal.update', keys: ['monitor'] }, message: 'comando da interface' },
+      { fields: { terminal: 'A', method: 'terminal.restart' }, message: 'comando da interface' },
+      { fields: { terminal: 'A', method: 'terminal.unload' }, message: 'comando da interface' },
+      { fields: { terminal: 'A', method: 'terminal.remove' }, message: 'comando da interface' },
+    ]);
   });
 
   it('método desconhecido e parâmetros inválidos voltam como erro de uso', async () => {
