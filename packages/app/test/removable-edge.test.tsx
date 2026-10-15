@@ -56,4 +56,48 @@ describe('RemovableEdge', () => {
     );
     expect(button().className).toContain('visible');
   });
+
+  it('mostra a pílula do tipo de pedido e a esconde em hover para dar lugar ao ×', () => {
+    const { container } = renderEdge(props({ data: { activity: { flow: 'a→b', kind: 'prompt', running: true } } }));
+    expect(screen.getByTestId('edge-pill-A--B').textContent).toBe('⚡ delegando');
+    fireEvent.mouseEnter(container.querySelector('g.orq-edge-hit')!);
+    expect(screen.queryByTestId('edge-pill-A--B')).toBeNull();
+  });
+
+  it('mantém os controles visíveis ao mover o mouse da linha para o botão', () => {
+    const { container } = renderEdge(props({ data: { activity: { flow: 'a→b', kind: 'prompt', running: true } } }));
+    const line = container.querySelector('g.orq-edge-hit')!;
+    const button = screen.getByRole('button', { name: 'Desconectar' });
+    fireEvent.mouseEnter(line);
+    fireEvent.mouseLeave(line);
+    fireEvent.mouseEnter(button);
+    expect(screen.queryByTestId('edge-pill-A--B')).toBeNull();
+    expect(button.className).toContain('visible');
+  });
+
+  it('mantém a pílula escondida quando o botão recebe foco', () => {
+    renderEdge(props({ data: { activity: { flow: 'a→b', kind: 'prompt', running: true } } }));
+    const button = screen.getByRole('button', { name: 'Desconectar' });
+    fireEvent.focus(button);
+    expect(screen.queryByTestId('edge-pill-A--B')).toBeNull();
+    expect(button.className).toContain('visible');
+  });
+
+  it('usa rótulo neutro para delivery; sem atividade não há pílula', () => {
+    renderEdge(props({ data: { activity: { flow: 'b→a', kind: 'delivery', running: false } } }));
+    expect(screen.getByTestId('edge-pill-A--B').textContent).toBe('📩 entregando');
+    cleanup();
+    renderEdge(props());
+    expect(screen.queryByTestId('edge-pill-A--B')).toBeNull();
+  });
+
+  it('usa rótulo retornando para respostas', () => {
+    renderEdge(props({ data: { activity: { flow: 'b→a', kind: 'reply', running: false } } }));
+    expect(screen.getByTestId('edge-pill-A--B').textContent).toBe('📩 retornando');
+  });
+
+  it('aresta selecionada esconde a pílula', () => {
+    renderEdge(props({ selected: true, data: { activity: { flow: 'a→b', kind: 'prompt', running: true } } }));
+    expect(screen.queryByTestId('edge-pill-A--B')).toBeNull();
+  });
 });

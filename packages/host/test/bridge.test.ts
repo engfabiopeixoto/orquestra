@@ -574,6 +574,23 @@ describe('regente na ponte', () => {
     await call({ pipePath: env.ORQ_PIPE!, token: env.ORQ_TOKEN! }, 'hook', { agent: 'shell', event: 'Stop', payload: {} });
     expect(sent).toContainEqual({ kind: 'event', event: { type: 'terminal.turn', name: 'A', owner: 'user', outcome: 'ended' } });
   });
+
+  it('resposta de prompt chega à interface como ask.answered', async () => {
+    const { command, sent, ptyHost } = await setup();
+    await command('answer-project', 'project.open', { dir: mkdtempSync(join(tmpdir(), 'orq-proj-')) });
+    await command('answer-A', 'terminal.create', { name: 'A', agent: 'shell' });
+    await command('answer-B', 'terminal.create', { name: 'B', agent: 'shell' });
+    await command('answer-edge', 'edge.connect', { a: 'A', b: 'B' });
+    const askerEnv = ptyHost.spawned[0]!.spec.env;
+    const targetEnv = ptyHost.spawned[1]!.spec.env;
+    const pending = call({ pipePath: askerEnv.ORQ_PIPE!, token: askerEnv.ORQ_TOKEN! }, 'prompt', { target: 'B', text: 'pedido', timeoutMs: 60_000 });
+    await waitFor(() => ptyHost.spawned[1]!.pty.written.includes('\r'));
+    await call({ pipePath: targetEnv.ORQ_PIPE!, token: targetEnv.ORQ_TOKEN! }, 'hook', { agent: 'fake', event: 'Stop', payload: { last_assistant_message: 'resposta' } });
+    await expect(pending).resolves.toMatchObject({ status: 'answered', answer: 'resposta' });
+    expect(sent).toContainEqual({
+      kind: 'event', event: { type: 'ask.answered', askId: expect.any(String), from: 'A', target: 'B' },
+    });
+  });
 });
 
 describe('conversa em segundo plano depois de reabrir o projeto', () => {

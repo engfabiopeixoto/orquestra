@@ -200,7 +200,8 @@ export function TerminalNode({ id, data, selected }: NodeProps<TerminalFlowNode>
   };
 
   return (
-    <div className={`term-node ${selected ? 'is-selected' : ''} ${view.locked ? 'is-locked nopan' : ''}`}>
+    <div className={`term-node frame-${view.state} ${selected ? 'is-selected' : ''} ${view.locked ? 'is-locked nopan' : ''}`}>
+      {view.state === 'waiting' ? <span className="waiting-badge" data-testid={`terminal-waiting-${data.name}`}>👋 aguardando você</span> : null}
       <NodeToolbar isVisible={selected && !menu} position={Position.Top} align="start">
         <ContextBar name={data.name} onOpenMenu={openFromButton} />
       </NodeToolbar>

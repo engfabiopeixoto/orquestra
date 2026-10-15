@@ -13,6 +13,24 @@ describe('estado da interface', () => {
     expect(store.getState().queues.A).toHaveLength(1);
   });
 
+  it('guarda as 20 respostas mais recentes e limpa ao trocar ou carregar projeto', () => {
+    const store = createAppStore();
+    for (let index = 0; index < 21; index++) {
+      store.getState().applyEvent({ type: 'ask.answered', askId: `ask-${index}`, from: 'S', target: 'T' });
+    }
+    expect(store.getState().answers).toHaveLength(20);
+    expect(store.getState().answers[0]).toMatchObject({ askId: 'ask-1', from: 'S', target: 'T' });
+    expect(store.getState().answers.at(-1)).toMatchObject({ askId: 'ask-20', from: 'S', target: 'T' });
+
+    store.getState().setProject({ dir: 'C:/q', name: 'q' });
+    expect(store.getState().answers).toEqual([]);
+    store.getState().applyEvent({ type: 'ask.answered', askId: 'loaded', from: 'S', target: 'T' });
+    store.getState().loadProject({
+      dir: 'C:/p', name: 'p', terminals: [], notes: [], edges: [], layout: {}, viewport: { x: 0, y: 0, zoom: 1 },
+    });
+    expect(store.getState().answers).toEqual([]);
+  });
+
   it('aviso do terminal aparece e uma mensagem vazia o limpa', () => {
     const store = createAppStore();
     store.getState().addTerminal(info('A'));

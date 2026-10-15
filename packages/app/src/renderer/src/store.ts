@@ -33,6 +33,7 @@ export type TerminalView = {
   renamedFrom?: string;
 };
 export type EdgeView = { a: string; b: string };
+export type AnsweredAsk = { askId: string; from: string; target: string; at: number };
 export type Notice = { id: number; level: 'info' | 'warn' | 'error'; message: string };
 
 export type AppState = {
@@ -41,6 +42,7 @@ export type AppState = {
   notes: Record<string, NoteView>;
   edges: EdgeView[];
   queues: Record<string, QueueEntry[]>;
+  answers: AnsweredAsk[];
   notices: Notice[];
   focusedTerminal: string | null;
   editing: string | null;
@@ -97,6 +99,7 @@ export function createAppStore() {
     notes: {},
     edges: [],
     queues: {},
+    answers: [],
     notices: [],
     focusedTerminal: null,
     editing: null,
@@ -109,7 +112,7 @@ export function createAppStore() {
     selectionMode: false,
     flow: { graph: { nodes: [], connections: [], autoRun: false }, run: null, tests: null },
 
-    setProject: (project) => set({ project, terminals: {}, notes: {}, edges: [], queues: {}, focusedTerminal: null, editing: null, viewport: null, canvasViewport: null, groups: [], selectedNodes: [], connectMode: false, connectFrom: null, selectionMode: false, flow: { graph: { nodes: [], connections: [], autoRun: false }, run: null, tests: null } }),
+    setProject: (project) => set({ project, terminals: {}, notes: {}, edges: [], queues: {}, answers: [], focusedTerminal: null, editing: null, viewport: null, canvasViewport: null, groups: [], selectedNodes: [], connectMode: false, connectFrom: null, selectionMode: false, flow: { graph: { nodes: [], connections: [], autoRun: false }, run: null, tests: null } }),
 
     loadProject: (snapshot, selection) => {
       const rectOf = (name: string) => snapshot.layout[name];
@@ -140,6 +143,7 @@ export function createAppStore() {
         notes,
         edges: snapshot.edges,
         queues: snapshot.queues ?? {},
+        answers: [],
         focusedTerminal: selection?.focusedTerminal && terminals[selection.focusedTerminal] ? selection.focusedTerminal : null,
         editing: null,
         connectMode: false,
@@ -179,6 +183,10 @@ export function createAppStore() {
         if (view) set({ terminals: { ...get().terminals, [event.name]: { ...view, state: event.state, queued: event.queued } } });
       } else if (event.type === 'terminal.queue') {
         set({ queues: { ...get().queues, [event.name]: event.entries } });
+      } else if (event.type === 'ask.answered') {
+        const answers = get().answers.filter((answer) => answer.askId !== event.askId);
+        answers.push({ askId: event.askId, from: event.from, target: event.target, at: Date.now() });
+        set({ answers: answers.slice(-20) });
       } else if (event.type === 'terminal.removed') {
         const removedId = get().terminals[event.name]?.id;
         const { [event.name]: _removed, ...terminals } = get().terminals;

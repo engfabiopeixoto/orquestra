@@ -54,13 +54,16 @@ export function formatArgs(args: string[]): string {
   return args.map((arg) => (arg === '' || /[\s"]/.test(arg) ? `"${arg.replaceAll('"', '\\"')}"` : arg)).join(' ');
 }
 
+export const canvasMotionSchema = z.enum(['contained', 'minimal']);
+export type CanvasMotion = z.infer<typeof canvasMotionSchema>;
+
 export const settingsSchema = z.object({
   defaultArgs: z.object({ claude: z.array(z.string()), agy: z.array(z.string()), codex: z.array(z.string()).default([]) }),
-  canvas: z.object({ snapToGrid: z.boolean().default(true) }).default({ snapToGrid: true }),
+  canvas: z.object({ snapToGrid: z.boolean().default(true), motion: canvasMotionSchema.default('contained') }).default({ snapToGrid: true, motion: 'contained' }),
 });
 export type Settings = z.infer<typeof settingsSchema>;
 export type SettingsInput = z.input<typeof settingsSchema>;
 
 export function emptySettings(): Settings {
-  return { defaultArgs: { claude: [], agy: [], codex: [] }, canvas: { snapToGrid: true } };
+  return { defaultArgs: { claude: [], agy: [], codex: [] }, canvas: { snapToGrid: true, motion: 'contained' } };
 }

@@ -57,6 +57,19 @@ describe('Orquestra (PTY falso)', () => {
     expect(events.filter((event) => event.type === 'state').at(-1)).toMatchObject({ name: 'B', state: 'idle', queued: 0 });
     expect(events.filter((event) => event.type === 'queue').at(-1)).toMatchObject({ name: 'B', entries: [] });
   });
+
+  it('publica ask.answered quando um pedido de prompt recebe resposta', async () => {
+    const { orq, host, events } = await setupOrquestra();
+    orq.createTerminal({ name: 'A', agent: 'fake', cwd: tmpdir() });
+    const target = orq.createTerminal({ name: 'B', agent: 'fake', cwd: tmpdir() });
+    orq.connect('A', 'B');
+    const outcome = orq.broker.submit({ asker: 'A', target: 'B', text: 'pedido', timeoutMs: 10_000 });
+    await waitFor(() => host.spawned[1]!.pty.written.includes('\r'));
+    await target.handleHook('Stop', { last_assistant_message: 'resposta' });
+    const result = await outcome;
+    expect(result).toMatchObject({ answer: 'resposta' });
+    expect(events).toContainEqual({ type: 'answered', askId: result.askId, asker: 'A', target: 'B' });
+  });
   it('descarregar mantém o nó, invalida a credencial antiga e recarrega com as conexões', async () => {
     const { orq, host } = await setupOrquestra();
     const a = orq.createTerminal({ name: 'A', agent: 'fake', cwd: tmpdir(), agentSessionId: 'history-A' });

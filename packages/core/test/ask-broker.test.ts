@@ -21,7 +21,7 @@ class Target implements BrokerTarget {
   }
 }
 
-function setup(guardMs = 0) {
+function setup(guardMs = 0, onAnswered = vi.fn()) {
   const targets = new Map<string, Target>();
   for (const name of ['A', 'B', 'C']) targets.set(name, new Target(name));
   let counter = 0;
@@ -32,12 +32,13 @@ function setup(guardMs = 0) {
     typingGuardMs: guardMs,
     newId: () => `id${++counter}`,
     onQueueChange: (target) => changes.push(target),
+    onAnswered,
   });
   const finish = (name: string, answer: string) => {
     targets.get(name)!.state = 'idle';
     broker.turnEnded(name, answer);
   };
-  return { broker, targets, finish, changes, t: (name: string) => targets.get(name)! };
+  return { broker, targets, finish, changes, onAnswered, t: (name: string) => targets.get(name)! };
 }
 
 describe('AskBroker', () => {
@@ -182,6 +183,32 @@ describe('AskBroker', () => {
     expect(t('B').injected).toEqual([{ text: 'oi', askId: 'id1' }]);
     finish('B', 'olá');
     await expect(outcome).resolves.toEqual({ status: 'answered', askId: 'id1', answer: 'olá' });
+  });
+
+  it('notifica apenas respostas bem-sucedidas de prompt com asker e target', async () => {
+    const { broker, finish, onAnswered, t } = setup();
+    const outcome = broker.submit({ asker: 'A', target: 'B', text: 'oi', timeoutMs: 60_000 });
+    await vi.advanceTimersByTimeAsync(0);
+    finish('B', 'olá');
+    await expect(outcome).resolves.toMatchObject({ status: 'answered' });
+    expect(onAnswered).toHaveBeenCalledTimes(1);
+    expect(onAnswered).toHaveBeenCalledWith({ askId: 'id1', asker: 'A', target: 'B' });
+
+    broker.brief('B', 'C', 'brief');
+    await vi.advanceTimersByTimeAsync(0);
+    finish('B', 'entendido');
+    expect(onAnswered).toHaveBeenCalledTimes(1);
+
+    const failed = broker.submit({ asker: 'A', target: 'B', text: 'falha', timeoutMs: 60_000 });
+    await vi.advanceTimersByTimeAsync(0);
+    broker.turnFailed('B', 'interrompido');
+    await expect(failed).rejects.toMatchObject({ code: 'PROMPT_FAILED' });
+
+    t('B').state = 'busy';
+    const cancelled = broker.submit({ asker: 'A', target: 'B', text: 'cancelado', timeoutMs: 60_000 });
+    expect(broker.cancel('id4')).toBe(true);
+    await expect(cancelled).rejects.toMatchObject({ code: 'PROMPT_FAILED' });
+    expect(onAnswered).toHaveBeenCalledTimes(1);
   });
 
   it('recusa prompt para si mesmo', async () => {

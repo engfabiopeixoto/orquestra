@@ -27,7 +27,25 @@ describe('SettingsDialog', () => {
     fireEvent.click(screen.getByTestId('settings-snap-grid'));
     fireEvent.click(screen.getByTestId('settings-submit'));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
-    expect(calls.at(-1)).toEqual(['settings.update', { defaultArgs: { claude: ['--dangerously-skip-permissions'], agy: ['--modelo', 'x y'], codex: ['--no-daemon', '--model', 'modelo de teste'] }, canvas: { snapToGrid: false } }]);
+    expect(calls.at(-1)).toEqual(['settings.update', { defaultArgs: { claude: ['--dangerously-skip-permissions'], agy: ['--modelo', 'x y'], codex: ['--no-daemon', '--model', 'modelo de teste'] }, canvas: { snapToGrid: false, motion: 'contained' } }]);
+  });
+
+  it('salva o movimento escolhido e avisa o canvas', async () => {
+    const calls: Array<[string, unknown]> = [];
+    const api = {
+      command: (async (method: string, params: unknown) => {
+        calls.push([method, params]);
+        return method === 'settings.get' ? { defaultArgs: { claude: [], agy: [], codex: [] }, canvas: { snapToGrid: true } } : params;
+      }) as CommandApi['command'],
+    };
+    const onCanvasChange = vi.fn();
+    render(<SettingsDialog api={api} onClose={() => {}} onCanvasChange={onCanvasChange} />);
+    const select = (await screen.findByTestId('settings-motion')) as HTMLSelectElement;
+    expect(select.value).toBe('contained');
+    fireEvent.change(select, { target: { value: 'minimal' } });
+    fireEvent.click(screen.getByTestId('settings-submit'));
+    await waitFor(() => expect(onCanvasChange).toHaveBeenCalledWith({ snapToGrid: true, motion: 'minimal' }));
+    expect(calls.at(-1)).toEqual(['settings.update', { defaultArgs: { claude: [], agy: [], codex: [] }, canvas: { snapToGrid: true, motion: 'minimal' } }]);
   });
 
   it('reservado vira erro e não salva', async () => {

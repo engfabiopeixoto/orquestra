@@ -60,6 +60,7 @@ export type OrquestraEvent =
   | { type: 'output'; name: string; data: string }
   | { type: 'state'; name: string; state: SessionState; queued: number }
   | { type: 'queue'; name: string; entries: QueueEntry[] }
+  | { type: 'answered'; askId: string; asker: string; target: string }
   | { type: 'removed'; name: string }
   | { type: 'agent-session'; name: string }
   | { type: 'notice'; name: string; message: string }
@@ -123,6 +124,7 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
     typingGuardMs: opts.typingGuardMs,
     // emitQueue só é chamada depois, quando o broker já existe.
     onQueueChange: (target) => emitQueue(target),
+    onAnswered: (info) => emit({ type: 'answered', ...info }),
     onDraftBlocked: (target) => emit({ type: 'notice', name: target, message: DRAFT_NOTICE }),
   });
   const configs = new Map<string, Omit<TerminalDescriptor, 'name'>>();

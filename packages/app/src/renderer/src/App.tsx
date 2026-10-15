@@ -1,4 +1,4 @@
-import type { Settings } from '@orquestra/shared/args';
+import { emptySettings, type Settings } from '@orquestra/shared/args';
 import { ReactFlowProvider } from '@xyflow/react';
 import { useEffect, useMemo, useState } from 'react';
 import { createCommandApi } from './api';
@@ -35,7 +35,7 @@ export function App() {
   const editing = useApp((state) => state.editing);
   const [creating, setCreating] = useState(false);
   const [defaultArgs, setDefaultArgs] = useState<Settings['defaultArgs']>({ claude: [], agy: [], codex: [] });
-  const [snapToGrid, setSnapToGrid] = useState(true);
+  const [canvasSettings, setCanvasSettings] = useState<Settings['canvas']>(() => emptySettings().canvas);
   const [personas, setPersonas] = useState<string[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [personasOpen, setPersonasOpen] = useState(false);
@@ -44,7 +44,7 @@ export function App() {
   const [managingGroup, setManagingGroup] = useState<string | null>(null);
 
   useEffect(() => {
-    void globalApi.command('settings.get', {}).then((settings) => setSnapToGrid(settings.canvas?.snapToGrid ?? true)).catch(() => {});
+    void globalApi.command('settings.get', {}).then((settings) => setCanvasSettings({ ...emptySettings().canvas, ...settings.canvas })).catch(() => {});
   }, []);
   useEffect(() => { setCreating(false); setPersonasOpen(false); setCreatingGroup(undefined); setGroupDraft(null); setManagingGroup(null); }, [project?.workspaceId]);
 
@@ -171,7 +171,7 @@ export function App() {
             <ReactFlowProvider key={project?.workspaceId ?? 'paused'}>
             <FlowToolbar />
             <Palette onNewTerminal={() => void openNewTerminal()} onNewNote={() => void createNote()} onNewPortal={() => void createPortalNode()} onNewGroup={() => newGroup(false)} onGroupSelection={() => newGroup(true)} />
-            {project ? <Canvas snapToGrid={snapToGrid} onRemoveRequest={(name) => void requestRemove(name)} onNewGroup={newGroup} /> : <div className="empty workspace-empty">{paused ? <><p>{paused.name} está pausado. Seus agentes serão iniciados ao ativar o workspace.</p><button onClick={() => void activateWorkspace(paused.id)}>Ativar workspace</button></> : <p>Abra uma pasta de projeto para começar.</p>}</div>}
+            {project ? <Canvas snapToGrid={canvasSettings.snapToGrid} motion={canvasSettings.motion} onRemoveRequest={(name) => void requestRemove(name)} onNewGroup={newGroup} /> : <div className="empty workspace-empty">{paused ? <><p>{paused.name} está pausado. Seus agentes serão iniciados ao ativar o workspace.</p><button onClick={() => void activateWorkspace(paused.id)}>Ativar workspace</button></> : <p>Abra uma pasta de projeto para começar.</p>}</div>}
             <ZoomControl />
             </ReactFlowProvider>
             <SubscriptionUsage api={globalApi} />
@@ -191,7 +191,7 @@ export function App() {
           />
         ) : null}
         {editing ? <EditTerminalDialog name={editing} api={api} onClose={() => appStore.getState().setEditing(null)} /> : null}
-        {settingsOpen ? <SettingsDialog api={api} onClose={() => setSettingsOpen(false)} onSnapToGridChange={setSnapToGrid} /> : null}
+        {settingsOpen ? <SettingsDialog api={api} onClose={() => setSettingsOpen(false)} onCanvasChange={setCanvasSettings} /> : null}
         {personasOpen ? <PersonasDialog api={api} hasProject={project !== null} onClose={() => setPersonasOpen(false)} /> : null}
         {groupDraft && project ? <GroupDialog key={groupDraft.group?.id ?? 'new'} draft={groupDraft} api={api} onClose={() => setGroupDraft(null)} /> : null}
         {managingGroup && project ? <GroupMembersDialog id={managingGroup} api={api} onClose={() => setManagingGroup(null)} /> : null}
