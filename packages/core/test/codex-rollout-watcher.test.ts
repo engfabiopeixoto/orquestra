@@ -2,9 +2,9 @@ import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmS
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CodexRolloutWatcher, type CodexRolloutEvent } from '../src/codex-rollout-watcher.js';
-import { silentLogger } from '../src/log.js';
+import { silentLogger, type Logger } from '../src/log.js';
 import { waitFor } from './helpers/wait.js';
 
 const realFixture = fileURLToPath(new URL('./fixtures/codex-rollouts/codex-0.162.1-validation.jsonl', import.meta.url));
@@ -33,6 +33,15 @@ function rolloutPath(home: string, id: string): string {
 
 function event(type: string, turnId: string, extra: Record<string, unknown> = {}) {
   return `${JSON.stringify({ type: 'event_msg', payload: { type, turn_id: turnId, ...extra } })}\n`;
+}
+
+function newThreadRollout(home: string, id: string): string {
+  const path = rolloutPath(home, id);
+  writeFileSync(path, [
+    { type: 'session_meta', payload: { id, cwd, cli_version: '0.162.1' } },
+    { type: 'response_item', payload: { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'Seu terminal se chama Y.' }] } },
+  ].map((row) => JSON.stringify(row)).join('\n') + '\n');
+  return path;
 }
 
 describe('CodexRolloutWatcher', () => {
@@ -104,6 +113,54 @@ describe('CodexRolloutWatcher', () => {
       expect(eventsY.every((item) => item.sessionId === sessionId)).toBe(true);
     } finally {
       await Promise.all([watcherX.stop(), watcherY.stop()]);
+    }
+  });
+
+  it('troca para o rollout criado por /new e passa a acompanhar os eventos da thread nova', async () => {
+    const home = makeHome();
+    const oldPath = rolloutPath(home, sessionId);
+    writeFileSync(oldPath, fixtureText);
+    const events: CodexRolloutEvent[] = [];
+    const watcher = new CodexRolloutWatcher({
+      codexHome: home, cwd, terminalName: 'Y', startedAt: Date.now() - 10_000, pollMs: 10, log: silentLogger(), onEvent: (item) => events.push(item),
+    });
+    watcher.start();
+    try {
+      await waitFor(() => events.some((item) => item.kind === 'session' && item.sessionId === sessionId));
+      const newSessionId = 'thread-after-new-0123';
+      const newPath = newThreadRollout(home, newSessionId);
+      await waitFor(() => events.some((item) => item.kind === 'session' && item.sessionId === newSessionId), 5000);
+      appendFileSync(newPath, event('task_started', 'new-turn-1'));
+      await waitFor(() => events.some((item) => item.kind === 'task-started' && item.sessionId === newSessionId && item.turnId === 'new-turn-1'));
+      appendFileSync(newPath, event('task_complete', 'new-turn-1', { last_agent_message: 'resposta depois de /new' }));
+      await waitFor(() => events.some((item) => item.kind === 'task-complete' && item.sessionId === newSessionId));
+      appendFileSync(oldPath, event('task_started', 'must-not-be-read'));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(events.some((item) => 'turnId' in item && item.turnId === 'must-not-be-read')).toBe(false);
+    } finally {
+      await watcher.stop();
+    }
+  });
+
+  it('usa backoff ao procurar um id ausente e encontra o rollout quando ele aparece', async () => {
+    const home = makeHome();
+    const search = vi.fn();
+    const log = { trace() {}, debug: search, info() {}, warn() {}, error() {} } as unknown as Logger;
+    const events: CodexRolloutEvent[] = [];
+    const lateSessionId = 'thread-created-later-0123';
+    const watcher = new CodexRolloutWatcher({
+      codexHome: home, cwd, terminalName: 'Y', sessionId: lateSessionId, pollMs: 10, log, onEvent: (item) => events.push(item),
+    });
+    watcher.start();
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      expect(search.mock.calls.length).toBeLessThanOrEqual(2);
+      const path = rolloutPath(home, lateSessionId);
+      writeFileSync(path, fixtureText.replaceAll(sessionId, lateSessionId));
+      await waitFor(() => events.some((item) => item.kind === 'session' && item.sessionId === lateSessionId));
+      expect(search).toHaveBeenCalledWith(expect.objectContaining({ sessionId: lateSessionId }), 'buscando rollout Codex pelo id');
+    } finally {
+      await watcher.stop();
     }
   });
 });

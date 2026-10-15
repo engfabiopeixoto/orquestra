@@ -16,6 +16,7 @@ export type CodexRolloutWatcherOptions = {
   sessionId?: string | null;
   startedAt?: number;
   pollMs?: number;
+  discoveryMs?: number;
   log: Logger;
   onEvent: (event: CodexRolloutEvent) => void;
 };
@@ -77,17 +78,22 @@ export class CodexRolloutWatcher {
   private readonly home: string;
   private readonly startedAt: number;
   private readonly pollMs: number;
+  private readonly discoveryMs: number;
   private readonly candidates = new Map<string, Candidate>();
   private timer: NodeJS.Timeout | undefined;
   private polling = false;
   private stopped = false;
   private selected: Candidate | null = null;
   private expectedSessionId: string | null;
+  private nextDiscoveryAt = 0;
+  private nextKnownSessionSearchAt = 0;
+  private knownSessionSearchDelayMs = 250;
 
   constructor(private readonly opts: CodexRolloutWatcherOptions) {
     this.home = opts.codexHome ?? process.env.CODEX_HOME ?? join(homedir(), '.codex');
     this.startedAt = opts.startedAt ?? Date.now();
     this.pollMs = opts.pollMs ?? 250;
+    this.discoveryMs = opts.discoveryMs ?? 2000;
     this.expectedSessionId = opts.sessionId ?? null;
   }
 
@@ -101,6 +107,8 @@ export class CodexRolloutWatcher {
   setSessionId(sessionId: string): void {
     if (this.expectedSessionId === sessionId || this.selected?.sessionId === sessionId) return;
     this.expectedSessionId = sessionId;
+    this.knownSessionSearchDelayMs = 250;
+    this.nextKnownSessionSearchAt = 0;
     if (this.selected) return;
     void this.closeCandidates();
     void this.poll();
@@ -118,10 +126,27 @@ export class CodexRolloutWatcher {
     this.polling = true;
     try {
       if (this.selected) {
-        await this.readCandidate(this.selected);
-      } else if (this.expectedSessionId) {
-        await this.findKnownSession();
+        if (Date.now() >= this.nextDiscoveryAt) {
+          this.nextDiscoveryAt = Date.now() + this.discoveryMs;
+          await this.discoverRecentSessions();
+          for (const candidate of [...this.candidates.values()]) {
+            if (candidate !== this.selected) await this.readCandidate(candidate);
+          }
+        }
         if (this.selected) await this.readCandidate(this.selected);
+      } else if (this.expectedSessionId) {
+        if (Date.now() < this.nextKnownSessionSearchAt) return;
+        const retryMs = this.knownSessionSearchDelayMs;
+        this.opts.log.debug({ terminal: this.opts.terminalName, sessionId: this.expectedSessionId, retryMs }, 'buscando rollout Codex pelo id');
+        await this.findKnownSession();
+        if (this.selected) {
+          this.knownSessionSearchDelayMs = 250;
+          this.nextKnownSessionSearchAt = 0;
+          await this.readCandidate(this.selected);
+        } else {
+          this.nextKnownSessionSearchAt = Date.now() + retryMs;
+          this.knownSessionSearchDelayMs = Math.min(retryMs * 2, 10_000);
+        }
       } else {
         await this.discoverRecentSessions();
         for (const candidate of [...this.candidates.values()]) await this.readCandidate(candidate);
@@ -201,10 +226,6 @@ export class CodexRolloutWatcher {
           return;
         }
         candidate.sessionId = id ?? candidate.sessionId ?? sessionIdFromFilename(candidate.cursor.path);
-        if (this.expectedSessionId && candidate.sessionId !== this.expectedSessionId) {
-          await this.removeCandidate(candidate);
-          return;
-        }
       }
 
       if (!candidate.selected && isTerminalDeveloperMessage(row, this.opts.terminalName)) {

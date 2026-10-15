@@ -1,6 +1,7 @@
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { codexAdapter } from '../src/adapters/codex.js';
 import { silentLogger } from '../src/log.js';
@@ -10,6 +11,7 @@ import { waitFor } from './helpers/wait.js';
 
 const tempDirs: string[] = [];
 const sessions: Session[] = [];
+const newThreadFixture = readFileSync(fileURLToPath(new URL('./fixtures/codex-rollouts/codex-new-thread.jsonl', import.meta.url)), 'utf8');
 
 afterEach(async () => {
   await Promise.all(sessions.splice(0).map((session) => session.kill()));
@@ -43,10 +45,7 @@ function createRollout(home: string, id: string): string {
   const day = join(home, 'sessions', String(now.getFullYear()), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
   mkdirSync(day, { recursive: true });
   const file = join(day, `rollout-${now.toISOString().replaceAll(':', '-').replaceAll('.', '-')}-${id}.jsonl`);
-  writeFileSync(file, [
-    { type: 'session_meta', payload: { id, cwd: 'C:\\workspace\\sample', cli_version: '0.162.1' } },
-    { type: 'response_item', payload: { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'Seu terminal se chama codex-test.' }] } },
-  ].map((row) => JSON.stringify(row)).join('\n') + '\n');
+  writeFileSync(file, newThreadFixture.replaceAll('SESSION_ID', id));
   return file;
 }
 
@@ -90,6 +89,45 @@ describe('Session Codex via rollout', () => {
       { owner: 'broker', reason: 'interrupted' },
       { owner: 'broker', reason: 'interrupted' },
     ]);
+  });
+
+  it('encerra /new sem task_started, adota a nova thread e responde ao próximo prompt do broker', async () => {
+    const { home, session, ended, failed } = makeSession();
+    await ready(session);
+    createRollout(home, 'thread-before-new');
+    await waitFor(() => session.agentSessionId === 'thread-before-new');
+
+    session.userInput('/new\r');
+    const newPath = createRollout(home, 'thread-after-new');
+    await waitFor(() => session.agentSessionId === 'thread-after-new', 5000);
+    await waitFor(() => session.state === 'idle', 5000);
+    expect(failed).toEqual([]);
+
+    await session.injectPrompt('responda nesta thread nova', 'ask-after-new');
+    rolloutEvent(newPath, 'task_started', 'turn-after-new');
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    rolloutEvent(newPath, 'task_complete', 'turn-after-new', { last_agent_message: 'respondido após /new' });
+    await waitFor(() => ended.some((event) => event.owner === 'broker'));
+    expect(ended).toContainEqual({ owner: 'broker', answer: 'respondido após /new' });
+  });
+
+  it('encerra comando local sem task_started, mas preserva turno real que inicia no rollout', async () => {
+    const { home, session, ended } = makeSession();
+    await ready(session);
+    session.userInput('/help\r');
+    await waitFor(() => session.state === 'idle', 5000);
+    expect(ended).toContainEqual({ owner: 'user', answer: null });
+
+    const file = createRollout(home, 'thread-real-turn');
+    await waitFor(() => session.agentSessionId === 'thread-real-turn');
+    session.userInput('pedido real\r');
+    rolloutEvent(file, 'task_started', 'real-turn-1');
+    await new Promise((resolve) => setTimeout(resolve, 3200));
+    expect(session.state).toBe('busy');
+    const endedBeforeCompletion = ended.length;
+    rolloutEvent(file, 'task_complete', 'real-turn-1', { last_agent_message: 'fim real' });
+    await waitFor(() => ended.length > endedBeforeCompletion && session.state === 'idle');
+    expect(ended.at(-1)).toEqual({ owner: 'user', answer: null });
   });
 
   it('não finaliza um turno longo por texto de resposta que parece rodapé', async () => {

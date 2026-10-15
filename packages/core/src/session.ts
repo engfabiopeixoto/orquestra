@@ -159,7 +159,7 @@ export class Session extends EventEmitter<SessionEvents> {
       if (key === '\x1b[201~') { this.pasting = false; continue; }
       if (key === '\r' && !this.pasting) {
         if (this.currentState === 'idle' || this.currentState === 'starting') {
-          const provisional = !this.inputHasText || !this.acceptsPrompts;
+          const provisional = this.adapter.kind === 'codex' || !this.inputHasText || !this.acceptsPrompts;
           this.startTurn('user', null);
           this.provisionalUserTurn = provisional;
           if (provisional) this.armUserTurn();
@@ -454,6 +454,7 @@ export class Session extends EventEmitter<SessionEvents> {
   private startTurn(owner: TurnOwner, askId: string | null): void {
     clearTimeout(this.readyTimer);
     clearTimeout(this.userTurnTimer);
+    this.userTurnTimer = undefined;
     this.provisionalUserTurn = false;
     this.watcher.beginTurn(this.screen.text());
     this.turnSeq++;
@@ -472,18 +473,21 @@ export class Session extends EventEmitter<SessionEvents> {
   }
 
   private armUserTurn(): void {
+    if (this.adapter.kind === 'codex' && this.userTurnTimer) return;
     clearTimeout(this.userTurnTimer);
     this.userTurnTimer = setTimeout(() => {
-      if (this.owner !== 'user' || !this.provisionalUserTurn || this.currentState === 'waiting') return;
+      this.userTurnTimer = undefined;
+      if (this.owner !== 'user' || !this.provisionalUserTurn || (this.currentState === 'waiting' && this.adapter.kind !== 'codex')) return;
       this.opts.log.debug('turno do usuário sem saída; voltando a idle');
       this.endTurn();
       this.emit('turnEnded', { owner: 'user', answer: null });
-    }, this.opts.userTurnQuietMs ?? 5000);
+    }, this.adapter.kind === 'codex' ? 3000 : this.opts.userTurnQuietMs ?? 5000);
   }
 
   private endTurn(): void {
     this.agentBusy();
     clearTimeout(this.userTurnTimer);
+    this.userTurnTimer = undefined;
     clearTimeout(this.turnWarningTimer);
     this.turnSeq++;
     this.codexTurnId = null;
