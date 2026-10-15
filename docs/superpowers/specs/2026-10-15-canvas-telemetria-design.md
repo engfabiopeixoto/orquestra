@@ -17,10 +17,11 @@ Critério de sucesso: com o canvas afastado, dá para saber, sem ler texto, quai
 
 ## Fonte dos dados
 
-Tudo vem do que o renderer já recebe:
+Tudo vem dos eventos que o renderer recebe:
 
 - `terminals[name].state`: `starting | idle | busy | waiting | exited`.
-- `queues[target]: QueueEntry[]`, com `from`, `status: 'queued' | 'running'` e `kind: 'prompt' | 'delivery'` (`packages/shared/src/host-protocol.ts`). `prompt` é delegação; `delivery` cobre a resposta voltando a quem pediu e o `brief` (persona e guia do regente). Separar esses casos exige um novo `kind` no host; fica como pendência.
+- `queues[target]: QueueEntry[]`, com `from`, `status: 'queued' | 'running'` e `kind: 'prompt' | 'delivery'` (`packages/shared/src/host-protocol.ts`). `prompt` é delegação; `delivery` cobre briefs (persona e guia do regente) e respostas tardias que já não têm um waiter ativo.
+- `ask.answered { askId, from, target }`, emitido pelo host quando um prompt recebe resposta enquanto o solicitante ainda aguarda. O store registra `at` ao receber o evento e mantém as 20 respostas mais recentes; a direção visual é `target → from`.
 
 As arestas são não direcionadas (`{ a, b }`). A direção sai da fila: uma entrada em `queues[b]` com `from === a` é fluxo `a→b`.
 
@@ -29,7 +30,7 @@ As arestas são não direcionadas (`{ a, b }`). A direção sai da fila: uma ent
 ### `canvas/edge-activity.ts` — função pura
 
 ```ts
-export type EdgeActivity = { flow: 'a→b' | 'b→a' | 'both'; kind: 'prompt' | 'delivery'; running: boolean };
+export type EdgeActivity = { flow: 'a→b' | 'b→a' | 'both'; kind: 'prompt' | 'delivery' | 'reply'; running: boolean };
 export function edgeActivity(edges: EdgeView[], queues: Record<string, QueueEntry[]>): Map<string, EdgeActivity>;
 ```
 
@@ -37,6 +38,7 @@ export function edgeActivity(edges: EdgeView[], queues: Record<string, QueueEntr
 - Para cada aresta, coleta as entradas de `queues[b]` com `from === a` e de `queues[a]` com `from === b`. Sem entradas, a aresta fica fora do mapa.
 - `flow`: `both` quando há entradas nos dois sentidos.
 - A entrada representativa, que define `kind` e `running`, é a primeira com `status === 'running'`; se nenhuma estiver em curso, é a mais antiga (primeira na ordem da fila).
+- Uma resposta recente acende a aresta do alvo até quem perguntou como `kind: 'reply'` por 3 s desde o recebimento. Atividade viva da fila tem prioridade sobre a resposta.
 
 ### `canvas/use-edge-activity.ts` — hook
 
@@ -51,7 +53,7 @@ Recebe o mapa de atividade e põe `data.activity` em cada aresta. A aresta conti
 ### `RemovableEdge`
 
 - Classes no grupo da aresta: `orq-edge--active` quando há atividade, `orq-edge--running` quando `running`, `orq-edge--reverse` quando `flow === 'b→a'`, `orq-edge--both` quando `flow === 'both'`.
-- Pílula no ponto médio (`EdgeLabelRenderer`): `⚡ delegando` para `prompt`, `📩 entregando` para `delivery`. Como `delivery` cobre respostas e `brief`, o rótulo é neutro; separar os casos exige um novo `kind` no host (pendência). Em hover ou seleção, o botão × de desconectar aparece e a pílula se esconde.
+- Pílula no ponto médio (`EdgeLabelRenderer`): `⚡ delegando` para `prompt`, `📩 entregando` para `delivery` e `📩 retornando` para `reply`. `delivery` cobre briefs e respostas tardias; `reply` é o evento de resposta enquanto o solicitante ainda aguarda. Em hover ou seleção, o botão × de desconectar aparece e a pílula se esconde.
 
 ### `TerminalNode`
 
@@ -82,8 +84,7 @@ Classe `frame-<estado>` no container do card. O xterm não recebe opacidade nem 
 | `idle` | borda `#2a2e37`, sem brilho, cabeçalho esmaecido | igual |
 | `busy` | barra indeterminada de 2px no topo + spinner | borda `--busy` + bolinha |
 | `waiting` | borda âmbar (`--wait`) com `box-shadow` pulsando a cada 1.5 s + badge | borda âmbar com glow fixo + badge |
-| `exited` | borda vermelha sólida com glow | igual |
-| `starting` | sem mudança | sem mudança |
+| `starting` e `exited` | sem tratamento visual; `exited` conserva apenas a classe no DOM | sem tratamento visual; `exited` conserva apenas a classe no DOM |
 
 ## Testes
 

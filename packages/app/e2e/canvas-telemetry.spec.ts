@@ -22,7 +22,7 @@ test('a conexão acende no sentido do pedido e a moldura mostra o estado do term
       if (!result.ok) throw new Error('Não foi possível consultar o workspace de teste.');
       return (result.result as { selectedId: string }).selectedId;
     });
-    type CanvasEvent = Extract<HostEvent, { type: 'terminal.queue' | 'terminal.state' }>;
+    type CanvasEvent = Extract<HostEvent, { type: 'terminal.queue' | 'terminal.state' | 'ask.answered' }>;
     const send = (event: CanvasEvent) => app.evaluate(({ BrowserWindow }, message) => {
       BrowserWindow.getAllWindows()[0]!.webContents.send('orq:event', message);
     }, event);
@@ -38,10 +38,23 @@ test('a conexão acende no sentido do pedido e a moldura mostra o estado do term
     await expect(page.getByTestId('edge-pill-S--T')).toHaveCount(0, { timeout: 6000 });
     await expect(edge).not.toHaveClass(/orq-edge--active/);
 
+    await send({ type: 'ask.answered', askId: 'reply-1', from: 'S', target: 'T', workspaceId });
+    await expect(page.getByTestId('edge-pill-S--T')).toHaveText('📩 retornando');
+    await expect(edge).toHaveClass(/orq-edge--reverse/);
+
     const card = page.locator('[data-id="S"] .term-node');
     await page.getByTestId('terminal-header-S').click();
+    await send({ type: 'terminal.state', name: 'S', state: 'starting', queued: 0, sequence: 1_000_000, workspaceId });
+    const startingVisual = await card.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { borderColor: style.borderColor, boxShadow: style.boxShadow };
+    });
+    await send({ type: 'terminal.state', name: 'S', state: 'exited', queued: 0, sequence: 1_000_001, workspaceId });
+    await expect(card).toHaveClass(/frame-exited/);
+    await expect(card).toHaveCSS('border-color', startingVisual.borderColor);
+    await expect(card).toHaveCSS('box-shadow', startingVisual.boxShadow);
     await expect(card).toHaveClass(/is-selected/);
-    await send({ type: 'terminal.state', name: 'S', state: 'waiting', queued: 0, sequence: 1_000_000, workspaceId });
+    await send({ type: 'terminal.state', name: 'S', state: 'waiting', queued: 0, sequence: 1_000_002, workspaceId });
     await expect(card).toHaveClass(/frame-waiting/);
     const badge = page.getByTestId('terminal-waiting-S');
     await expect(badge).toHaveText('👋 aguardando você');
@@ -61,7 +74,7 @@ test('a conexão acende no sentido do pedido e a moldura mostra o estado do term
     expect(badgeLayout.badgeBottom).toBeLessThanOrEqual(badgeLayout.terminalTop);
     expect(badgeLayout.animationName).toBe('none');
     expect(badgeLayout.boxShadow).toContain('0px 0px 0px 1px');
-    await send({ type: 'terminal.state', name: 'S', state: 'busy', queued: 0, sequence: 1_000_001, workspaceId });
+    await send({ type: 'terminal.state', name: 'S', state: 'busy', queued: 0, sequence: 1_000_003, workspaceId });
     await expect(card).toHaveClass(/frame-busy/);
     await expect(page.getByTestId('terminal-waiting-S')).toHaveCount(0);
   } finally { await app.close(); }

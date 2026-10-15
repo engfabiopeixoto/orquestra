@@ -37,6 +37,12 @@ describe('métodos do núcleo', () => {
 });
 
 describe('mensagens', () => {
+  it('valida o evento de resposta de pedido com terminais de origem e destino', () => {
+    expect(hostEventSchema.parse({ type: 'ask.answered', askId: 'ask-1', from: 'S', target: 'T' })).toEqual({
+      type: 'ask.answered', askId: 'ask-1', from: 'S', target: 'T',
+    });
+  });
+
   it('evento de fila com entradas', () => {
     const event = { type: 'terminal.queue', name: 'B', entries: [{ askId: 'a1', from: 'A', preview: 'oi', status: 'running', kind: 'prompt' }] };
     expect(hostEventSchema.parse(event)).toEqual(event);

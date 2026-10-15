@@ -91,6 +91,11 @@ describe('RemovableEdge', () => {
     expect(screen.queryByTestId('edge-pill-A--B')).toBeNull();
   });
 
+  it('usa rótulo retornando para respostas', () => {
+    renderEdge(props({ data: { activity: { flow: 'b→a', kind: 'reply', running: false } } }));
+    expect(screen.getByTestId('edge-pill-A--B').textContent).toBe('📩 retornando');
+  });
+
   it('aresta selecionada esconde a pílula', () => {
     renderEdge(props({ selected: true, data: { activity: { flow: 'a→b', kind: 'prompt', running: true } } }));
     expect(screen.queryByTestId('edge-pill-A--B')).toBeNull();

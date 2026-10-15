@@ -120,7 +120,8 @@ export function Canvas({ snapToGrid = true, motion = 'contained', onRemoveReques
   const selectionMode = useApp((state) => state.selectionMode);
   const edgesView = useApp((state) => state.edges);
   const queues = useApp((state) => state.queues);
-  const activity = useEdgeActivity(edgesView, queues, workspaceId);
+  const answers = useApp((state) => state.answers);
+  const activity = useEdgeActivity(edgesView, queues, workspaceId, answers);
   const focused = useApp((state) => state.focusedTerminal);
   const connectMode = useApp((state) => state.connectMode);
   const initialViewport = useApp((state) => state.viewport);

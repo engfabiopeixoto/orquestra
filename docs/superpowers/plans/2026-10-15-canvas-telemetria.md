@@ -691,7 +691,15 @@ git commit -m "Acende e anima a conexão no sentido do pedido, com a pílula de 
 
 **Interfaces:**
 - Consumes: `data-motion` (Task 1), classes de aresta e `edge-pill-<id>` (Task 4).
-- Produces: `.term-node.frame-<starting|idle|busy|waiting|exited>`; badge `data-testid="terminal-waiting-<nome>"`.
+- Produces: `.term-node.frame-<starting|idle|busy|waiting|exited>` (a classe `frame-exited` não recebe tratamento visual); badge `data-testid="terminal-waiting-<nome>"`.
+
+| Cards | Tratamento visual |
+|---|---|
+| `starting` | Estilo base, sem tratamento específico. |
+| `exited` | Igual a `starting`; mantém `frame-exited` no DOM, sem estilo específico. |
+| `idle` | Borda discreta e cabeçalho esmaecido. |
+| `busy` | Borda ocupada, barra e spinner no modo contido. |
+| `waiting` | Borda âmbar, glow e badge. |
 
 O `TerminalNode` depende de ReactFlow, xterm e da API do host; não há teste de render isolado dele no repositório. A cobertura desta task é o e2e, que também cobre as Tasks 1-4 no app real.
 
@@ -776,7 +784,6 @@ Em `styles.css`, troque a linha 128 por:
 .term-node.frame-idle .term-hd { opacity: 0.75; }
 .term-node.frame-busy { border-color: var(--busy); }
 .term-node.frame-waiting { border-color: var(--wait); box-shadow: 0 0 10px 1px var(--wait); }
-.term-node.frame-exited { border-color: var(--danger); box-shadow: 0 0 10px 1px var(--danger); }
 .waiting-badge { position: absolute; top: 6px; left: 50%; transform: translateX(-50%); z-index: 11; pointer-events: none; padding: 2px 10px; border-radius: 10px; background: var(--wait); color: #111; font-size: 11px; font-weight: 600; white-space: nowrap; }
 @media (prefers-reduced-motion: no-preference) {
   [data-motion="contained"] .term-node.frame-busy::before { content: ''; position: absolute; top: 0; left: 0; z-index: 12; width: 35%; height: 2px; background: var(--busy); animation: orq-busy-bar 1.4s ease-in-out infinite; }

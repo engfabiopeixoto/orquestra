@@ -423,6 +423,7 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
         return opts.send({ kind: 'event', event: { type: 'terminal.state', name: event.name, state: event.state, queued: event.queued } });
       }
       if (event.type === 'queue') return opts.send({ kind: 'event', event: { type: 'terminal.queue', name: event.name, entries: event.entries } });
+      if (event.type === 'answered') return opts.send({ kind: 'event', event: { type: 'ask.answered', askId: event.askId, from: event.asker, target: event.target } });
       if (event.type === 'notice') return opts.send({ kind: 'event', event: { type: 'terminal.notice', name: event.name, message: event.message } });
       if (event.type === 'agent-session') return changed();
       if (event.type === 'note') return onAgentNote(event.note, event.createdBy);

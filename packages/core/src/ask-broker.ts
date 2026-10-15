@@ -45,6 +45,8 @@ export type BrokerOptions = {
   onQueueChange?: (target: string) => void;
   /** Avisada quando a fila de um destino passa a esperar por um rascunho do usuário. */
   onDraftBlocked?: (target: string) => void;
+  /** Notifica respostas de prompts concluídos, sem incluir briefs ou entregas tardias. */
+  onAnswered?: (info: { askId: string; asker: string; target: string }) => void;
 };
 
 export class AskBroker {
@@ -330,6 +332,7 @@ export class AskBroker {
   private succeed(item: Item, answer: string): void {
     item.status = { status: 'answered', answer };
     this.opts.log.info({ askId: item.askId, target: item.target }, 'pedido respondido');
+    if (item.kind === 'prompt') this.opts.onAnswered?.({ askId: item.askId, asker: item.asker, target: item.target });
     if (item.waiter) {
       clearTimeout(item.waiter.timer);
       item.waiter.detach?.();

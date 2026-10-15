@@ -252,6 +252,7 @@ export const hostEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('terminal.output'), name: z.string(), data: z.string() }),
   z.object({ type: z.literal('terminal.state'), name: z.string(), state: sessionStateSchema, queued: z.number().int() }),
   z.object({ type: z.literal('terminal.queue'), name: z.string(), entries: z.array(queueEntrySchema) }),
+  z.object({ type: z.literal('ask.answered'), askId: z.string(), from: z.string(), target: z.string() }),
   z.object({ type: z.literal('terminal.removed'), name: z.string() }),
   z.object({ type: z.literal('terminal.notice'), name: z.string(), message: z.string() }),
   z.object({ type: z.literal('notice'), level: z.enum(['info', 'warn', 'error']), message: z.string() }),
