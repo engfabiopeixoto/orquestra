@@ -40,12 +40,12 @@ async function ready(session: Session) {
   await waitFor(() => session.state === 'idle');
 }
 
-function createRollout(home: string, id: string): string {
+function createRollout(home: string, id: string, timestamp = new Date().toISOString()): string {
   const now = new Date();
   const day = join(home, 'sessions', String(now.getFullYear()), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
   mkdirSync(day, { recursive: true });
   const file = join(day, `rollout-${now.toISOString().replaceAll(':', '-').replaceAll('.', '-')}-${id}.jsonl`);
-  writeFileSync(file, newThreadFixture.replaceAll('SESSION_ID', id));
+  writeFileSync(file, newThreadFixture.replaceAll('SESSION_ID', id).replaceAll('SESSION_TIMESTAMP', timestamp));
   return file;
 }
 
@@ -94,11 +94,11 @@ describe('Session Codex via rollout', () => {
   it('encerra /new sem task_started, adota a nova thread e responde ao próximo prompt do broker', async () => {
     const { home, session, ended, failed } = makeSession();
     await ready(session);
-    createRollout(home, 'thread-before-new');
+    createRollout(home, 'thread-before-new', new Date(Date.now() - 2000).toISOString());
     await waitFor(() => session.agentSessionId === 'thread-before-new');
 
     session.userInput('/new\r');
-    const newPath = createRollout(home, 'thread-after-new');
+    const newPath = createRollout(home, 'thread-after-new', new Date().toISOString());
     await waitFor(() => session.agentSessionId === 'thread-after-new', 5000);
     await waitFor(() => session.state === 'idle', 5000);
     expect(failed).toEqual([]);

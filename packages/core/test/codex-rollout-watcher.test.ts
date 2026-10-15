@@ -35,10 +35,10 @@ function event(type: string, turnId: string, extra: Record<string, unknown> = {}
   return `${JSON.stringify({ type: 'event_msg', payload: { type, turn_id: turnId, ...extra } })}\n`;
 }
 
-function newThreadRollout(home: string, id: string): string {
+function newThreadRollout(home: string, id: string, timestamp: string): string {
   const path = rolloutPath(home, id);
   writeFileSync(path, [
-    { type: 'session_meta', payload: { id, cwd, cli_version: '0.162.1' } },
+    { type: 'session_meta', timestamp, payload: { id, cwd, timestamp, cli_version: '0.162.1' } },
     { type: 'response_item', payload: { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'Seu terminal se chama Y.' }] } },
   ].map((row) => JSON.stringify(row)).join('\n') + '\n');
   return path;
@@ -128,7 +128,7 @@ describe('CodexRolloutWatcher', () => {
     try {
       await waitFor(() => events.some((item) => item.kind === 'session' && item.sessionId === sessionId));
       const newSessionId = 'thread-after-new-0123';
-      const newPath = newThreadRollout(home, newSessionId);
+      const newPath = newThreadRollout(home, newSessionId, '2026-10-14T22:13:25.000Z');
       await waitFor(() => events.some((item) => item.kind === 'session' && item.sessionId === newSessionId), 5000);
       appendFileSync(newPath, event('task_started', 'new-turn-1'));
       await waitFor(() => events.some((item) => item.kind === 'task-started' && item.sessionId === newSessionId && item.turnId === 'new-turn-1'));
@@ -137,6 +137,43 @@ describe('CodexRolloutWatcher', () => {
       appendFileSync(oldPath, event('task_started', 'must-not-be-read'));
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(events.some((item) => 'turnId' in item && item.turnId === 'must-not-be-read')).toBe(false);
+    } finally {
+      await watcher.stop();
+    }
+  });
+
+  it('mantém a thread mais nova estável e só avança quando aparece uma terceira mais nova', async () => {
+    const home = makeHome();
+    const oldId = 'thread-old-001';
+    const oldPath = rolloutPath(home, oldId);
+    writeFileSync(oldPath, fixtureText.replaceAll(sessionId, oldId));
+    const events: CodexRolloutEvent[] = [];
+    const watcher = new CodexRolloutWatcher({
+      codexHome: home, cwd, terminalName: 'Y', sessionId: oldId, startedAt: Date.now() - 10_000,
+      pollMs: 5, discoveryMs: 20, log: silentLogger(), onEvent: (item) => events.push(item),
+    });
+    watcher.start();
+    try {
+      await waitFor(() => events.some((item) => item.kind === 'session' && item.sessionId === oldId));
+      const newId = 'thread-newest-002';
+      newThreadRollout(home, newId, '2026-10-14T22:13:25.000Z');
+      await waitFor(() => events.some((item) => item.kind === 'session' && item.sessionId === newId));
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      expect(events.filter((item) => item.kind === 'session').map((item) => item.sessionId)).toEqual([oldId, newId]);
+
+      newThreadRollout(home, 'thread-equal-timestamp-002', '2026-10-14T22:13:25.000Z');
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect(events.filter((item) => item.kind === 'session').map((item) => item.sessionId)).toEqual([oldId, newId]);
+
+      appendFileSync(oldPath, event('task_started', 'must-stay-old'));
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      expect(events.some((item) => item.kind === 'task-started' && item.turnId === 'must-stay-old')).toBe(false);
+
+      const thirdId = 'thread-newest-003';
+      newThreadRollout(home, thirdId, '2026-10-14T22:14:25.000Z');
+      await waitFor(() => events.some((item) => item.kind === 'session' && item.sessionId === thirdId));
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      expect(events.filter((item) => item.kind === 'session').map((item) => item.sessionId)).toEqual([oldId, newId, thirdId]);
     } finally {
       await watcher.stop();
     }

@@ -60,6 +60,25 @@ class RolloutCursor {
     return lines.map((line) => line.endsWith('\r') ? line.slice(0, -1) : line);
   }
 
+  async readFirstLine(): Promise<string | null> {
+    const chunks: Buffer[] = [];
+    let position = 0;
+    while (position < 1024 * 1024) {
+      const buffer = Buffer.allocUnsafe(4096);
+      const { bytesRead } = await this.handle.read(buffer, 0, buffer.length, position);
+      if (bytesRead === 0) return null;
+      const chunk = buffer.subarray(0, bytesRead);
+      const newline = chunk.indexOf(0x0a);
+      if (newline >= 0) {
+        chunks.push(chunk.subarray(0, newline));
+        return Buffer.concat(chunks).toString('utf8').replace(/\r$/, '');
+      }
+      chunks.push(chunk);
+      position += bytesRead;
+    }
+    return null;
+  }
+
   async close(): Promise<void> {
     await this.handle.close().catch(() => {});
   }
@@ -68,6 +87,7 @@ class RolloutCursor {
 type Candidate = {
   cursor: RolloutCursor;
   sessionId: string | null;
+  rolloutTimestamp: number | null;
   eligible: boolean;
   selected: boolean;
   pendingEvents: Array<{ kind: 'task-started'; turnId: string } | { kind: 'task-complete'; turnId: string; answer: string | null } | { kind: 'turn-aborted'; turnId: string; reason: string | null }>;
@@ -80,6 +100,7 @@ export class CodexRolloutWatcher {
   private readonly pollMs: number;
   private readonly discoveryMs: number;
   private readonly candidates = new Map<string, Candidate>();
+  private readonly olderRollouts = new Set<string>();
   private timer: NodeJS.Timeout | undefined;
   private polling = false;
   private stopped = false;
@@ -169,6 +190,13 @@ export class CodexRolloutWatcher {
       const candidate = await this.openCandidate(path, true);
       if (!candidate) return;
       candidate.sessionId = this.expectedSessionId;
+      const firstLine = await candidate.cursor.readFirstLine();
+      if (firstLine) {
+        try {
+          const row = JSON.parse(firstLine) as Record<string, unknown>;
+          candidate.rolloutTimestamp = timestampValue(row.timestamp) ?? timestampValue(asRecord(row.payload).timestamp) ?? candidate.rolloutTimestamp;
+        } catch { /* O timestamp do nome do arquivo permanece como fallback. */ }
+      }
       candidate.selected = true;
       this.selected = candidate;
       this.candidates.set(path, candidate);
@@ -186,7 +214,7 @@ export class CodexRolloutWatcher {
       for (const name of names) {
         if (!name.startsWith('rollout-') || !name.endsWith('.jsonl')) continue;
         const path = join(dayDir, name);
-        if (this.candidates.has(path)) continue;
+        if (this.candidates.has(path) || this.olderRollouts.has(path)) continue;
         let info;
         try { info = await stat(path); } catch { continue; }
         const createdAt = info.birthtimeMs || info.ctimeMs;
@@ -202,6 +230,7 @@ export class CodexRolloutWatcher {
       return {
         cursor: await RolloutCursor.open(path, fromEnd),
         sessionId: null,
+        rolloutTimestamp: rolloutTimestampFromPath(path),
         eligible,
         selected: false,
         pendingEvents: [],
@@ -221,6 +250,7 @@ export class CodexRolloutWatcher {
       if (row.type === 'session_meta') {
         const metadata = asRecord(row.payload);
         const id = firstString(metadata.id, metadata.session_id);
+        candidate.rolloutTimestamp = timestampValue(row.timestamp) ?? timestampValue(metadata.timestamp) ?? candidate.rolloutTimestamp;
         if (!candidate.eligible && normalizePath(metadata.cwd) !== normalizePath(this.opts.cwd)) {
           await this.removeCandidate(candidate);
           return;
@@ -230,6 +260,11 @@ export class CodexRolloutWatcher {
 
       if (!candidate.selected && isTerminalDeveloperMessage(row, this.opts.terminalName)) {
         if (!candidate.eligible || !candidate.sessionId) continue;
+        if (this.selected && !isNewerRollout(candidate.rolloutTimestamp, this.selected.rolloutTimestamp)) {
+          this.olderRollouts.add(candidate.cursor.path);
+          await this.removeCandidate(candidate);
+          return;
+        }
         candidate.selected = true;
         this.selected = candidate;
         this.emit({ kind: 'session', sessionId: candidate.sessionId });
@@ -310,6 +345,22 @@ function normalizePath(value: unknown): string | null {
 
 function sessionIdFromFilename(path: string): string | null {
   return basename(path).match(/^rollout-.+-([a-z0-9-]+)\.jsonl$/i)?.[1] ?? null;
+}
+
+function rolloutTimestampFromPath(path: string): number | null {
+  const match = basename(path).match(/^rollout-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-/);
+  if (!match) return null;
+  return Date.parse(`${match[1]}T${match[2]}:${match[3]}:${match[4]}Z`);
+}
+
+function timestampValue(value: unknown): number | null {
+  if (typeof value !== 'string') return null;
+  const timestamp = Date.parse(value);
+  return Number.isNaN(timestamp) ? null : timestamp;
+}
+
+function isNewerRollout(candidate: number | null, selected: number | null): boolean {
+  return candidate !== null && selected !== null && candidate > selected;
 }
 
 async function listSessionDays(sessionsDir: string): Promise<string[]> {
