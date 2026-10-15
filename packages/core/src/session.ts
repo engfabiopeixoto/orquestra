@@ -8,6 +8,7 @@ import { writePrompt } from './input.js';
 import type { Logger } from './log.js';
 import type { PtyProcess } from './pty-host.js';
 import { Screen } from './screen.js';
+import { keyboardInput } from './user-input.js';
 import { ScreenWatcher } from './screen-watcher.js';
 
 export type TurnOwner = 'broker' | 'user';
@@ -158,12 +159,15 @@ export class Session extends EventEmitter<SessionEvents> {
   userInput(data: string): void {
     // Só em trace (desligado por padrão): registra o que o usuário digita, para depurar sequências de escape.
     this.opts.log.trace({ data: JSON.stringify(data) }, 'entrada da interface');
-    this.userInputAt = Date.now();
-    this.waitingByHook = false;
+    const keys = keyboardInput(data);
+    if (keys.length > 0) {
+      this.userInputAt = Date.now();
+      this.waitingByHook = false;
+    }
     this.opts.pty.write(data);
     // Guarda somente a presença de texto, sem registrar o conteúdo. Histórico é conservador:
     // um comando recuperado pode estar trabalhando mesmo sem produzir saída.
-    for (const key of data.match(/\x1b\[[0-9;?]*[A-Za-z~]|[\s\S]/g) ?? []) {
+    for (const key of keys.match(/\x1b\[[0-9;?]*[A-Za-z~]|[\s\S]/g) ?? []) {
       if (key === '\x1b[200~') { this.pasting = true; continue; }
       if (key === '\x1b[201~') { this.pasting = false; continue; }
       if (key === '\r' && !this.pasting) {
