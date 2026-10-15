@@ -65,6 +65,7 @@ export type AppActions = {
   addTerminal(info: TerminalInfo): void;
   replaceTerminal(oldName: string, info: TerminalInfo): void;
   upsertNote(note: NoteInfo, rect?: Rect | null): void;
+  renameNote(oldName: string, note: NoteInfo): void;
   removeNote(name: string): void;
   setNoteConflict(name: string, message: string | null): void;
   moveNode(name: string, position: Position): void;
@@ -206,7 +207,8 @@ export function createAppStore() {
       } else if (event.type === 'notice') {
         get().notify(event.level, event.message);
       } else if (event.type === 'note.changed') {
-        get().upsertNote(event.note, event.rect);
+        if (event.renamedFrom) get().renameNote(event.renamedFrom, event.note);
+        else get().upsertNote(event.note, event.rect);
         if (event.connectedTo) get().addEdge({ a: event.connectedTo, b: event.note.name });
       } else if (event.type === 'note.removed') {
         get().removeNote(event.name);
@@ -279,6 +281,18 @@ export function createAppStore() {
       const position = rect ? { x: rect.x, y: rect.y } : (current?.position ?? nextPosition(all));
       const size = rect ? { width: rect.width, height: rect.height } : (current?.size ?? NOTE_SIZE);
       set({ notes: { ...get().notes, [note.name]: { ...note, position, size, conflict: null } } });
+    },
+
+    renameNote: (oldName, note) => {
+      const currentState = get();
+      const existing = currentState.notes[oldName] ?? currentState.notes[note.name];
+      if (!existing) return;
+      const { [oldName]: _old, ...rest } = currentState.notes;
+      set({
+        notes: { ...rest, [note.name]: { ...existing, ...note, position: existing.position, size: existing.size, conflict: existing.conflict } },
+        edges: currentState.edges.map((edge) => ({ a: edge.a === oldName ? note.name : edge.a, b: edge.b === oldName ? note.name : edge.b })),
+        selectedNodes: currentState.selectedNodes.map((name) => name === oldName ? note.name : name),
+      });
     },
 
     removeNote: (name) => {

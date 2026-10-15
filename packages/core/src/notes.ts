@@ -24,6 +24,15 @@ export class NoteStore {
     return { ...note };
   }
 
+  rename(oldName: string, newName: string): Note {
+    const current = this.require(oldName, 'Confira as notas com orq note list.');
+    if (this.notes.has(newName)) throw new OrqError('USAGE', `Já existe uma nota chamada ${newName}. Escolha outro nome.`);
+    const renamed = { ...current, name: newName };
+    this.notes.delete(oldName);
+    this.notes.set(newName, renamed);
+    return { ...renamed };
+  }
+
   write(name: string, content: string, author: string): { revision: number; created: boolean } {
     const current = this.notes.get(name);
     if (!current) return { revision: this.create(name, content, author).revision, created: true };

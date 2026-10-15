@@ -1,5 +1,5 @@
 import { NodeResizer, type NodeProps } from '@xyflow/react';
-import { useMemo, useState, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { activeWorkspaceId } from '../workspace-context';
 import { recoverGroupLayout } from '../groups/helpers';
 import { NodeConnectors } from '../canvas/NodeConnectors';
@@ -84,7 +84,39 @@ export function NoteBody({ name, api }: { name: string; api: CommandApi }) {
 export function NoteNode({ data, selected }: NodeProps<NoteFlowNode>) {
   const defaultApi = useMemo(() => { const id = activeWorkspaceId(); return createCommandApi(window.orquestra.invoke, () => id); }, []);
   const note = useApp((state) => state.notes[data.name]);
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
+  const nameInput = useRef<HTMLInputElement>(null);
+  const renameFinished = useRef(false);
+  useEffect(() => {
+    if (editingName) nameInput.current?.focus();
+  }, [editingName]);
   if (!note) return null;
+  const beginRename = () => {
+    renameFinished.current = false;
+    setNameDraft(note.name);
+    setEditingName(true);
+  };
+  const finishRename = (commit: boolean) => {
+    if (renameFinished.current) return;
+    renameFinished.current = true;
+    setEditingName(false);
+    const newName = nameDraft.trim();
+    if (!commit || !newName || newName === note.name) return;
+    void defaultApi.command('note.rename', { name: note.name, newName })
+      .then((renamed) => appStore.getState().renameNote(note.name, renamed))
+      .catch((error) => appStore.getState().notify('error', (error as Error).message));
+  };
+  const onRenameKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    event.stopPropagation();
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      finishRename(true);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      finishRename(false);
+    }
+  };
   const sendLayout = () => {
     const rect = layoutOf(appStore.getState(), data.name);
     if (rect) void defaultApi.command('layout.update', { nodes: [{ name: data.name, ...rect }] }).catch((error) => recoverGroupLayout(defaultApi, error));
@@ -104,7 +136,20 @@ export function NoteNode({ data, selected }: NodeProps<NoteFlowNode>) {
       <NodeConnectors />
       <div className={`note-node ${selected ? 'is-selected' : ''}`} data-testid={`note-${data.name}`}>
         <header className="note-hd">
-          <span className="note-name">{note.name}</span>
+          {editingName ? (
+            <input
+              ref={nameInput}
+              className="note-name-editor nodrag nopan"
+              data-testid="note-name-input"
+              value={nameDraft}
+              onChange={(event) => setNameDraft(event.target.value)}
+              onFocus={(event) => event.currentTarget.select()}
+              onBlur={() => finishRename(true)}
+              onKeyDown={onRenameKeyDown}
+            />
+          ) : (
+            <span className="note-name" onDoubleClick={(event) => { event.stopPropagation(); beginRename(); }}>{note.name}</span>
+          )}
           <span className="note-by">por {note.updatedBy}</span>
         </header>
         <NoteBody name={data.name} api={defaultApi} />

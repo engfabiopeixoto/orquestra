@@ -155,6 +155,20 @@ describe('estado da interface', () => {
     expect(store.getState().notes.plano).toMatchObject({ content: 'novo', revision: 3, position: { x: 600, y: 20 }, conflict: null });
   });
 
+  it('renomear nota troca chave, conexões e seleção preservando geometria e conflito', () => {
+    const store = createAppStore();
+    store.getState().loadProject(snapshot, { focusedTerminal: null, selectedNodes: ['plano'] });
+    store.getState().setNoteConflict('plano', 'alterada por A');
+
+    store.getState().renameNote('plano', { name: 'novo-plano', content: '# novo', revision: 3, updatedBy: 'vocês' });
+
+    const state = store.getState();
+    expect(state.notes.plano).toBeUndefined();
+    expect(state.notes['novo-plano']).toMatchObject({ content: '# novo', position: { x: 600, y: 20 }, size: { width: 320, height: 240 }, conflict: 'alterada por A' });
+    expect(state.edges).toEqual([{ a: 'A', b: 'novo-plano' }]);
+    expect(state.selectedNodes).toEqual(['novo-plano']);
+  });
+
   it('moveNode e resizeNode valem para notas; removeNote tira a nota e as conexões', () => {
     const store = createAppStore();
     store.getState().loadProject(snapshot);

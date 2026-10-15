@@ -140,6 +140,32 @@ describe('ponte do núcleo', () => {
     expect(ptyHost.spawned).toHaveLength(spawned);
   });
 
+  it('note.rename atualiza layout e conexões mantendo a nota no grupo', async () => {
+    const { command, logCalls } = await setup({ adapters: { shell: { ...createFakeAdapter(), kind: 'shell' } } });
+    const result = async (id: string, method: string, params: unknown) => {
+      const response = await command(id, method, params);
+      if (response?.kind !== 'response') throw new Error(JSON.stringify(response));
+      return response.result as any;
+    };
+    const dir = mkdtempSync(join(tmpdir(), 'orq-note-rename-'));
+    await result('nr-open', 'project.open', { dir });
+    const terminal = await result('nr-terminal', 'terminal.create', { name: 'S', agent: 'shell' });
+    const note = await result('nr-note', 'note.create', { name: 'nota', content: 'Plano' });
+    await result('nr-connect', 'edge.connect', { a: 'S', b: 'nota' });
+    await result('nr-layout', 'layout.update', { nodes: [{ name: 'nota', x: 420, y: 160, width: 330, height: 250 }] });
+    const { groups } = await result('nr-group', 'group.create', { title: 'Notas', color: '#4cc38a', kind: 'notes', position: { x: 0, y: 0 }, members: [{ kind: 'note', id: note.id }] });
+
+    const renamed = await result('nr-rename', 'note.rename', { name: 'nota', newName: 'plano' });
+    expect(renamed).toMatchObject({ name: 'plano', content: 'Plano' });
+    const layout = await result('nr-layout-get', 'group.layout', {});
+    expect(layout.layout.plano).toEqual({ x: 420, y: 160, width: 330, height: 250 });
+    expect(layout.layout.nota).toBeUndefined();
+    expect(layout.groups.find((group: { id: string }) => group.id === groups[0].id).members).toEqual([{ kind: 'note', id: note.id }]);
+    expect((await result('nr-state', 'project.open', { dir })).edges).toEqual([{ a: 'S', b: 'plano' }]);
+    expect(logCalls).toContainEqual({ fields: expect.objectContaining({ method: 'note.rename' }), message: 'comando da interface' });
+    expect(terminal.id).toBeTruthy();
+  });
+
   it('falha de layout com quadro bloqueado desfaz posições e associações; criar fora do quadro não deixa agente órfão', async () => {
     const { command, ptyHost } = await setup({ adapters: { shell: { ...createFakeAdapter(), kind: 'shell' } } });
     const result = async (id: string, method: string, params: unknown) => {

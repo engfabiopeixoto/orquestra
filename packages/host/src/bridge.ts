@@ -160,7 +160,11 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
   const noteInfo = (note: Note): NoteInfo => ({ id: note.id, name: note.name, content: note.content, revision: note.revision, updatedBy: note.updatedBy });
 
   /** Nota do orq: quando nasce, fica à direita do autor, no primeiro espaço livre, já conectada a ele. */
-  function onAgentNote(note: Note, createdBy: string | null): void {
+  function onAgentNote(note: Note, createdBy: string | null, renamedFrom?: string): void {
+    if (renamedFrom) {
+      opts.send({ kind: 'event', event: { type: 'note.changed', note: noteInfo(note), connectedTo: null, rect: null, renamedFrom } });
+      return;
+    }
     let rect = null;
     if (createdBy && project) {
       const author = project.state.rectOf(createdBy) ?? { x: 80, y: 80, ...TERMINAL_SIZE };
@@ -427,7 +431,7 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
       if (event.type === 'answered') return opts.send({ kind: 'event', event: { type: 'ask.answered', askId: event.askId, from: event.asker, target: event.target } });
       if (event.type === 'notice') return opts.send({ kind: 'event', event: { type: 'terminal.notice', name: event.name, message: event.message } });
       if (event.type === 'agent-session') return changed();
-      if (event.type === 'note') return onAgentNote(event.note, event.createdBy);
+      if (event.type === 'note') return onAgentNote(event.note, event.createdBy, event.renamedFrom);
       if (event.type === 'removed') {
         batcher.drop(event.name);
         recordPids();
@@ -839,6 +843,14 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
       requireProject();
       const note = orquestra.saveNote(name, content, baseRevision);
       changed();
+      return noteInfo(note);
+    },
+    'note.rename': async ({ name, newName }) => {
+      const current = requireProject();
+      const note = orquestra.renameNote(name, newName);
+      current.state.rename(name, newName);
+      changed();
+      opts.log.info({ note: name, method: 'note.rename', newName }, 'comando da interface');
       return noteInfo(note);
     },
     'note.remove': async ({ name }) => {
