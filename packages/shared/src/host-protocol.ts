@@ -191,6 +191,7 @@ export const hostMethodSchemas = {
     params: z.object({ name: terminalNameSchema, content: z.string().default(''), rect: rectSchema.optional(), groupId: z.string().uuid().optional() }),
     result: noteInfoSchema,
   },
+  'note.rename': { params: z.object({ name: z.string().min(1), newName: terminalNameSchema }), result: noteInfoSchema },
   'note.save': {
     // baseRevision: revisão em que a edição começou; null sobrescreve.
     params: z.object({ name: z.string().min(1), content: z.string(), baseRevision: z.number().int().nullable() }),
@@ -257,7 +258,7 @@ export const hostEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('terminal.notice'), name: z.string(), message: z.string() }),
   z.object({ type: z.literal('notice'), level: z.enum(['info', 'warn', 'error']), message: z.string() }),
   // connectedTo e rect vêm preenchidos quando a nota nasceu de um agente.
-  z.object({ type: z.literal('note.changed'), note: noteInfoSchema, connectedTo: z.string().nullable(), rect: rectSchema.nullable() }),
+  z.object({ type: z.literal('note.changed'), note: noteInfoSchema, connectedTo: z.string().nullable(), rect: rectSchema.nullable(), renamedFrom: z.string().optional() }),
   z.object({ type: z.literal('terminal.added'), info: terminalInfoSchema, rect: rectSchema, connectedTo: z.string().nullable() }),
   z.object({ type: z.literal('edge.added'), a: z.string(), b: z.string() }),
   z.object({ type: z.literal('edge.removed'), a: z.string(), b: z.string() }),

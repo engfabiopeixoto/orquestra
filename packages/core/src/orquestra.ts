@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { defaultMonitor, OrqError, reservedArgError, type QueueEntry, type SessionState } from '@orquestra/shared';
+import { defaultMonitor, OrqError, reservedArgError, terminalNameSchema, type QueueEntry, type SessionState } from '@orquestra/shared';
 import type { AgentAdapter } from './adapters/types.js';
 import { AskBroker } from './ask-broker.js';
 import { CLAUDE_CLEAR_INPUT, ClaudeStatusWatcher } from './adapters/claude-status.js';
@@ -65,7 +65,7 @@ export type OrquestraEvent =
   | { type: 'agent-session'; name: string }
   | { type: 'notice'; name: string; message: string }
   /** Nota criada ou alterada pelo orq; createdBy é o terminal autor quando a nota nasce. */
-  | { type: 'note'; note: Note; createdBy: string | null }
+  | { type: 'note'; note: Note; createdBy: string | null; renamedFrom?: string }
   | { type: 'turn'; name: string; owner: TurnOwner; outcome: 'ended' | 'failed' };
 
 export type Orquestra = {
@@ -93,6 +93,7 @@ export type Orquestra = {
   tokenFor(name: string): string | undefined;
   /** Notas da interface: o autor é USER_AUTHOR e não geram evento 'note'. */
   createNote(name: string, content: string): Note;
+  renameNote(name: string, newName: string): Note;
   /** baseRevision: revisão em que a edição começou; null sobrescreve. Revisão antiga lança CONFLICT. */
   saveNote(name: string, content: string, baseRevision: number | null): Note;
   /** Tira a nota do canvas junto com as conexões. */
@@ -491,6 +492,21 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
         topology.remove(name);
         throw error;
       }
+    },
+    renameNote: (name, newName) => {
+      const parsed = terminalNameSchema.safeParse(newName);
+      if (!parsed.success) throw new OrqError('USAGE', `Nome inválido: ${parsed.error.issues[0]?.message ?? 'use letras, números, ponto, hífen ou sublinhado.'}`);
+      if (name === newName) {
+        const current = notes.get(name);
+        if (!current) throw new OrqError('NOT_FOUND', `A nota ${name} não existe.`);
+        return current;
+      }
+      if (topology.kindOf(name) !== 'note') throw new OrqError('NOT_FOUND', `A nota ${name} não existe.`);
+      if (topology.kindOf(newName)) throw new OrqError('USAGE', `Já existe um nó chamado ${newName}. Escolha outro nome.`);
+      const renamed = notes.rename(name, newName);
+      topology.rename(name, newName);
+      opts.onEvent?.({ type: 'note', note: renamed, createdBy: null, renamedFrom: name });
+      return renamed;
     },
     saveNote: (name, content, baseRevision) => notes.save(name, content, baseRevision, USER_AUTHOR),
     removeNote: (name) => {

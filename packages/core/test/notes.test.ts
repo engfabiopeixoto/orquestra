@@ -32,4 +32,24 @@ describe('NoteStore', () => {
     other.restore([{ id: 'id-1', name: 'n', content: 'x', revision: 4, updatedBy: 'A' }]);
     expect(other.get('n')).toEqual({ id: 'id-1', name: 'n', content: 'x', revision: 4, updatedBy: 'A' });
   });
+
+  it('rename muda o nome sem alterar id, conteúdo, revisão ou autor', () => {
+    const notes = new NoteStore();
+    notes.write('nota', 'Plano', 'A');
+    notes.append('nota', ' atualizado', 'B');
+    const before = notes.get('nota')!;
+
+    expect(notes.rename('nota', 'plano')).toEqual({ ...before, name: 'plano' });
+    expect(notes.get('nota')).toBeUndefined();
+    expect(notes.get('plano')).toEqual({ ...before, name: 'plano' });
+  });
+
+  it('rename recusa colisão e nota inexistente com os códigos apropriados', () => {
+    const notes = new NoteStore();
+    notes.create('nota', '', 'A');
+    notes.create('plano', '', 'A');
+
+    expect(() => notes.rename('nota', 'plano')).toThrow(expect.objectContaining({ code: 'USAGE' }));
+    expect(() => notes.rename('ausente', 'novo')).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }));
+  });
 });

@@ -252,6 +252,21 @@ describe('Orquestra (PTY falso)', () => {
     expect(events).toHaveLength(count);
   });
 
+  it('renomeia nota sem perder conexões e publica a origem da renomeação', async () => {
+    const { orq, events } = await setupOrquestra();
+    orq.createTerminal({ name: 'A', agent: 'fake', cwd: tmpdir() });
+    orq.createNote('nota', 'Plano');
+    orq.connect('A', 'nota');
+
+    const renamed = orq.renameNote('nota', 'plano');
+
+    expect(renamed).toMatchObject({ name: 'plano', content: 'Plano' });
+    expect(orq.notes.get('nota')).toBeUndefined();
+    expect(orq.topology.isConnected('A', 'plano')).toBe(true);
+    expect(events).toContainEqual({ type: 'note', note: expect.objectContaining({ name: 'plano' }), createdBy: null, renamedFrom: 'nota' });
+    expect(() => orq.renameNote('plano', 'A')).toThrow(expect.objectContaining({ code: 'USAGE' }));
+  });
+
   it('restoreNote põe a nota no canvas com id e revisão', async () => {
     const { orq } = await setupOrquestra();
     orq.restoreNote({ id: 'id-1', name: 'plano', content: 'x', revision: 4, updatedBy: 'A' });
