@@ -197,6 +197,13 @@ input { font: inherit; color: var(--text); background: var(--bg); border: 1px so
 .node-connector.react-flow__handle-top { border-radius: 0 0 9px 9px; }
 .node-connector.react-flow__handle-bottom { border-radius: 9px 9px 0 0; }
 .node-connector::after { content: ''; position: absolute; top: 50%; left: 50%; width: 22px; height: 22px; transform: translate(-50%, -50%); border-radius: 50%; background: transparent; }
+/* Controles de redimensionar acima do card (que vem depois no DOM e tem position: relative); conectores (z 12) ficam acima das linhas. */
+.react-flow__node .react-flow__resize-control { z-index: 11; }
+.react-flow__node .react-flow__resize-control.handle { z-index: 13; width: 8px; height: 8px; }
+.react-flow__resize-control.handle::after { content: ''; position: absolute; inset: -5px; }
+.react-flow__resize-control.line::after { content: ''; position: absolute; }
+.react-flow__resize-control.line.left::after, .react-flow__resize-control.line.right::after { top: 0; bottom: 0; left: -4px; right: -4px; }
+.react-flow__resize-control.line.top::after, .react-flow__resize-control.line.bottom::after { left: 0; right: 0; top: -4px; bottom: -4px; }
 .notices { position: absolute; z-index: 6; left: 12px; bottom: 60px; display: flex; flex-direction: column; gap: 6px; max-width: 460px; }
 .notice { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--wait); border-radius: 6px; }
 .notice-warn { border-left-color: var(--acc); }
