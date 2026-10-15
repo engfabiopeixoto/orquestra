@@ -4,6 +4,8 @@ import type { CommandApi } from '../api';
 
 const labels = { none: '', added: 'Adições', modified: 'Adições e remoções', removed: 'Remoções' };
 const badges = { none: '', added: 'A', modified: 'M', removed: 'R' };
+/** O núcleo só roda o git a cada 10 s; perguntar com mais frequência só relê as pastas. */
+const REFRESH_MS = 5000;
 type FileView = HostResult<'files.read'>;
 
 export function ProjectFileExplorer({ api, projectDir }: { api: CommandApi; projectDir: string }) {
@@ -37,7 +39,7 @@ export function ProjectFileExplorer({ api, projectDir }: { api: CommandApi; proj
   useEffect(() => {
     const version = ++revision.current;
     void refresh(version);
-    const timer = setInterval(() => { if (!document.hidden) void refresh(version); }, 2000);
+    const timer = setInterval(() => { if (!document.hidden) void refresh(version); }, REFRESH_MS);
     return () => { revision.current++; clearInterval(timer); };
   }, [api, projectDir, expanded]);
 
@@ -62,7 +64,7 @@ export function ProjectFileExplorer({ api, projectDir }: { api: CommandApi; proj
         if (selection.current === version) { setPreview(value); setPreviewError(null); }
       } catch (failure) { if (selection.current === version) setPreviewError((failure as Error).message); }
       finally { running = false; }
-    }, 2000);
+    }, REFRESH_MS);
     return () => clearInterval(timer);
   }, [api, selected]);
   useEffect(() => {

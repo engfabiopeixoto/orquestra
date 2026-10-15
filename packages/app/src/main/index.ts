@@ -4,6 +4,7 @@ import { AGENT_PID_FILE, isHostMethod, OrqError } from '@orquestra/shared';
 import type { CommandResponse } from '../shared/bridge';
 import { ActivityMonitor } from './activity';
 import { appShortcut, handleAppAction } from './app-action';
+import { appUserModelId } from './app-id';
 import { bundledScripts } from './bundled-paths';
 import { HostProcess } from './host-process';
 import { createAppLogger } from './log';
@@ -211,7 +212,7 @@ if (!app.requestSingleInstanceLock()) {
     window.focus();
   });
   void app.whenReady().then(async () => {
-    app.setAppUserModelId('com.orquestra.app');
+    app.setAppUserModelId(appUserModelId(app.isPackaged));
     // Ctrl+R, Ctrl+Shift+I e afins pertencem ao terminal: sem barra de menu, nenhum acelerador do Electron interfere.
     Menu.setApplicationMenu(null);
     try {

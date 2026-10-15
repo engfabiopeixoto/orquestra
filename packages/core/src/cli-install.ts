@@ -10,7 +10,7 @@ export const DEFAULT_BIN_DIR = join(process.env.LOCALAPPDATA ?? join(homedir(), 
 export function spaceFreePath(dir: string): string {
   if (!/\s/.test(dir)) return dir;
   mkdirSync(dir, { recursive: true });
-  const short = execSync(`for %I in ("${dir}") do @echo %~sI`, { shell: process.env.ComSpec ?? 'cmd.exe', encoding: 'utf8' }).trim();
+  const short = execSync(`for %I in ("${dir}") do @echo %~sI`, { shell: process.env.ComSpec ?? 'cmd.exe', encoding: 'utf8', windowsHide: true }).trim();
   if (!short || /\s/.test(short)) {
     throw new OrqError('INTERNAL', `Não há caminho sem espaço para ${dir}. Ative os nomes curtos 8.3 no disco ou escolha outra pasta.`);
   }

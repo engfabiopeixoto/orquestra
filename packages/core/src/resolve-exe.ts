@@ -14,7 +14,7 @@ export function resolveExecutable(name: string, deps: {
   const env = deps.env ?? process.env;
   let candidates: string[];
   try {
-    candidates = deps.where ? deps.where(name) : execFileSync('where.exe', [name], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+    candidates = deps.where ? deps.where(name) : execFileSync('where.exe', [name], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true })
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter(Boolean);

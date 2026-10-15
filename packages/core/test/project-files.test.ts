@@ -60,3 +60,41 @@ describe('arquivos do projeto', () => {
     expect((await files.list('')).entries.some((entry) => entry.name === 'node_modules')).toBe(false);
   });
 });
+
+describe('frequência das consultas ao Git', () => {
+  const repository = () => {
+    const root = mkdtempSync(join(tmpdir(), 'orq-git-cache-'));
+    const git = (args: string[]) => execFileSync('git', ['-C', root, ...args], { stdio: 'pipe' });
+    git(['init']);
+    writeFileSync(join(root, 'tracked.txt'), 'one\n');
+    git(['add', '.']);
+    git(['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'initial']);
+    return root;
+  };
+  const changed = async (files: ProjectFiles) => (await files.list('')).entries.filter((entry) => entry.change !== 'none').map((entry) => entry.name).sort();
+
+  it('dentro do prazo do cache, mudanças novas não disparam outro git status', async () => {
+    const root = repository();
+    const files = new ProjectFiles(root, { gitCacheMs: 60_000 });
+    expect(await changed(files)).toEqual([]);
+    writeFileSync(join(root, 'novo.txt'), 'novo\n');
+    expect(await changed(files)).toEqual([]);
+  });
+
+  it('com cache zero, a mudança aparece na consulta seguinte', async () => {
+    const root = repository();
+    const files = new ProjectFiles(root, { gitCacheMs: 0 });
+    expect(await changed(files)).toEqual([]);
+    writeFileSync(join(root, 'novo.txt'), 'novo\n');
+    expect(await changed(files)).toEqual(['novo.txt']);
+  });
+
+  it('o prazo padrão é de 10 s: o explorador consulta o Git no máximo a cada 10 s por projeto', async () => {
+    const root = repository();
+    const files = new ProjectFiles(root);
+    expect(await changed(files)).toEqual([]);
+    writeFileSync(join(root, 'novo.txt'), 'novo\n');
+    await new Promise((resolve) => setTimeout(resolve, 1700));
+    expect(await changed(files)).toEqual([]);
+  });
+});

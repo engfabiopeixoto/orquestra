@@ -27,7 +27,7 @@ export function resolveNodePath(deps: NodePathDeps): string {
 
 export function whereNode(): string | null {
   try {
-    return execFileSync('where.exe', ['node'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    return execFileSync('where.exe', ['node'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
   } catch {
     return null;
   }

@@ -5,6 +5,12 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { OrqError, type ProjectFile } from '@orquestra/shared';
 
 const MAX_TEXT = 512 * 1024;
+/**
+ * Quanto tempo o resultado do git status/diff vale. O explorador consulta a cada poucos segundos e cada consulta
+ * cria processos git: o prazo de 10 s limita isso a dois processos por projeto a cada 10 s (zero se a janela
+ * está oculta ou o projeto não está ativo, pois o renderer não pergunta).
+ */
+const GIT_CACHE_MS = 10_000;
 const HIDDEN = new Set(['.git', '.orquestra', 'node_modules', '.next', '.venv', '__pycache__']);
 type Change = Pick<ProjectFile, 'change' | 'additions' | 'deletions'>;
 const unchanged = (): Change => ({ change: 'none', additions: 0, deletions: 0 });
@@ -36,7 +42,7 @@ export class ProjectFiles {
   private baseline = new Map<string, string | null>();
   private directories = new Map<string, Map<string, ProjectFile>>();
   private newFiles = new Set<string>();
-  constructor(root: string) {
+  constructor(root: string, private readonly options: { gitCacheMs?: number } = {}) {
     this.root = resolve(root);
     this.canonical = realpath(this.root);
   }
@@ -67,7 +73,7 @@ export class ProjectFiles {
 
   private async gitChanges(): Promise<boolean> {
     if (this.gitPending) return this.gitPending;
-    if (Date.now() - this.gitAt < 1500 && this.gitRoot !== undefined) return this.gitRoot !== null;
+    if (Date.now() - this.gitAt < (this.options.gitCacheMs ?? GIT_CACHE_MS) && this.gitRoot !== undefined) return this.gitRoot !== null;
     this.gitPending = (async () => {
       try {
         if (this.gitRoot === undefined) this.gitRoot = (await this.git(['rev-parse', '--show-toplevel'])).trim();
