@@ -11,6 +11,15 @@ import type {
 } from './portal-protocol';
 
 export type CommandResponse = { ok: true; result: unknown } | { ok: false; error: { code: ErrorCode; message: string } };
+export type AppInfo = {
+  version: string;
+  electron: string;
+  chrome: string;
+  node: string;
+  platform: string;
+  arch: string;
+  osRelease: string;
+};
 
 export interface OrquestraPortalBridge {
   create(opts: PortalCreateOptions): Promise<PortalState>;
@@ -41,6 +50,7 @@ export interface OrquestraBridge {
   openSubscription(provider: 'claude' | 'agy' | 'codex'): Promise<void>;
   /** Ações do menu da janela (a barra de menu foi removida). */
   appAction(action: AppAction): Promise<void>;
+  getAppInfo(): Promise<AppInfo>;
   reportError(message: string, stack?: string): void;
   /** Área de transferência do sistema, pelo Electron (o navigator.clipboard pede permissão e falha sem foco). */
   readClipboard(): Promise<string>;

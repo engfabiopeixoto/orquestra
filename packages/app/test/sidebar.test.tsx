@@ -150,7 +150,10 @@ describe('Sidebar: workspaces', () => {
 
 describe('Sidebar: menu do Orquestra', () => {
   const appAction = vi.fn();
-  beforeEach(() => { appAction.mockReset(); Object.assign(window, { orquestra: { appAction } }); });
+  beforeEach(() => {
+    appAction.mockReset();
+    Object.assign(window, { orquestra: { appAction, getAppInfo: vi.fn().mockResolvedValue({ version: '0.3.9', electron: '44', chrome: '144', node: '24', platform: 'win32', arch: 'x64', osRelease: '10' }), writeClipboard: vi.fn().mockResolvedValue(undefined) } });
+  });
 
   it.each([
     ['Abrir pasta de logs', 'open-logs'],
@@ -160,10 +163,18 @@ describe('Sidebar: menu do Orquestra', () => {
   ])('o item "%s" envia %s e fecha o menu', async (label, action) => {
     renderSidebar();
     fireEvent.click(screen.getByRole('button', { name: 'Menu do Orquestra' }));
-    expect(screen.getAllByRole('menuitem')).toHaveLength(4);
+    expect(screen.getAllByRole('menuitem')).toHaveLength(5);
     fireEvent.click(screen.getByRole('menuitem', { name: label }));
     expect(appAction).toHaveBeenCalledWith(action);
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+  });
+
+  it('abre Sobre no renderer sem enviar app-action', async () => {
+    renderSidebar();
+    fireEvent.click(screen.getByRole('button', { name: 'Menu do Orquestra' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Sobre o Orquestra' }));
+    expect(await screen.findByRole('dialog', { name: 'Sobre o Orquestra' })).toBeTruthy();
+    expect(appAction).not.toHaveBeenCalled();
   });
 
   it('fecha com Escape e com clique fora, sem disparar ação', () => {
