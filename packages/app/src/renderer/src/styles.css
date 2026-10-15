@@ -131,13 +131,13 @@ input { font: inherit; color: var(--text); background: var(--bg); border: 1px so
 .term-node.frame-busy { border-color: var(--busy); }
 .term-node.frame-waiting { border-color: var(--wait); box-shadow: 0 0 10px 1px var(--wait); }
 .term-node.frame-exited { border-color: var(--danger); box-shadow: 0 0 10px 1px var(--danger); }
-.waiting-badge { position: absolute; top: 6px; left: 50%; transform: translateX(-50%); z-index: 11; pointer-events: none; padding: 2px 10px; border-radius: 10px; background: var(--wait); color: #111; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.waiting-badge { position: absolute; top: 2px; left: 50%; transform: translateX(-50%); z-index: 11; pointer-events: none; padding: 2px 10px; border-radius: 10px; background: var(--wait); color: #111; font-size: 11px; font-weight: 600; white-space: nowrap; }
 @media (prefers-reduced-motion: no-preference) {
-  [data-motion="contained"] .term-node.frame-busy::before { content: ''; position: absolute; top: 0; left: 0; z-index: 12; width: 35%; height: 2px; background: var(--busy); animation: orq-busy-bar 1.4s ease-in-out infinite; }
+  [data-motion="contained"] .term-node.frame-busy::before { content: ''; position: absolute; top: 0; left: 0; z-index: 12; width: 35%; height: 2px; transform: translateX(-100%); background: var(--busy); animation: orq-busy-bar 1.4s ease-in-out infinite; }
   [data-motion="contained"] .term-node.frame-busy .term-state .dot { box-sizing: border-box; background: transparent; border: 2px solid var(--busy); border-top-color: transparent; animation: orq-spin 0.8s linear infinite; }
-  [data-motion="contained"] .term-node.frame-waiting { animation: orq-wait-pulse 1.5s ease-in-out infinite; }
+  [data-motion="contained"] .term-node.frame-waiting:not(.is-selected) { animation: orq-wait-pulse 1.5s ease-in-out infinite; }
 }
-@keyframes orq-busy-bar { from { left: -35%; } to { left: 100%; } }
+@keyframes orq-busy-bar { from { transform: translateX(-100%); } to { transform: translateX(286%); } }
 @keyframes orq-spin { to { transform: rotate(360deg); } }
 @keyframes orq-wait-pulse { 0%, 100% { box-shadow: 0 0 4px 0 var(--wait); } 50% { box-shadow: 0 0 16px 3px var(--wait); } }
 .term-node.is-selected { border-color: var(--acc); box-shadow: 0 0 0 1px var(--acc); }

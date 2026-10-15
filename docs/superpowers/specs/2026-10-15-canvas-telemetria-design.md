@@ -20,7 +20,7 @@ Critério de sucesso: com o canvas afastado, dá para saber, sem ler texto, quai
 Tudo vem do que o renderer já recebe:
 
 - `terminals[name].state`: `starting | idle | busy | waiting | exited`.
-- `queues[target]: QueueEntry[]`, com `from`, `status: 'queued' | 'running'` e `kind: 'prompt' | 'delivery'` (`packages/shared/src/host-protocol.ts`). `prompt` é delegação; `delivery` é a resposta voltando a quem pediu.
+- `queues[target]: QueueEntry[]`, com `from`, `status: 'queued' | 'running'` e `kind: 'prompt' | 'delivery'` (`packages/shared/src/host-protocol.ts`). `prompt` é delegação; `delivery` cobre a resposta voltando a quem pediu e o `brief` (persona e guia do regente). Separar esses casos exige um novo `kind` no host; fica como pendência.
 
 As arestas são não direcionadas (`{ a, b }`). A direção sai da fila: uma entrada em `queues[b]` com `from === a` é fluxo `a→b`.
 
@@ -51,7 +51,7 @@ Recebe o mapa de atividade e põe `data.activity` em cada aresta. A aresta conti
 ### `RemovableEdge`
 
 - Classes no grupo da aresta: `orq-edge--active` quando há atividade, `orq-edge--running` quando `running`, `orq-edge--reverse` quando `flow === 'b→a'`, `orq-edge--both` quando `flow === 'both'`.
-- Pílula no ponto médio (`EdgeLabelRenderer`): `⚡ delegando` para `prompt`, `📩 retornando` para `delivery`. Em hover ou seleção, o botão × de desconectar aparece e a pílula se esconde.
+- Pílula no ponto médio (`EdgeLabelRenderer`): `⚡ delegando` para `prompt`, `📩 entregando` para `delivery`. Como `delivery` cobre respostas e `brief`, o rótulo é neutro; separar os casos exige um novo `kind` no host (pendência). Em hover ou seleção, o botão × de desconectar aparece e a pílula se esconde.
 
 ### `TerminalNode`
 

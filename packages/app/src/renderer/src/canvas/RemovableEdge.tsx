@@ -6,7 +6,7 @@ import type { EdgeActivity } from './edge-activity';
 /** Canvas fornece a remoção; o edge só pede, sem conhecer a API nem a store. */
 export const DisconnectEdgeContext = createContext<(edge: DisconnectableEdge) => void>(() => {});
 
-const PILL_LABEL: Record<EdgeActivity['kind'], string> = { prompt: '⚡ delegando', delivery: '📩 retornando' };
+const PILL_LABEL: Record<EdgeActivity['kind'], string> = { prompt: '⚡ delegando', delivery: '📩 entregando' };
 
 /** Aresta padrão (bezier, como antes) com um × no meio, visível em hover ou seleção. */
 export function RemovableEdge({ id, source, target, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, markerEnd, style, selected, data, interactionWidth }: EdgeProps) {
@@ -28,6 +28,10 @@ export function RemovableEdge({ id, source, target, sourceX, sourceY, targetX, t
           title="Desconectar"
           className={`edge-remove nodrag nopan${controlsVisible ? ' visible' : ''}`}
           style={{ transform: center }}
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+          onFocus={() => setHovered(true)}
+          onBlur={() => setHovered(false)}
           onClick={(event) => { event.stopPropagation(); disconnect({ source, target, data }); }}
         >×</button>
         {activity && !controlsVisible ? <span className="edge-pill" data-testid={`edge-pill-${id}`} style={{ transform: center }}>{PILL_LABEL[activity.kind]}</span> : null}
