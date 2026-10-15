@@ -33,6 +33,7 @@ export async function runHost(opts: { adapters: Record<string, AgentAdapter> }):
       recentFile: join(dataDir, 'recent.json'),
       settingsFile: join(dataDir, 'settings.json'),
       personasFile: join(dataDir, 'personas.json'),
+      agyHooksFile: process.env.ORQ_AGY_HOOKS_FILE,
     });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') {

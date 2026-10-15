@@ -8,6 +8,14 @@ import { agyHookGroup } from './adapters/agy.js';
 export const DEFAULT_AGY_HOOKS_FILE = join(homedir(), '.gemini', 'config', 'hooks.json');
 const GROUP = 'orquestra';
 
+/** O agy interpreta aspas como parte literal do caminho do executável. */
+export function agyStopHookCommand(cliScript: string): string {
+  if (/[\s"]/.test(cliScript)) {
+    throw new OrqError('USAGE', 'O caminho do script do Orquestra para o hook do agy não pode conter espaços ou aspas.');
+  }
+  return `node ${cliScript} hook agy Stop`;
+}
+
 /**
  * O agy não aceita hooks por sessão: o Orquestra instala um grupo próprio no arquivo global.
  * Fora do Orquestra o hook não faz nada (o orq hook sai em silêncio sem ORQ_TOKEN).

@@ -35,6 +35,7 @@ import {
   readClaudeUsage,
   type SubscriptionUsage,
   ProjectFiles,
+  agyStopHookCommand,
   ensureAgyGlobalHook,
   loadWorkspace,
   PersonaStore,
@@ -251,7 +252,7 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
     const current = requireProject();
     if (input.agent === 'agy') {
       const result = await ensureAgyGlobalHook({
-        command: `node "${opts.cliScript}" hook agy Stop`,
+        command: agyStopHookCommand(opts.cliScript),
         confirm: requestConfirm,
         ...(opts.agyHooksFile ? { hooksFile: opts.agyHooksFile } : {}),
       });
@@ -712,6 +713,7 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
       return info(session);
     },
     'terminal.update': async ({ name, ...changes }) => {
+      opts.log.info({ terminal: name, method: 'terminal.update', keys: Object.keys(changes) }, 'comando da interface');
       const before = orquestra.describeTerminals().find((terminal) => terminal.name === name);
       const session = await orquestra.updateTerminal(name, changes);
       if (changes.newName && changes.newName !== name) project?.state.rename(name, changes.newName);
@@ -724,18 +726,21 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
       return info(session);
     },
     'terminal.remove': async ({ name }) => {
+      opts.log.info({ terminal: name, method: 'terminal.remove' }, 'comando da interface');
       requireSession(name);
       await orquestra.removeTerminal(name);
       changed();
       return {};
     },
     'terminal.restart': async ({ name }) => {
+      opts.log.info({ terminal: name, method: 'terminal.restart' }, 'comando da interface');
       const session = await orquestra.restartTerminal(name);
       recordPids();
       changed();
       return info(session);
     },
     'terminal.unload': async ({ name }) => {
+      opts.log.info({ terminal: name, method: 'terminal.unload' }, 'comando da interface');
       const session = await orquestra.unloadTerminal(name);
       recordPids(); changed();
       return info(session);

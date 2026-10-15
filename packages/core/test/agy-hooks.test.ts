@@ -1,13 +1,39 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ensureAgyGlobalHook } from '../src/agy-hooks.js';
+import { agyStopHookCommand, ensureAgyGlobalHook } from '../src/agy-hooks.js';
 
 const command = 'node C:/orq/bin/orq.mjs hook agy Stop';
 const fileIn = () => join(mkdtempSync(join(tmpdir(), 'orq-agy-')), 'config', 'hooks.json');
 
 describe('ensureAgyGlobalHook', () => {
+  it('monta o comando Stop sem aspas e recusa caminhos incompatíveis com o agy', () => {
+    expect(agyStopHookCommand('C:/orq/bin/orq.mjs')).toBe('node C:/orq/bin/orq.mjs hook agy Stop');
+    expect(() => agyStopHookCommand('C:/Program Files/orq.mjs')).toThrow();
+    expect(() => agyStopHookCommand('C:/orq/"bin"/orq.mjs')).toThrow();
+  });
+
+  it('substitui no arquivo o comando antigo com aspas pelo comando compatível com o agy', async () => {
+    const hooksFile = fileIn();
+    const oldCommand = 'node "C:/Program Files/Orq/orq.mjs" hook agy Stop';
+    mkdirSync(join(hooksFile, '..'), { recursive: true });
+    writeFileSync(hooksFile, JSON.stringify({
+      meu: { Stop: [{ type: 'command', command: 'x' }] },
+      orquestra: { Stop: [{ type: 'command', command: oldCommand, timeout: 10 }] },
+    }));
+    const command = agyStopHookCommand('C:/orq/bin/orq.mjs');
+
+    const result = await ensureAgyGlobalHook({ command, hooksFile, confirm: async () => true });
+
+    expect(result).toBe('installed');
+    expect(JSON.parse(readFileSync(hooksFile, 'utf8'))).toEqual({
+      meu: { Stop: [{ type: 'command', command: 'x' }] },
+      orquestra: { Stop: [{ type: 'command', command, timeout: 10 }] },
+    });
+    expect(readdirSync(join(hooksFile, '..')).some((name) => name.startsWith('hooks.json.orquestra-backup-'))).toBe(true);
+  });
+
   it('pede confirmação, cria o arquivo e grava o grupo orquestra', async () => {
     const hooksFile = fileIn();
     const asked: string[] = [];
