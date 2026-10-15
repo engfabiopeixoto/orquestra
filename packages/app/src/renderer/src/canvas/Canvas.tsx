@@ -28,6 +28,7 @@ import { useWorkspaces, workspaceStore } from '../workspaces';
 import { GroupFrame } from '../groups/GroupFrame';
 import { canvasElements, recoverGroupLayout } from '../groups/helpers';
 import { buildClosestEdges } from './edge-routing';
+import { useEdgeActivity } from './use-edge-activity';
 import { disconnectEdge, type DisconnectableEdge } from './disconnect-edge';
 import { DisconnectEdgeContext, RemovableEdge } from './RemovableEdge';
 import { PortalNode } from '../portal/PortalNode';
@@ -118,6 +119,8 @@ export function Canvas({ snapToGrid = true, motion = 'contained', onRemoveReques
   const groups = useApp((state) => state.groups);
   const selectionMode = useApp((state) => state.selectionMode);
   const edgesView = useApp((state) => state.edges);
+  const queues = useApp((state) => state.queues);
+  const activity = useEdgeActivity(edgesView, queues, workspaceId);
   const focused = useApp((state) => state.focusedTerminal);
   const connectMode = useApp((state) => state.connectMode);
   const initialViewport = useApp((state) => state.viewport);
@@ -166,7 +169,7 @@ export function Canvas({ snapToGrid = true, motion = 'contained', onRemoveReques
 
   // As arestas são derivadas da store; a seleção vive aqui para o Delete e o destaque funcionarem.
   const [selectedEdges, setSelectedEdges] = useState<ReadonlySet<string>>(new Set());
-  const baseEdges = useMemo(() => [...buildClosestEdges(edgesView, nodes), ...dataEdges(flow.graph, terminals)], [edgesView, nodes, flow.graph, terminals]);
+  const baseEdges = useMemo(() => [...buildClosestEdges(edgesView, nodes, activity), ...dataEdges(flow.graph, terminals)], [edgesView, nodes, activity, flow.graph, terminals]);
   const edges = useMemo(() => baseEdges.map((edge) => selectedEdges.has(edge.id) ? { ...edge, selected: true } : edge), [baseEdges, selectedEdges]);
   useEffect(() => {
     const ids = new Set(baseEdges.map((edge) => edge.id));

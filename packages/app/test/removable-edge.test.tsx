@@ -56,4 +56,25 @@ describe('RemovableEdge', () => {
     );
     expect(button().className).toContain('visible');
   });
+
+  it('mostra a pílula do tipo de pedido e a esconde em hover para dar lugar ao ×', () => {
+    const { container } = renderEdge(props({ data: { activity: { flow: 'a→b', kind: 'prompt', running: true } } }));
+    expect(screen.getByTestId('edge-pill-A--B').textContent).toBe('⚡ delegando');
+    fireEvent.mouseEnter(container.querySelector('g.orq-edge-hit')!);
+    expect(screen.queryByTestId('edge-pill-A--B')).toBeNull();
+  });
+
+  it('resposta voltando usa a pílula de retorno; sem atividade não há pílula', () => {
+    renderEdge(props({ data: { activity: { flow: 'b→a', kind: 'delivery', running: false } } }));
+    expect(screen.getByTestId('edge-pill-A--B').textContent).toBe('📩 retornando');
+    cleanup();
+    renderEdge(props());
+    expect(screen.queryByTestId('edge-pill-A--B')).toBeNull();
+  });
+
+  it('aresta selecionada esconde a pílula', () => {
+    renderEdge(props({ selected: true, data: { activity: { flow: 'a→b', kind: 'prompt', running: true } } }));
+    expect(screen.queryByTestId('edge-pill-A--B')).toBeNull();
+  });
 });
+

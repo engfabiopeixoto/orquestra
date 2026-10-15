@@ -1,6 +1,7 @@
 import type { Edge } from '@xyflow/react';
 import type { CanvasFlowNode } from './flow-nodes';
 import type { Rect, EdgeView } from '../store';
+import { edgeId, type EdgeActivity } from './edge-activity';
 
 /** Tipo de aresta (registrado no Canvas) com o botão × de desconectar. */
 export const EDGE_TYPE = 'removable';
@@ -28,7 +29,17 @@ export function nearestHandles(a: Rect, b: Rect, portalA = false, portalB = fals
   return pair;
 }
 
-export function buildClosestEdges(edges: EdgeView[], nodes: CanvasFlowNode[]): Edge[] {
+/** Classes que o CSS usa para acender, animar e inverter o sentido da conexão. */
+export function edgeClassName(activity: EdgeActivity | undefined): string {
+  if (!activity) return 'orq-edge';
+  const classes = ['orq-edge', 'orq-edge--active'];
+  if (activity.running) classes.push('orq-edge--running');
+  if (activity.flow === 'b→a') classes.push('orq-edge--reverse');
+  if (activity.flow === 'both') classes.push('orq-edge--both');
+  return classes.join(' ');
+}
+
+export function buildClosestEdges(edges: EdgeView[], nodes: CanvasFlowNode[], activity: ReadonlyMap<string, EdgeActivity> = new Map()): Edge[] {
   const rects = new Map<string, Rect>();
   for (const node of nodes) {
     if (node.type === 'groupFrame') continue;
@@ -38,6 +49,10 @@ export function buildClosestEdges(edges: EdgeView[], nodes: CanvasFlowNode[]): E
   }
   return edges.flatMap((edge) => {
     const a = rects.get(edge.a), b = rects.get(edge.b);
-    return a && b ? [{ id: `${edge.a}--${edge.b}`, source: edge.a, target: edge.b, ...nearestHandles(a, b, nodes.find((node) => node.id === edge.a)?.type === 'portal', nodes.find((node) => node.id === edge.b)?.type === 'portal'), type: EDGE_TYPE, className: 'orq-edge' }] : [];
+    if (!a || !b) return [];
+    const id = edgeId(edge);
+    const current = activity.get(id);
+    const handles = nearestHandles(a, b, nodes.find((node) => node.id === edge.a)?.type === 'portal', nodes.find((node) => node.id === edge.b)?.type === 'portal');
+    return [{ id, source: edge.a, target: edge.b, ...handles, type: EDGE_TYPE, className: edgeClassName(current), data: current ? { activity: current } : undefined }];
   });
 }

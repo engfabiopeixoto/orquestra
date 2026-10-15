@@ -162,6 +162,15 @@ input { font: inherit; color: var(--text); background: var(--bg); border: 1px so
 .queue-status { font-size: 10px; padding: 0 6px; border-radius: 8px; color: #111; }
 .queue-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .orq-edge path, .react-flow__edge-path { stroke: var(--acc); stroke-width: 2; opacity: 0.7; }
+.react-flow__edge.orq-edge path.react-flow__edge-path { opacity: 0.25; transition: opacity 0.2s; }
+.react-flow__edge.orq-edge:hover path.react-flow__edge-path, .react-flow__edge.orq-edge--active path.react-flow__edge-path { opacity: 1; }
+.react-flow__edge.orq-edge--running path.react-flow__edge-path { stroke-width: 3; }
+@media (prefers-reduced-motion: no-preference) {
+  [data-motion="contained"] .react-flow__edge.orq-edge--running:not(.orq-edge--both) path.react-flow__edge-path { stroke-width: 2.5; stroke-dasharray: 8 6; animation: orq-edge-flow 0.6s linear infinite; }
+  [data-motion="contained"] .react-flow__edge.orq-edge--running.orq-edge--reverse path.react-flow__edge-path { animation-direction: reverse; }
+}
+@keyframes orq-edge-flow { from { stroke-dashoffset: 14; } to { stroke-dashoffset: 0; } }
+.edge-pill { position: absolute; pointer-events: none; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--acc); background: var(--panel); color: var(--acc); font-size: 11px; white-space: nowrap; }
 .react-flow__edge.selected path.react-flow__edge-path, .orq-edge.selected path, .data-flow-edge.selected path { stroke: var(--text); stroke-width: 3; opacity: 1; }
 .edge-remove { position: absolute; pointer-events: all; width: 20px; height: 20px; padding: 0; display: flex; align-items: center; justify-content: center; border-radius: 50%; border: 1px solid var(--line); background: var(--panel); color: var(--danger); font-size: 14px; line-height: 1; cursor: pointer; opacity: 0; transition: opacity 0.12s; }
 .edge-remove.visible, .edge-remove:hover, .edge-remove:focus-visible { opacity: 1; }

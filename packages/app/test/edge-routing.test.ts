@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nearestHandles, buildClosestEdges } from '../src/renderer/src/canvas/edge-routing';
+import { nearestHandles, buildClosestEdges, edgeClassName } from '../src/renderer/src/canvas/edge-routing';
 import type { CanvasFlowNode } from '../src/renderer/src/canvas/flow-nodes';
 
 const rect = { x: 0, y: 0, width: 640, height: 400 };
@@ -26,3 +26,30 @@ describe('conectores pelo lado mais próximo', () => {
     expect(buildClosestEdges(connection, [node('A', 0)])).toEqual([]);
   });
 });
+
+describe('atividade nas conexões', () => {
+  const connection = [{ a: 'A', b: 'B' }];
+  const nodes = [node('A', 0), node('B', 720)];
+
+  it('aresta sem atividade fica só com a classe base e sem dados', () => {
+    expect(buildClosestEdges(connection, nodes)[0]).toMatchObject({ className: 'orq-edge', data: undefined });
+  });
+
+  it('marca ativa, em curso e o sentido inverso', () => {
+    const activity = new Map([['A--B', { flow: 'b→a' as const, kind: 'delivery' as const, running: true }]]);
+    const edge = buildClosestEdges(connection, nodes, activity)[0]!;
+    expect(edge.className).toBe('orq-edge orq-edge--active orq-edge--running orq-edge--reverse');
+    expect(edge.data).toEqual({ activity: activity.get('A--B') });
+  });
+
+  it('nos dois sentidos não marca inverso', () => {
+    expect(edgeClassName({ flow: 'both', kind: 'prompt', running: true })).toBe('orq-edge orq-edge--active orq-edge--running orq-edge--both');
+    expect(edgeClassName({ flow: 'a→b', kind: 'prompt', running: false })).toBe('orq-edge orq-edge--active');
+  });
+
+  it('atividade de uma aresta que já não existe é ignorada', () => {
+    const activity = new Map([['A--C', { flow: 'a→b' as const, kind: 'prompt' as const, running: true }]]);
+    expect(buildClosestEdges(connection, nodes, activity).map((edge) => edge.className)).toEqual(['orq-edge']);
+  });
+});
+
