@@ -20,6 +20,7 @@ import type { BrowserHandler, BrowserNode } from '@orquestra/shared';
 export { type RegentHandler, type RegentMethod } from './handlers.js';
 
 export const RESUME_GRACE_MS = 10_000;
+const DRAFT_NOTICE = 'Há um rascunho na caixa de entrada; envie ou apague para liberar a fila.';
 /** Quantos lançamentos por terminal entram no vínculo com o job em segundo plano. */
 const MAX_SESSION_DIRS = 20;
 
@@ -121,6 +122,7 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
     typingGuardMs: opts.typingGuardMs,
     // emitQueue só é chamada depois, quando o broker já existe.
     onQueueChange: (target) => emitQueue(target),
+    onDraftBlocked: (target) => emit({ type: 'notice', name: target, message: DRAFT_NOTICE }),
   });
   const configs = new Map<string, Omit<TerminalDescriptor, 'name'>>();
   const emit = (event: OrquestraEvent) => opts.onEvent?.(event);
@@ -226,6 +228,11 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
     session.on('turnFailed', (event) => {
       if (event.owner === 'broker') broker.turnFailed(session.name, FAILURE_TEXT[event.reason]);
       emit({ type: 'turn', name: session.name, owner: event.owner, outcome: 'failed' });
+    });
+    session.on('draft', (pending) => {
+      if (pending) return;
+      emit({ type: 'notice', name: session.name, message: '' });
+      broker.sessionChanged(session.name);
     });
     session.on('agentSession', (agentId) => {
       const config = configs.get(session.name);

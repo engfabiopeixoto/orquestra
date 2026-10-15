@@ -18,6 +18,8 @@ type SessionEvents = {
   turnEnded: [{ owner: TurnOwner; answer: string | null }];
   turnFailed: [{ owner: TurnOwner; reason: TurnFailure }];
   agentSession: [string];
+  /** Há (true) ou deixou de haver (false) rascunho do usuário na caixa de entrada do agente. */
+  draft: [boolean];
 };
 
 export type SessionOptions = {
@@ -68,6 +70,12 @@ export class Session extends EventEmitter<SessionEvents> {
   private provisionalUserTurn = false;
   private inputHasText = false;
   private pasting = false;
+  /** Caracteres digitados na caixa (aproximado: o usuário também pode editar com setas e Ctrl+W). */
+  private lineChars = 0;
+  private submittedChars = 0;
+  private submittedHadText = false;
+  private draftPending = false;
+  private draftChars = 0;
   private resolvingTurn: number | null = null;
   private idleGraceTimer: NodeJS.Timeout | undefined;
   private submittingTurn: number | null = null;
@@ -160,13 +168,35 @@ export class Session extends EventEmitter<SessionEvents> {
       if (key === '\r' && !this.pasting) {
         if (this.currentState === 'idle' || this.currentState === 'starting') {
           const provisional = this.adapter.kind === 'codex' || !this.inputHasText || !this.acceptsPrompts;
+          this.submittedHadText = this.inputHasText;
+          this.submittedChars = this.lineChars;
           this.startTurn('user', null);
           this.provisionalUserTurn = provisional;
           if (provisional) this.armUserTurn();
+          // Enviar com Enter resolve o rascunho que o agente devolveu (o texto vira o pedido do usuário). Depois de
+          // abrir o turno: a fila é reavaliada ao limpar a marca e não pode encontrar o terminal ocioso.
+          this.setDraft(false);
         }
         this.inputHasText = false;
-      } else if (key === '\x03' || key === '\x15') this.inputHasText = false;
-      else if (key === '\x1b[A' || key === '\x1b[B' || (!key.startsWith('\x1b') && /[^\s\x00-\x1f\x7f]/.test(key))) this.inputHasText = true;
+        this.lineChars = 0;
+      } else if (key === '\x03' || key === '\x15') {
+        this.inputHasText = false;
+        this.lineChars = 0;
+        this.setDraft(false);
+      } else if (key === '\x7f' || key === '\b') {
+        if (this.lineChars > 0) this.lineChars--;
+        // Apagou todo o rascunho devolvido: a caixa está vazia.
+        if (this.draftPending && this.draftChars > 0 && --this.draftChars === 0) {
+          this.inputHasText = false;
+          this.setDraft(false);
+        }
+      } else if (key === '\x1b[A' || key === '\x1b[B' || (!key.startsWith('\x1b') && /[^\s\x00-\x1f\x7f]/.test(key))) {
+        this.inputHasText = true;
+        if (!key.startsWith('\x1b')) {
+          this.lineChars++;
+          if (this.draftPending) this.draftChars++;
+        }
+      }
     }
     this.refreshWaiting();
   }
@@ -293,9 +323,25 @@ export class Session extends EventEmitter<SessionEvents> {
       if (turn !== this.turnSeq || owner === null || this.currentState === 'exited') return;
       this.opts.log.info({ owner, askId: this.currentAskId }, 'agente ocioso sem fim de turno; turno interrompido');
       onExpired?.(owner);
+      // O agente devolve o texto de um pedido desfeito à caixa de entrada sem que ele passe pela digitação: sem
+      // marcar, o próximo pedido da fila seria colado em cima do rascunho do usuário.
+      if (owner === 'user' && this.submittedHadText) this.setDraft(true);
       this.endTurn();
       this.emit('turnFailed', { owner, reason: 'interrupted' });
     }, this.opts.idleGraceMs ?? 2500);
+  }
+
+  /** A caixa de entrada do agente tem texto do usuário que ele não enviou (devolvido depois de um Esc). */
+  get hasDraft(): boolean {
+    return this.draftPending;
+  }
+
+  private setDraft(pending: boolean): void {
+    if (pending === this.draftPending) return;
+    this.draftPending = pending;
+    this.draftChars = pending ? this.submittedChars : 0;
+    if (pending) this.inputHasText = true;
+    this.emit('draft', pending);
   }
 
   /** Escreve uma tecla de controle no terminal sem contar como digitação do usuário (não atrasa a fila). */

@@ -687,3 +687,73 @@ describe('Esc antes do primeiro token (status da sessão do Claude)', () => {
     await expect(answer).resolves.toMatchObject({ answer: 'ok' });
   });
 });
+
+// Esc antecipado num turno do USUÁRIO: o Claude devolve o rascunho à caixa de entrada. O orq prompt seguinte não
+// pode ser colado em cima dele; a fila espera o usuário enviar ou apagar o rascunho.
+describe('rascunho do usuário depois do Esc antecipado', () => {
+  const SESSION = 'fa074cce-7d86-4ac6-a126-f21d6319d70e';
+  const CR = String.fromCharCode(13);
+  const CTRL_C = String.fromCharCode(3);
+  const DRAFT_NOTICE = 'Há um rascunho na caixa de entrada; envie ou apague para liberar a fila.';
+  const setup = async () => {
+    const claudeDir = mkdtempSync(join(tmpdir(), 'orq-claude-'));
+    mkdirSync(join(claudeDir, 'sessions'), { recursive: true });
+    const setStatus = (pid: number, status: string) => writeFileSync(join(claudeDir, 'sessions', pid + '.json'), JSON.stringify({ pid, sessionId: SESSION, status, kind: 'interactive' }));
+    const env = await setupOrquestra({ adapters: { claude: { ...createFakeAdapter(), kind: 'claude' } }, claudeDir, claudeStatusPollMs: 20, claudeIdleGraceMs: 100, typingGuardMs: 0, listPipes: () => [] });
+    const session = env.orq.createTerminal({ name: 'W', agent: 'claude', cwd: tmpdir(), agentSessionId: SESSION });
+    env.host.last().emitData('pronto> ');
+    await waitFor(() => session.state === 'idle');
+    // O usuário envia um pedido e o Esc o desfaz antes do primeiro token (busy e depois idle, sem hook).
+    session.userInput('meu rascunho');
+    session.userInput(CR);
+    setStatus(session.pid, 'busy');
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    setStatus(session.pid, 'idle');
+    await waitFor(() => session.state === 'idle');
+    const notices = () => env.events.filter((event) => event.type === 'notice').map((event) => (event as { message: string }).message);
+    const enters = () => env.host.last().written.filter((text) => text === CR).length;
+    return { ...env, session, notices, enters };
+  };
+
+  it('o orq prompt seguinte fica bloqueado com o aviso e nada é digitado na caixa', async () => {
+    const { orq, session, notices, enters } = await setup();
+    expect(session.hasDraft).toBe(true);
+    const before = enters();
+    const answer = orq.broker.submit({ asker: 'S', target: 'W', text: 'pedido do outro agente', timeoutMs: 10_000 });
+    await waitFor(() => notices().includes(DRAFT_NOTICE));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(enters()).toBe(before);
+    expect(orq.broker.queued('W')).toBe(1);
+    void answer.catch(() => {});
+  });
+
+  it('Ctrl+C do usuário limpa o rascunho, apaga o aviso e libera a entrega', async () => {
+    const { orq, session, notices, enters } = await setup();
+    const before = enters();
+    const answer = orq.broker.submit({ asker: 'S', target: 'W', text: 'pedido do outro agente', timeoutMs: 10_000 });
+    await waitFor(() => notices().includes(DRAFT_NOTICE));
+    session.userInput(CTRL_C);
+    await waitFor(() => enters() === before + 1);
+    expect(notices().at(-1)).toBe('');
+    expect(session.state).toBe('busy');
+    await session.handleHook('Stop', { last_assistant_message: 'ok' });
+    await expect(answer).resolves.toMatchObject({ answer: 'ok' });
+  });
+
+  it('o Enter do usuário roda o turno dele e só depois a entrega', async () => {
+    const { orq, session, notices, enters } = await setup();
+    const before = enters();
+    const answer = orq.broker.submit({ asker: 'S', target: 'W', text: 'pedido do outro agente', timeoutMs: 10_000 });
+    await waitFor(() => notices().includes(DRAFT_NOTICE));
+    session.userInput(CR);
+    expect(session.state).toBe('busy');
+    expect(enters()).toBe(before + 1);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(enters()).toBe(before + 1);
+    // O turno do usuário termina: a entrega pendente é injetada.
+    await session.handleHook('Stop', { last_assistant_message: 'resposta ao usuário' });
+    await waitFor(() => enters() === before + 2);
+    await session.handleHook('Stop', { last_assistant_message: 'resposta ao outro agente' });
+    await expect(answer).resolves.toMatchObject({ answer: 'resposta ao outro agente' });
+  });
+});

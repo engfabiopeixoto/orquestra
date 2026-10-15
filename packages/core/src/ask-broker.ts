@@ -11,6 +11,8 @@ export interface BrokerTarget {
   readonly acceptsPrompts: boolean;
   /** Conversa do Claude mantida em segundo plano pelo daemon: sem hooks nem pipe, não dá para entregar. */
   readonly backgroundJob?: BackgroundJob | null;
+  /** Texto do usuário na caixa de entrada que o agente devolveu: entregar agora o misturaria ao pedido. */
+  readonly hasDraft?: boolean;
   injectPrompt(text: string, askId: string): Promise<void>;
 }
 
@@ -41,6 +43,8 @@ export type BrokerOptions = {
   newId?: () => string;
   /** Avisada a cada mudança na fila de um destino (entrada, início, fim, cancelamento). */
   onQueueChange?: (target: string) => void;
+  /** Avisada quando a fila de um destino passa a esperar por um rascunho do usuário. */
+  onDraftBlocked?: (target: string) => void;
 };
 
 export class AskBroker {
@@ -275,6 +279,11 @@ export class AskBroker {
       this.retryLater(name, 1000);
       return;
     }
+    if (target.hasDraft) {
+      // Sem nova tentativa por tempo: o fim do rascunho (Enter, Ctrl+C, Ctrl+U) chama sessionChanged.
+      this.blocked(name, 'user-draft');
+      return;
+    }
     const sinceTyping = Date.now() - target.lastUserInputAt;
     if (sinceTyping < this.typingGuardMs) {
       this.blocked(name, 'user-typing');
@@ -303,6 +312,7 @@ export class AskBroker {
   private blocked(name: string, reason: string): void {
     if (this.blockedReasons.get(name) === reason) return;
     this.blockedReasons.set(name, reason);
+    if (reason === 'user-draft') this.opts.onDraftBlocked?.(name);
     this.opts.log.info({ terminal: name, reason, queued: this.queues.get(name)?.length ?? 0, askId: this.inFlight.get(name)?.askId ?? null }, 'entrega bloqueada');
   }
 
