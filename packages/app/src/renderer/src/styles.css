@@ -125,7 +125,21 @@ input { font: inherit; color: var(--text); background: var(--bg); border: 1px so
 .tool.is-on { background: var(--acc2); color: var(--acc); }
 .zoom { position: absolute; z-index: 5; right: 12px; bottom: 12px; display: flex; gap: 2px; padding: 3px; background: var(--panel); border: 1px solid var(--line); border-radius: 7px; }
 .zoom button { border: none; }
-.term-node { width: 100%; height: 100%; display: flex; flex-direction: column; background: var(--node); border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.term-node { position: relative; width: 100%; height: 100%; display: flex; flex-direction: column; background: var(--node); border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.term-node.frame-idle { border-color: #2a2e37; }
+.term-node.frame-idle .term-hd { opacity: 0.75; }
+.term-node.frame-busy { border-color: var(--busy); }
+.term-node.frame-waiting { border-color: var(--wait); box-shadow: 0 0 10px 1px var(--wait); }
+.term-node.frame-exited { border-color: var(--danger); box-shadow: 0 0 10px 1px var(--danger); }
+.waiting-badge { position: absolute; top: 6px; left: 50%; transform: translateX(-50%); z-index: 11; pointer-events: none; padding: 2px 10px; border-radius: 10px; background: var(--wait); color: #111; font-size: 11px; font-weight: 600; white-space: nowrap; }
+@media (prefers-reduced-motion: no-preference) {
+  [data-motion="contained"] .term-node.frame-busy::before { content: ''; position: absolute; top: 0; left: 0; z-index: 12; width: 35%; height: 2px; background: var(--busy); animation: orq-busy-bar 1.4s ease-in-out infinite; }
+  [data-motion="contained"] .term-node.frame-busy .term-state .dot { box-sizing: border-box; background: transparent; border: 2px solid var(--busy); border-top-color: transparent; animation: orq-spin 0.8s linear infinite; }
+  [data-motion="contained"] .term-node.frame-waiting { animation: orq-wait-pulse 1.5s ease-in-out infinite; }
+}
+@keyframes orq-busy-bar { from { left: -35%; } to { left: 100%; } }
+@keyframes orq-spin { to { transform: rotate(360deg); } }
+@keyframes orq-wait-pulse { 0%, 100% { box-shadow: 0 0 4px 0 var(--wait); } 50% { box-shadow: 0 0 16px 3px var(--wait); } }
 .term-node.is-selected { border-color: var(--acc); box-shadow: 0 0 0 1px var(--acc); }
 .term-hd { display: flex; align-items: center; gap: 8px; padding: 5px 9px; background: var(--nodehd); border-bottom: 1px solid var(--line); font-size: 12px; cursor: grab; }
 .term-name { font-weight: 600; }

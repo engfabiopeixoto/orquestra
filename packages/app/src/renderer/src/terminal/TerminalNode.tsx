@@ -200,7 +200,7 @@ export function TerminalNode({ id, data, selected }: NodeProps<TerminalFlowNode>
   };
 
   return (
-    <div className={`term-node ${selected ? 'is-selected' : ''} ${view.locked ? 'is-locked nopan' : ''}`}>
+    <div className={`term-node frame-${view.state} ${selected ? 'is-selected' : ''} ${view.locked ? 'is-locked nopan' : ''}`}>
       <NodeToolbar isVisible={selected && !menu} position={Position.Top} align="start">
         <ContextBar name={data.name} onOpenMenu={openFromButton} />
       </NodeToolbar>
@@ -234,6 +234,7 @@ export function TerminalNode({ id, data, selected }: NodeProps<TerminalFlowNode>
       {view.notice ? <div className="term-notice">{view.notice}</div> : null}
       {AGENT_FLOW_IO ? <TerminalFlowPorts name={data.name} /> : null}
       <div className="term-display">
+        {view.state === 'waiting' ? <span className="waiting-badge" data-testid={`terminal-waiting-${data.name}`}>👋 aguardando você</span> : null}
         {view.unloaded ? <div className="terminal-unloaded nodrag nopan" data-testid={`terminal-unloaded-${data.name}`}><span>Agente parado</span><button onClick={() => void reload()}>Recarregar terminal</button></div> : <>
           <div className={view.blurred ? 'term-content is-blurred' : 'term-content'}><NodeErrorBoundary name={data.name}><TerminalBody key={view.epoch} name={data.name} readOnly={readOnly} /></NodeErrorBoundary></div>
           {view.blurred ? <div className="terminal-privacy nodrag nopan"><span>Conteúdo desfocado</span><button onClick={() => void api.command('terminal.presentation', { name: data.name, blurred: false }).then(() => appStore.getState().setTerminalPresentation(data.name, { blurred: false })).catch((error: Error) => appStore.getState().notify('error', error.message))}>Mostrar conteúdo</button></div> : null}
