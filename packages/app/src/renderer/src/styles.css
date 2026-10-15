@@ -187,7 +187,16 @@ input { font: inherit; color: var(--text); background: var(--bg); border: 1px so
 .react-flow__edge.selected path.react-flow__edge-path, .orq-edge.selected path, .data-flow-edge.selected path { stroke: var(--text); stroke-width: 3; opacity: 1; }
 .edge-remove { position: absolute; pointer-events: all; width: 20px; height: 20px; padding: 0; display: flex; align-items: center; justify-content: center; border-radius: 50%; border: 1px solid var(--line); background: var(--panel); color: var(--danger); font-size: 14px; line-height: 1; cursor: pointer; opacity: 0; transition: opacity 0.12s; }
 .edge-remove.visible, .edge-remove:hover, .edge-remove:focus-visible { opacity: 1; }
-.react-flow__handle { background: var(--acc); border: none; width: 9px; height: 9px; }
+.react-flow__handle { background: var(--acc); border: none; }
+.node-connector { z-index: 12; }
+/* Meio círculo de 9px encostado na borda, do lado de dentro do card (como na 0.3.8); a área de clique (::after) passa da borda. */
+.node-connector.react-flow__handle-left, .node-connector.react-flow__handle-right { width: 4.5px; height: 9px; min-width: 0; min-height: 0; transform: translate(0, -50%); }
+.node-connector.react-flow__handle-top, .node-connector.react-flow__handle-bottom { width: 9px; height: 4.5px; min-width: 0; min-height: 0; transform: translate(-50%, 0); }
+.node-connector.react-flow__handle-left { border-radius: 0 9px 9px 0; }
+.node-connector.react-flow__handle-right { border-radius: 9px 0 0 9px; }
+.node-connector.react-flow__handle-top { border-radius: 0 0 9px 9px; }
+.node-connector.react-flow__handle-bottom { border-radius: 9px 9px 0 0; }
+.node-connector::after { content: ''; position: absolute; top: 50%; left: 50%; width: 22px; height: 22px; transform: translate(-50%, -50%); border-radius: 50%; background: transparent; }
 .notices { position: absolute; z-index: 6; left: 12px; bottom: 60px; display: flex; flex-direction: column; gap: 6px; max-width: 460px; }
 .notice { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--wait); border-radius: 6px; }
 .notice-warn { border-left-color: var(--acc); }
