@@ -5,8 +5,8 @@ import { appShortcut, handleAppAction, isAppAction } from '../src/main/app-actio
 const key = (overrides: Partial<Parameters<typeof appShortcut>[0]> = {}) => ({ type: 'keyDown', key: '', control: false, shift: false, alt: false, meta: false, ...overrides });
 
 describe('isAppAction', () => {
-  it('aceita só as quatro ações do menu', () => {
-    expect([...APP_ACTIONS]).toEqual(['open-logs', 'reload', 'devtools', 'quit']);
+  it('aceita as ações do menu, incluindo abrir o repositório', () => {
+    expect([...APP_ACTIONS]).toEqual(['open-logs', 'reload', 'devtools', 'open-repo', 'quit']);
     for (const action of APP_ACTIONS) expect(isAppAction(action)).toBe(true);
     for (const value of ['shell', '', 'Quit', null, undefined, 7, {}]) expect(isAppAction(value)).toBe(false);
   });
@@ -27,7 +27,7 @@ describe('appShortcut', () => {
 });
 
 describe('handleAppAction', () => {
-  const deps = () => ({ openLogs: vi.fn(), reload: vi.fn(), toggleDevTools: vi.fn(), quit: vi.fn(), warn: vi.fn() });
+  const deps = () => ({ openLogs: vi.fn(), reload: vi.fn(), toggleDevTools: vi.fn(), openExternal: vi.fn(), quit: vi.fn(), warn: vi.fn() });
 
   it('despacha cada ação para a dependência correspondente', () => {
     const d = deps();
@@ -36,6 +36,12 @@ describe('handleAppAction', () => {
     expect(d.reload).toHaveBeenCalledTimes(1);
     expect(d.toggleDevTools).toHaveBeenCalledTimes(1);
     expect(d.quit).toHaveBeenCalledTimes(1);
+  });
+
+  it('abre o repositório em uma URL fixa no navegador padrão', () => {
+    const d = { ...deps(), openExternal: vi.fn() };
+    handleAppAction('open-repo', d);
+    expect(d.openExternal).toHaveBeenCalledWith('https://github.com/engfabiopeixoto/orquestra');
   });
 
   it('rejeita ação desconhecida, registra e não executa nada', () => {

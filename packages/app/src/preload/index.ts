@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type { HostEvent } from '@orquestra/shared';
-import type { CommandResponse, OrquestraBridge } from '../shared/bridge';
+import type { AppInfo, CommandResponse, OrquestraBridge } from '../shared/bridge';
 import { PORTAL_IPC, type PortalEvent } from '../shared/portal-protocol';
 
 let selectedWorkspace: string | undefined;
@@ -22,6 +22,7 @@ const bridge: OrquestraBridge = {
   pickFolder: () => ipcRenderer.invoke('orq:pick-folder') as Promise<string | null>,
   openSubscription: (provider) => ipcRenderer.invoke('orq:subscription-open', provider) as Promise<void>,
   appAction: (action) => ipcRenderer.invoke('orq:app-action', action) as Promise<void>,
+  getAppInfo: () => ipcRenderer.invoke('orq:app-info') as Promise<AppInfo>,
   reportError: (message, stack) => ipcRenderer.send('orq:log', { message, stack }),
   // O Electron 44 não expõe o clipboard no preload: a leitura e a escrita passam pelo principal.
   readClipboard: () => ipcRenderer.invoke('orq:clipboard-read') as Promise<string>,

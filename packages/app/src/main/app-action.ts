@@ -1,5 +1,7 @@
 import { APP_ACTIONS, type AppAction } from '../shared/app-action';
 
+export const APP_REPOSITORY_URL = 'https://github.com/engfabiopeixoto/orquestra';
+
 export function isAppAction(value: unknown): value is AppAction {
   return typeof value === 'string' && (APP_ACTIONS as readonly string[]).includes(value);
 }
@@ -17,7 +19,7 @@ export function appShortcut(input: KeyInput): AppAction | null {
   return null;
 }
 
-export type AppActionDeps = { openLogs(): void; reload(): void; toggleDevTools(): void; quit(): void; warn(message: string): void };
+export type AppActionDeps = { openLogs(): void; reload(): void; toggleDevTools(): void; openExternal(url: string): void; quit(): void; warn(message: string): void };
 
 /** Executa uma ação vinda do renderer; devolve false (e registra) quando ela não existe. */
 export function handleAppAction(action: unknown, deps: AppActionDeps): boolean {
@@ -28,6 +30,7 @@ export function handleAppAction(action: unknown, deps: AppActionDeps): boolean {
   if (action === 'open-logs') deps.openLogs();
   else if (action === 'reload') deps.reload();
   else if (action === 'devtools') deps.toggleDevTools();
+  else if (action === 'open-repo') deps.openExternal(APP_REPOSITORY_URL);
   else deps.quit();
   return true;
 }

@@ -7,16 +7,19 @@ import { activateWorkspace, closeWorkspace, openProject } from '../project';
 import { useApp } from '../store';
 import { useWorkspaces, workspaceDot, workspaceSummary } from '../workspaces';
 import { ProjectFileExplorer } from '../components/ProjectFileExplorer';
+import { AboutDialog } from '../components/AboutDialog';
 
 type Recent = { dir: string; name: string; openedAt: string };
 type Row = { dir: string; name: string; workspace?: WorkspaceInfo };
 const defaultApi = createCommandApi((...args) => window.orquestra?.invoke(...args));
 const sameDir = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
-const MENU_ITEMS: Array<{ action: AppAction; label: string; hint?: string }> = [
-  { action: 'open-logs', label: 'Abrir pasta de logs' },
-  { action: 'reload', label: 'Recarregar interface', hint: 'Ctrl+Shift+F5' },
-  { action: 'devtools', label: 'Ferramentas do desenvolvedor', hint: 'F12' },
-  { action: 'quit', label: 'Sair' },
+type MenuItem = { id: string; label: string; hint?: string; action?: AppAction };
+const MENU_ITEMS: MenuItem[] = [
+  { id: 'open-logs', action: 'open-logs', label: 'Abrir pasta de logs' },
+  { id: 'reload', action: 'reload', label: 'Recarregar interface', hint: 'Ctrl+Shift+F5' },
+  { id: 'devtools', action: 'devtools', label: 'Ferramentas do desenvolvedor', hint: 'F12' },
+  { id: 'about', label: 'Sobre o Orquestra' },
+  { id: 'quit', action: 'quit', label: 'Sair' },
 ];
 
 export function Sidebar({
@@ -33,6 +36,7 @@ export function Sidebar({
   const [recent, setRecent] = useState<Recent[]>([]);
   const [filter, setFilter] = useState('');
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -73,9 +77,10 @@ export function Sidebar({
     setMenu((current) => current ? null : { x: box?.left ?? 10, y: (box?.bottom ?? 40) + 4 });
   };
 
-  const run = (action: AppAction) => {
+  const run = (item: MenuItem) => {
     setMenu(null);
-    void window.orquestra?.appAction(action);
+    if (item.id === 'about') setAboutOpen(true);
+    else if (item.action) void window.orquestra?.appAction(item.action);
   };
 
   // Workspaces abertos fora dos recentes ficam no topo, para nunca sumirem.
@@ -131,8 +136,9 @@ export function Sidebar({
         <button className="side-btn" data-testid="open-settings" onClick={onOpenSettings}>Padrões dos agentes</button>
       </div>
       {menu ? createPortal(<div ref={menuRef} className="ctx ctx-menu app-menu" role="menu" aria-label="Menu do Orquestra" style={{ position: 'fixed', left: menu.x, top: menu.y }}>
-        {MENU_ITEMS.map((item) => <button key={item.action} role="menuitem" title={item.hint} onClick={() => run(item.action)}>{item.label}</button>)}
+        {MENU_ITEMS.map((item) => <button key={item.id} role="menuitem" title={item.hint} onClick={() => run(item)}>{item.label}</button>)}
       </div>, document.body) : null}
+      {aboutOpen ? <AboutDialog onClose={() => setAboutOpen(false)} /> : null}
     </aside>
   );
 }

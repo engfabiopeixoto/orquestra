@@ -218,6 +218,16 @@ input { font: inherit; color: var(--text); background: var(--bg); border: 1px so
 .dialog .check { flex-direction: row; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; }
 .dialog-error { margin: 0; color: var(--danger); }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.about-dialog { width: 440px; }
+.about-brand { display: flex; align-items: center; gap: 14px; }
+.about-brand h2, .about-brand p { margin: 0; }
+.about-brand p { margin-top: 4px; color: var(--muted); font-size: 12px; }
+.about-icon { width: 56px; height: 56px; object-fit: contain; border-radius: 10px; }
+.about-versions { display: grid; gap: 6px; margin: 8px 0 0; }
+.about-versions > div { display: flex; justify-content: space-between; gap: 16px; font-size: 12px; }
+.about-versions dt { color: var(--muted); }
+.about-versions dd { margin: 0; font-family: "Cascadia Mono", Consolas, monospace; }
+.about-license { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
 .primary { background: var(--acc); color: #111; border-color: var(--acc); }
 .args-field { display: flex; align-items: stretch; }
 .args-program { padding: 6px 8px; font-family: "Cascadia Mono", Consolas, monospace; background: #1d222b; border: 1px solid #2c3340; border-right: 0; border-radius: 6px 0 0 6px; color: #9aa3b2; }

@@ -1,7 +1,8 @@
 import { join } from 'node:path';
+import { release as osRelease } from 'node:os';
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, Notification, shell } from 'electron';
 import { AGENT_PID_FILE, isHostMethod, OrqError } from '@orquestra/shared';
-import type { CommandResponse } from '../shared/bridge';
+import type { AppInfo, CommandResponse } from '../shared/bridge';
 import { ActivityMonitor } from './activity';
 import { appShortcut, handleAppAction } from './app-action';
 import { appUserModelId } from './app-id';
@@ -149,6 +150,7 @@ function runAppAction(action: unknown): boolean {
     openLogs: () => void shell.openPath(logDir),
     reload: () => window?.webContents.reload(),
     toggleDevTools: () => window?.webContents.toggleDevTools(),
+    openExternal: (url) => void shell.openExternal(url),
     quit: () => app.quit(),
     warn: (message) => log.warn({ component: 'app-action' }, message),
   });
@@ -160,6 +162,22 @@ ipcMain.handle('orq:app-action', (event, action: unknown) => {
     return;
   }
   runAppAction(action);
+});
+
+ipcMain.handle('orq:app-info', (event): AppInfo => {
+  if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) {
+    log.warn({ component: 'app-info' }, 'leitura das informações do app recusada: origem inválida');
+    throw new Error('Origem de leitura inválida.');
+  }
+  return {
+    version: app.getVersion(),
+    electron: process.versions.electron ?? '',
+    chrome: process.versions.chrome ?? '',
+    node: process.versions.node ?? '',
+    platform: process.platform,
+    arch: process.arch,
+    osRelease: osRelease(),
+  };
 });
 
 ipcMain.handle('orq:command', async (_event, method: unknown, params: unknown, workspaceId?: string): Promise<CommandResponse> => {
