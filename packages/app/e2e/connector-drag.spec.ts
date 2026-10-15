@@ -21,8 +21,8 @@ test('conectores do terminal são semicírculos internos e aceitam arraste a par
         hitTarget: document.elementFromPoint(x, y) === handle || handle.contains(document.elementFromPoint(x, y)),
       };
     });
-    expect(geometry.width).toBe(7);
-    expect(geometry.height).toBe(14);
+    expect(geometry.width).toBe(4.5);
+    expect(geometry.height).toBe(9);
     expect(geometry.insideCard).toBe(true);
     expect(geometry.flushWithBorder).toBe(true);
     expect(geometry.hitTarget).toBe(true);
