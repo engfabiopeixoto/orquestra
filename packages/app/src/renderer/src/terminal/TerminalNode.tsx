@@ -200,8 +200,7 @@ export function TerminalNode({ id, data, selected }: NodeProps<TerminalFlowNode>
   };
 
   return (
-    <div className={`term-node frame-${view.state} ${selected ? 'is-selected' : ''} ${view.locked ? 'is-locked nopan' : ''}`}>
-      {view.state === 'waiting' ? <span className="waiting-badge" data-testid={`terminal-waiting-${data.name}`}>👋 aguardando você</span> : null}
+    <>
       <NodeToolbar isVisible={selected && !menu} position={Position.Top} align="start">
         <ContextBar name={data.name} onOpenMenu={openFromButton} />
       </NodeToolbar>
@@ -220,34 +219,37 @@ export function TerminalNode({ id, data, selected }: NodeProps<TerminalFlowNode>
         }}
       />
       <NodeConnectors />
-      <header className="term-hd" data-testid={`terminal-header-${data.name}`} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); openMenu(event.clientX, event.clientY); }}>
-        <span className="term-name">{view.name}</span>
-        <span className="chip">{view.agent}</span>
-        {view.regente ? <span className="chip regente" data-testid={`terminal-regente-${view.name}`}>regente</span> : null}
-        {view.locked ? <span className="chip" title="Posição bloqueada">🔒</span> : null}
-        <span className={`term-state st-${view.state}`} data-testid={`terminal-state-${data.name}`}>
-          <span className="dot" />
-          {view.unloaded ? 'descarregado' : STATE_LABEL[view.state]}
-          {view.queued > 0 ? ` · ${view.queued} na fila` : ''}
-        </span>
-        <button className="term-options nodrag nopan" aria-label={`Opções de ${view.name}`} data-testid={`terminal-options-${view.name}`} onClick={openFromButton}>⋯</button>
-      </header>
-      {view.notice ? <div className="term-notice">{view.notice}</div> : null}
-      {AGENT_FLOW_IO ? <TerminalFlowPorts name={data.name} /> : null}
-      <div className="term-display">
-        {view.unloaded ? <div className="terminal-unloaded nodrag nopan" data-testid={`terminal-unloaded-${data.name}`}><span>Agente parado</span><button onClick={() => void reload()}>Recarregar terminal</button></div> : <>
-          <div className={view.blurred ? 'term-content is-blurred' : 'term-content'}><NodeErrorBoundary name={data.name}><TerminalBody key={view.epoch} name={data.name} readOnly={readOnly} /></NodeErrorBoundary></div>
-          {view.blurred ? <div className="terminal-privacy nodrag nopan"><span>Conteúdo desfocado</span><button onClick={() => void api.command('terminal.presentation', { name: data.name, blurred: false }).then(() => appStore.getState().setTerminalPresentation(data.name, { blurred: false })).catch((error: Error) => appStore.getState().notify('error', error.message))}>Mostrar conteúdo</button></div> : null}
-        </>}
-      </div>
-      {zoomReadOnly && !view.blurred && !view.unloaded ? (
-        <div className="term-readonly nodrag" style={{ zIndex: 10 }} onDoubleClick={focusAtFullZoom}>
-          duplo clique para interagir
+      <div className={`term-node frame-${view.state} ${selected ? 'is-selected' : ''} ${view.locked ? 'is-locked nopan' : ''}`}>
+        {view.state === 'waiting' ? <span className="waiting-badge" data-testid={`terminal-waiting-${data.name}`}>👋 aguardando você</span> : null}
+        <header className="term-hd" data-testid={`terminal-header-${data.name}`} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); openMenu(event.clientX, event.clientY); }}>
+          <span className="term-name">{view.name}</span>
+          <span className="chip">{view.agent}</span>
+          {view.regente ? <span className="chip regente" data-testid={`terminal-regente-${view.name}`}>regente</span> : null}
+          {view.locked ? <span className="chip" title="Posição bloqueada">🔒</span> : null}
+          <span className={`term-state st-${view.state}`} data-testid={`terminal-state-${data.name}`}>
+            <span className="dot" />
+            {view.unloaded ? 'descarregado' : STATE_LABEL[view.state]}
+            {view.queued > 0 ? ` · ${view.queued} na fila` : ''}
+          </span>
+          <button className="term-options nodrag nopan" aria-label={`Opções de ${view.name}`} data-testid={`terminal-options-${view.name}`} onClick={openFromButton}>⋯</button>
+        </header>
+        {view.notice ? <div className="term-notice">{view.notice}</div> : null}
+        {AGENT_FLOW_IO ? <TerminalFlowPorts name={data.name} /> : null}
+        <div className="term-display">
+          {view.unloaded ? <div className="terminal-unloaded nodrag nopan" data-testid={`terminal-unloaded-${data.name}`}><span>Agente parado</span><button onClick={() => void reload()}>Recarregar terminal</button></div> : <>
+            <div className={view.blurred ? 'term-content is-blurred' : 'term-content'}><NodeErrorBoundary name={data.name}><TerminalBody key={view.epoch} name={data.name} readOnly={readOnly} /></NodeErrorBoundary></div>
+            {view.blurred ? <div className="terminal-privacy nodrag nopan"><span>Conteúdo desfocado</span><button onClick={() => void api.command('terminal.presentation', { name: data.name, blurred: false }).then(() => appStore.getState().setTerminalPresentation(data.name, { blurred: false })).catch((error: Error) => appStore.getState().notify('error', error.message))}>Mostrar conteúdo</button></div> : null}
+          </>}
         </div>
-      ) : null}
-      {menu ? createPortal(<div ref={menuRef} className="terminal-menu nodrag nopan" role="menu" aria-label={`Opções de ${view.name}`} style={{ left: menu.x, top: menu.y }} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
-        <ContextBar name={data.name} menu onDone={() => setMenu(null)} />
-      </div>, document.body) : null}
-    </div>
+        {zoomReadOnly && !view.blurred && !view.unloaded ? (
+          <div className="term-readonly nodrag" style={{ zIndex: 10 }} onDoubleClick={focusAtFullZoom}>
+            duplo clique para interagir
+          </div>
+        ) : null}
+        {menu ? createPortal(<div ref={menuRef} className="terminal-menu nodrag nopan" role="menu" aria-label={`Opções de ${view.name}`} style={{ left: menu.x, top: menu.y }} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
+          <ContextBar name={data.name} menu onDone={() => setMenu(null)} />
+        </div>, document.body) : null}
+      </div>
+    </>
   );
 }

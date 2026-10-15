@@ -90,7 +90,7 @@ export function NoteNode({ data, selected }: NodeProps<NoteFlowNode>) {
     if (rect) void defaultApi.command('layout.update', { nodes: [{ name: data.name, ...rect }] }).catch((error) => recoverGroupLayout(defaultApi, error));
   };
   return (
-    <div className={`note-node ${selected ? 'is-selected' : ''}`} data-testid={`note-${data.name}`}>
+    <>
       <NodeResizer
         isVisible={selected}
         minWidth={200}
@@ -102,11 +102,13 @@ export function NoteNode({ data, selected }: NodeProps<NoteFlowNode>) {
         }}
       />
       <NodeConnectors />
-      <header className="note-hd">
-        <span className="note-name">{note.name}</span>
-        <span className="note-by">por {note.updatedBy}</span>
-      </header>
-      <NoteBody name={data.name} api={defaultApi} />
-    </div>
+      <div className={`note-node ${selected ? 'is-selected' : ''}`} data-testid={`note-${data.name}`}>
+        <header className="note-hd">
+          <span className="note-name">{note.name}</span>
+          <span className="note-by">por {note.updatedBy}</span>
+        </header>
+        <NoteBody name={data.name} api={defaultApi} />
+      </div>
+    </>
   );
 }
