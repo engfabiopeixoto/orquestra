@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { createShell, launchApp } from './launch';
 
-test('conectores do terminal ficam inteiros e aceitam arraste fora da borda', async () => {
+test('conectores do terminal são semicírculos internos e aceitam arraste a partir da borda', async () => {
   const { app, page } = await launchApp();
   try {
     await expect(page.locator('.proj.is-on')).toBeVisible();
@@ -15,12 +15,16 @@ test('conectores do terminal ficam inteiros e aceitam arraste fora da borda', as
       const y = rect.top + rect.height / 2;
       return {
         width: rect.width,
-        outsideCard: rect.right > card.right,
+        height: rect.height,
+        insideCard: rect.left >= card.left && rect.right <= card.right + 0.5,
+        flushWithBorder: Math.abs(rect.right - card.right) <= 1,
         hitTarget: document.elementFromPoint(x, y) === handle || handle.contains(document.elementFromPoint(x, y)),
       };
     });
-    expect(geometry.width).toBe(12);
-    expect(geometry.outsideCard).toBe(true);
+    expect(geometry.width).toBe(7);
+    expect(geometry.height).toBe(14);
+    expect(geometry.insideCard).toBe(true);
+    expect(geometry.flushWithBorder).toBe(true);
     expect(geometry.hitTarget).toBe(true);
 
     const source = await page.locator('[data-id="S"] .react-flow__handle-right').boundingBox();
