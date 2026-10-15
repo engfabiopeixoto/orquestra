@@ -129,6 +129,47 @@ describe('Session', () => {
     expect(session.state).toBe('idle');
   });
 
+  it('ignora avisos de foco e mouse ao aguardar permissão, mas limpa com tecla real', async () => {
+    const { pty, session } = setup(claudeAdapter);
+    await ready(pty, session);
+    await session.injectPrompt('pedido', 'ask-1');
+    await session.handleHook('Notification', { notification_type: 'permission_prompt' });
+    expect(session.state).toBe('waiting');
+    const inputAt = session.lastUserInputAt;
+
+    session.userInput('\x1b[I');
+    session.userInput('\x1b[<0;10;20M');
+    session.userInput('\x1b[M !"');
+
+    expect(session.state).toBe('waiting');
+    expect(session.lastUserInputAt).toBe(inputAt);
+    expect(pty.written.slice(-3)).toEqual(['\x1b[I', '\x1b[<0;10;20M', '\x1b[M !"']);
+
+    session.userInput('1');
+    expect(session.state).toBe('busy');
+    await session.handleHook('Stop', { text: 'feito' });
+  });
+
+  it('Enter real limpa o estado de espera da permissão', async () => {
+    const { pty, session } = setup(claudeAdapter);
+    await ready(pty, session);
+    await session.injectPrompt('pedido', 'ask-1');
+    await session.handleHook('Notification', { notification_type: 'permission_prompt' });
+    expect(session.state).toBe('waiting');
+    session.userInput('\r');
+    expect(session.state).toBe('busy');
+    await session.handleHook('Stop', { text: 'feito' });
+  });
+
+  it('relatório de mouse não é tratado como texto antes do Enter do usuário', async () => {
+    const { pty, session } = setup();
+    await ready(pty, session);
+    session.userInput('\x1b[<0;10;20M');
+    session.userInput('\r');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(session.state).toBe('idle');
+  });
+
   it('Stop duplicado do Codex não encerra o pedido seguinte', async () => {
     const { pty, session, ended } = setup(codexAdapter);
     await ready(pty, session);
