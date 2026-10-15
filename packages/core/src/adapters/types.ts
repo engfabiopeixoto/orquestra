@@ -17,6 +17,8 @@ export type LaunchContext = {
   hookCommand: (event: string) => string;
   /** Id da sessão anterior do agente, quando o terminal deve retomá-la. */
   resumeSessionId: string | null;
+  /** Stable Orquestra terminal ID, preserved across restarts. */
+  terminalId?: string;
   /** Identidade e papel que continuam disponíveis ao retomar o terminal. */
   terminalName?: string;
   regente?: boolean;

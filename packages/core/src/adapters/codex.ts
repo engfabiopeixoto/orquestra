@@ -20,7 +20,7 @@ export const codexAdapter: AgentAdapter = {
       // Desativa notify legado global para impedir que o historico entre no argv.
       '-c', 'notify=[]',
       '-c', 'disable_paste_burst=true',
-      '-c', `developer_instructions=${JSON.stringify(orquestraGuide({ terminalName: ctx.terminalName, regent: ctx.regente ?? false, cliScript: parseArgs(command)[1]!, nodePath: process.execPath }))}`,
+      '-c', `developer_instructions=${JSON.stringify(`${orquestraGuide({ terminalName: ctx.terminalName, regent: ctx.regente ?? false, cliScript: parseArgs(command)[1]!, nodePath: process.execPath })}\nIdentificador do terminal no Orquestra: ${ctx.terminalId ?? 'desconhecido'}.`)}`,
       '-c', `mcp_servers.orquestra.command=${JSON.stringify(process.execPath)}`,
       '-c', `mcp_servers.orquestra.args=${JSON.stringify([parseArgs(command)[1]!, 'mcp'])}`,
       '-c', 'mcp_servers.orquestra.env_vars=["ORQ_PIPE","ORQ_TOKEN"]',

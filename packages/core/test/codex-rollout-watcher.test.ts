@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CodexRolloutWatcher, type CodexRolloutEvent } from '../src/codex-rollout-watcher.js';
+import { codexRolloutMatchesTerminal, CodexRolloutWatcher, type CodexRolloutEvent } from '../src/codex-rollout-watcher.js';
 import { silentLogger, type Logger } from '../src/log.js';
 import { waitFor } from './helpers/wait.js';
 
@@ -35,11 +35,13 @@ function event(type: string, turnId: string, extra: Record<string, unknown> = {}
   return `${JSON.stringify({ type: 'event_msg', payload: { type, turn_id: turnId, ...extra } })}\n`;
 }
 
-function newThreadRollout(home: string, id: string, timestamp: string): string {
+function newThreadRollout(home: string, id: string, timestamp: string, options: { cwd?: string; terminalName?: string; terminalId?: string } = {}): string {
   const path = rolloutPath(home, id);
+  const terminalName = options.terminalName ?? 'Y';
+  const terminalId = options.terminalId ?? 'terminal-y';
   writeFileSync(path, [
-    { type: 'session_meta', timestamp, payload: { id, cwd, timestamp, cli_version: '0.162.1' } },
-    { type: 'response_item', payload: { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'Seu terminal se chama Y.' }] } },
+    { type: 'session_meta', timestamp, payload: { id, cwd: options.cwd ?? cwd, timestamp, cli_version: '0.162.1' } },
+    { type: 'response_item', payload: { type: 'message', role: 'developer', content: [{ type: 'input_text', text: `Seu terminal se chama ${terminalName}. Identificador do terminal no Orquestra: ${terminalId}.` }] } },
   ].map((row) => JSON.stringify(row)).join('\n') + '\n');
   return path;
 }
@@ -48,10 +50,10 @@ describe('CodexRolloutWatcher', () => {
   it('descobre a thread sem hooks pelo cwd e nome no rollout real 0.162.1', async () => {
     const home = makeHome();
     const path = rolloutPath(home, sessionId);
-    writeFileSync(path, fixtureText);
+    writeFileSync(path, `${fixtureText}\n${JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'Seu terminal se chama Y. Identificador do terminal no Orquestra: terminal-y.' }] } })}\n`);
     const events: CodexRolloutEvent[] = [];
     const watcher = new CodexRolloutWatcher({
-      codexHome: home, cwd, terminalName: 'Y', startedAt: Date.now() - 10_000, pollMs: 10, log: silentLogger(), onEvent: (item) => events.push(item),
+      codexHome: home, cwd, terminalName: 'Y', terminalId: 'terminal-y', startedAt: Date.now() - 10_000, pollMs: 10, log: silentLogger(), onEvent: (item) => events.push(item),
     });
     watcher.start();
     try {
@@ -70,9 +72,10 @@ describe('CodexRolloutWatcher', () => {
     const home = makeHome();
     const path = rolloutPath(home, sessionId);
     copyFileSync(realFixture, path);
+    appendFileSync(path, `${JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'Seu terminal se chama Y. Identificador do terminal no Orquestra: terminal-y.' }] } })}\n`);
     const events: CodexRolloutEvent[] = [];
     const watcher = new CodexRolloutWatcher({
-      codexHome: home, cwd, terminalName: 'Y', sessionId, startedAt: Date.now() - 10_000, pollMs: 10, log: silentLogger(), onEvent: (item) => events.push(item),
+      codexHome: home, cwd, terminalName: 'Y', terminalId: 'terminal-y', sessionId, startedAt: Date.now() - 10_000, pollMs: 10, log: silentLogger(), onEvent: (item) => events.push(item),
     });
     watcher.start();
     try {
@@ -94,15 +97,15 @@ describe('CodexRolloutWatcher', () => {
   it('separa duas threads sem hooks no mesmo cwd pelo nome do terminal', async () => {
     const home = makeHome();
     const yPath = rolloutPath(home, sessionId);
-    writeFileSync(yPath, fixtureText);
+    writeFileSync(yPath, `${fixtureText}\n${JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'Seu terminal se chama Y. Identificador do terminal no Orquestra: terminal-y.' }] } })}\n`);
     const xId = 'thread-x-0123';
     const xPath = rolloutPath(home, xId);
-    writeFileSync(xPath, fixtureText.replaceAll(sessionId, xId).replaceAll('Seu terminal se chama Y.', 'Seu terminal se chama X.'));
+    writeFileSync(xPath, `${fixtureText.replaceAll(sessionId, xId)}\n${JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'Seu terminal se chama X. Identificador do terminal no Orquestra: terminal-x.' }] } })}\n`);
     const eventsX: CodexRolloutEvent[] = [];
     const eventsY: CodexRolloutEvent[] = [];
     const options = { codexHome: home, cwd, startedAt: Date.now() - 10_000, pollMs: 10, log: silentLogger() };
-    const watcherX = new CodexRolloutWatcher({ ...options, terminalName: 'X', onEvent: (item) => eventsX.push(item) });
-    const watcherY = new CodexRolloutWatcher({ ...options, terminalName: 'Y', onEvent: (item) => eventsY.push(item) });
+    const watcherX = new CodexRolloutWatcher({ ...options, terminalName: 'X', terminalId: 'terminal-x', onEvent: (item) => eventsX.push(item) });
+    const watcherY = new CodexRolloutWatcher({ ...options, terminalName: 'Y', terminalId: 'terminal-y', onEvent: (item) => eventsY.push(item) });
     watcherX.start();
     watcherY.start();
     try {
@@ -119,10 +122,10 @@ describe('CodexRolloutWatcher', () => {
   it('troca para o rollout criado por /new e passa a acompanhar os eventos da thread nova', async () => {
     const home = makeHome();
     const oldPath = rolloutPath(home, sessionId);
-    writeFileSync(oldPath, fixtureText);
+    writeFileSync(oldPath, `${fixtureText}\n${JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'Seu terminal se chama Y. Identificador do terminal no Orquestra: terminal-y.' }] } })}\n`);
     const events: CodexRolloutEvent[] = [];
     const watcher = new CodexRolloutWatcher({
-      codexHome: home, cwd, terminalName: 'Y', startedAt: Date.now() - 10_000, pollMs: 10, log: silentLogger(), onEvent: (item) => events.push(item),
+      codexHome: home, cwd, terminalName: 'Y', terminalId: 'terminal-y', startedAt: Date.now() - 10_000, pollMs: 10, log: silentLogger(), onEvent: (item) => events.push(item),
     });
     watcher.start();
     try {
@@ -146,10 +149,10 @@ describe('CodexRolloutWatcher', () => {
     const home = makeHome();
     const oldId = 'thread-old-001';
     const oldPath = rolloutPath(home, oldId);
-    writeFileSync(oldPath, fixtureText.replaceAll(sessionId, oldId));
+    writeFileSync(oldPath, `${fixtureText.replaceAll(sessionId, oldId)}\n${JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'Seu terminal se chama Y. Identificador do terminal no Orquestra: terminal-y.' }] } })}\n`);
     const events: CodexRolloutEvent[] = [];
     const watcher = new CodexRolloutWatcher({
-      codexHome: home, cwd, terminalName: 'Y', sessionId: oldId, startedAt: Date.now() - 10_000,
+      codexHome: home, cwd, terminalName: 'Y', terminalId: 'terminal-y', sessionId: oldId, startedAt: Date.now() - 10_000,
       pollMs: 5, discoveryMs: 20, log: silentLogger(), onEvent: (item) => events.push(item),
     });
     watcher.start();
@@ -179,6 +182,91 @@ describe('CodexRolloutWatcher', () => {
     }
   });
 
+  it('isola rollouts por cwd e id estável mesmo com nomes iguais e promoções intercaladas', async () => {
+    const home = makeHome();
+    const cwdA = 'C:\\workspace\\error_detector';
+    const cwdB = 'E:\\AI PROJETOS\\ACEbim';
+    const idA = 'codex-terminal-error';
+    const idB = 'codex-terminal-acebim';
+    const idC = 'codex-terminal-same-cwd';
+    newThreadRollout(home, 'thread-a1', '2026-10-15T00:00:01.000Z', { cwd: cwdA, terminalName: 'codex-1', terminalId: idA });
+    newThreadRollout(home, 'thread-b1', '2026-10-15T00:00:03.000Z', { cwd: cwdB, terminalName: 'codex-1', terminalId: idB });
+    newThreadRollout(home, 'thread-c1', '2026-10-15T00:00:04.000Z', { cwd: cwdA, terminalName: 'codex-1', terminalId: idC });
+    const eventsA: CodexRolloutEvent[] = [];
+    const eventsB: CodexRolloutEvent[] = [];
+    const eventsC: CodexRolloutEvent[] = [];
+    const shared = { codexHome: home, terminalName: 'codex-1', startedAt: Date.now() - 10_000, pollMs: 5, discoveryMs: 15, log: silentLogger() };
+    const watcherA = new CodexRolloutWatcher({ ...shared, cwd: cwdA, terminalId: idA, onEvent: (item) => eventsA.push(item) });
+    const watcherB = new CodexRolloutWatcher({ ...shared, cwd: cwdB, terminalId: idB, onEvent: (item) => eventsB.push(item) });
+    const watcherC = new CodexRolloutWatcher({ ...shared, cwd: cwdA, terminalId: idC, onEvent: (item) => eventsC.push(item) });
+    watcherA.start();
+    watcherB.start();
+    watcherC.start();
+    try {
+      await waitFor(() => eventsA.some((event) => event.kind === 'session') && eventsB.some((event) => event.kind === 'session') && eventsC.some((event) => event.kind === 'session'));
+      expect(eventsA.filter((event) => event.kind === 'session').map((event) => event.sessionId)).toEqual(['thread-a1']);
+      expect(eventsB.filter((event) => event.kind === 'session').map((event) => event.sessionId)).toEqual(['thread-b1']);
+      expect(eventsC.filter((event) => event.kind === 'session').map((event) => event.sessionId)).toEqual(['thread-c1']);
+
+      const b2 = newThreadRollout(home, 'thread-b2-newest-foreign', '2026-10-15T00:00:05.000Z', { cwd: cwdB, terminalName: 'codex-1', terminalId: idB });
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect(eventsA.filter((event) => event.kind === 'session').map((event) => event.sessionId)).toEqual(['thread-a1']);
+      const a2 = newThreadRollout(home, 'thread-a2', '2026-10-15T00:00:06.000Z', { cwd: cwdA, terminalName: 'codex-1', terminalId: idA });
+      await waitFor(() => eventsA.some((event) => event.kind === 'session' && event.sessionId === 'thread-a2'));
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect(eventsA.filter((event) => event.kind === 'session').map((event) => event.sessionId)).toEqual(['thread-a1', 'thread-a2']);
+      expect(eventsB.filter((event) => event.kind === 'session').map((event) => event.sessionId)).toEqual(['thread-b1', 'thread-b2-newest-foreign']);
+      expect(eventsC.filter((event) => event.kind === 'session').map((event) => event.sessionId)).toEqual(['thread-c1']);
+      appendFileSync(b2, event('task_started', 'must-not-cross-workspace'));
+      appendFileSync(a2, event('task_started', 'belongs-to-a2'));
+      await waitFor(() => eventsA.some((item) => item.kind === 'task-started' && item.turnId === 'belongs-to-a2'));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(eventsA.some((item) => item.kind === 'task-started' && item.turnId === 'must-not-cross-workspace')).toBe(false);
+      expect(eventsB.some((item) => item.kind === 'task-started' && item.turnId === 'must-not-cross-workspace')).toBe(true);
+    } finally {
+      await Promise.all([watcherA.stop(), watcherB.stop(), watcherC.stop()]);
+    }
+  });
+
+  it('não associa pelo id conhecido se o cwd do rollout pertence a outro workspace', async () => {
+    const home = makeHome();
+    const foreignPath = newThreadRollout(home, 'known-foreign-id', '2026-10-15T00:00:01.000Z', { cwd: 'E:\\foreign-workspace', terminalName: 'codex-1', terminalId: 'foreign-terminal' });
+    const events: CodexRolloutEvent[] = [];
+    const watcher = new CodexRolloutWatcher({ codexHome: home, cwd, terminalName: 'Y', terminalId: 'terminal-y', sessionId: 'known-foreign-id', startedAt: Date.now() - 10_000, pollMs: 5, log: silentLogger(), onEvent: (item) => events.push(item) });
+    watcher.start();
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(events).toEqual([]);
+      expect(foreignPath).toContain('known-foreign-id');
+      expect(codexRolloutMatchesTerminal('known-foreign-id', cwd, 'terminal-y', home)).toBe(false);
+      expect(codexRolloutMatchesTerminal('known-foreign-id', 'E:\\foreign-workspace', 'foreign-terminal', home)).toBe(true);
+    } finally {
+      await watcher.stop();
+    }
+  });
+
+  it('não associa um id conhecido do mesmo cwd quando o id estável é de outro terminal', async () => {
+    const home = makeHome();
+    newThreadRollout(home, 'known-same-cwd-id', '2026-10-15T00:00:01.000Z', { cwd, terminalName: 'Y', terminalId: 'terminal-other' });
+    const events: CodexRolloutEvent[] = [];
+    const watcher = new CodexRolloutWatcher({ codexHome: home, cwd, terminalName: 'Y', terminalId: 'terminal-y', sessionId: 'known-same-cwd-id', startedAt: Date.now() - 10_000, pollMs: 5, log: silentLogger(), onEvent: (item) => events.push(item) });
+    watcher.start();
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(events).toEqual([]);
+      expect(codexRolloutMatchesTerminal('known-same-cwd-id', cwd, 'terminal-y', home)).toBe(false);
+    } finally {
+      await watcher.stop();
+    }
+  });
+
+  it('mantém o resume manual de um rollout legado sem id terminal quando o cwd confere', async () => {
+    const home = makeHome();
+    const path = rolloutPath(home, 'legacy-thread');
+    writeFileSync(path, `${JSON.stringify({ type: 'session_meta', payload: { id: 'legacy-thread', cwd, timestamp: '2026-10-15T00:00:01.000Z' } })}\n`);
+    expect(codexRolloutMatchesTerminal('legacy-thread', cwd, 'terminal-y', home)).toBe(true);
+  });
+
   it('usa backoff ao procurar um id ausente e encontra o rollout quando ele aparece', async () => {
     const home = makeHome();
     const search = vi.fn();
@@ -186,14 +274,14 @@ describe('CodexRolloutWatcher', () => {
     const events: CodexRolloutEvent[] = [];
     const lateSessionId = 'thread-created-later-0123';
     const watcher = new CodexRolloutWatcher({
-      codexHome: home, cwd, terminalName: 'Y', sessionId: lateSessionId, pollMs: 10, log, onEvent: (item) => events.push(item),
+      codexHome: home, cwd, terminalName: 'Y', terminalId: 'terminal-y', sessionId: lateSessionId, pollMs: 10, log, onEvent: (item) => events.push(item),
     });
     watcher.start();
     try {
       await new Promise((resolve) => setTimeout(resolve, 120));
       expect(search.mock.calls.length).toBeLessThanOrEqual(2);
       const path = rolloutPath(home, lateSessionId);
-      writeFileSync(path, fixtureText.replaceAll(sessionId, lateSessionId));
+      writeFileSync(path, `${fixtureText.replaceAll(sessionId, lateSessionId)}\n${JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'Seu terminal se chama Y. Identificador do terminal no Orquestra: terminal-y.' }] } })}\n`);
       await waitFor(() => events.some((item) => item.kind === 'session' && item.sessionId === lateSessionId));
       expect(search).toHaveBeenCalledWith(expect.objectContaining({ sessionId: lateSessionId }), 'buscando rollout Codex pelo id');
     } finally {

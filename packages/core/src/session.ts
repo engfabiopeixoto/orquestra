@@ -119,6 +119,7 @@ export class Session extends EventEmitter<SessionEvents> {
         codexHome: opts.codexHome,
         cwd: opts.cwd,
         terminalName: opts.name,
+        terminalId: this.id,
         sessionId: this.agentSessionId,
         startedAt: opts.codexRolloutStartedAt,
         pollMs: opts.codexRolloutPollMs,

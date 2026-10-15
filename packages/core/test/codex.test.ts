@@ -14,7 +14,7 @@ describe('Codex', () => {
     expect(launch.args).toContain('notify=[]');
     expect(launch.args.join(' ')).not.toContain('notify=["node"');
   });
-  const context = { cwd: 'C:/project', sessionDir: 'C:/session', hookCommand: (event: string) => `node "C:/Program Files/Orquestra/orq.mjs" hook codex ${event}`, resumeSessionId: null as string | null };
+  const context = { cwd: 'C:/project', sessionDir: 'C:/session', terminalId: 'terminal-stable-id', hookCommand: (event: string) => `node "C:/Program Files/Orquestra/orq.mjs" hook codex ${event}`, resumeSessionId: null as string | null };
   it('configura o hook moderno e retoma somente a sessão associada ao terminal', () => {
     const launch = codexAdapter.launch(context);
     expect(launch.command).toBe('codex');
@@ -33,6 +33,7 @@ describe('Codex', () => {
       expect(instructions).toContain('orq peers');
       expect(instructions).toContain('orq prompt');
       expect(instructions).toContain('coordenador');
+      expect(instructions).toContain('Identificador do terminal no Orquestra: terminal-stable-id');
       expect(instructions).toContain('regente');
       expect(args).toContain('mcp_servers.orquestra.env_vars=["ORQ_PIPE","ORQ_TOKEN"]');
       expect(args).toContain('mcp_servers.orquestra.enabled=true');

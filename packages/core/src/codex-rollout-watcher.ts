@@ -1,3 +1,4 @@
+import { closeSync, openSync, readSync, readdirSync } from 'node:fs';
 import { open, readdir, stat, type FileHandle } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
@@ -13,6 +14,7 @@ export type CodexRolloutWatcherOptions = {
   codexHome?: string;
   cwd: string;
   terminalName: string;
+  terminalId: string;
   sessionId?: string | null;
   startedAt?: number;
   pollMs?: number;
@@ -79,6 +81,28 @@ class RolloutCursor {
     return null;
   }
 
+  async readTerminalId(): Promise<string | null> {
+    const chunks: Buffer[] = [];
+    let position = 0;
+    while (position < 1024 * 1024) {
+      const buffer = Buffer.allocUnsafe(64 * 1024);
+      const { bytesRead } = await this.handle.read(buffer, 0, buffer.length, position);
+      if (bytesRead === 0) return null;
+      const lines = Buffer.concat([...chunks, buffer.subarray(0, bytesRead)]).toString('utf8').split('\n');
+      const pending = lines.pop() ?? '';
+      for (const line of lines) {
+        try {
+          const id = terminalIdentity(JSON.parse(line.replace(/\r$/, '')) as Record<string, unknown>);
+          if (id) return id;
+        } catch { /* Linhas incompletas ou registros não JSON são ignorados. */ }
+      }
+      chunks.length = 0;
+      if (pending) chunks.push(Buffer.from(pending, 'utf8'));
+      position += bytesRead;
+    }
+    return null;
+  }
+
   async close(): Promise<void> {
     await this.handle.close().catch(() => {});
   }
@@ -87,11 +111,66 @@ class RolloutCursor {
 type Candidate = {
   cursor: RolloutCursor;
   sessionId: string | null;
+  cwd: string | null;
   rolloutTimestamp: number | null;
   eligible: boolean;
   selected: boolean;
   pendingEvents: Array<{ kind: 'task-started'; turnId: string } | { kind: 'task-complete'; turnId: string; answer: string | null } | { kind: 'turn-aborted'; turnId: string; reason: string | null }>;
 };
+
+/** Valida cwd sempre e o id terminal quando o rollout já tem a marcação estável. */
+export function codexRolloutMatchesTerminal(sessionId: string, cwd: string, terminalId: string, codexHome = process.env.CODEX_HOME ?? join(homedir(), '.codex')): boolean | null {
+  const sessionsDir = join(codexHome, 'sessions');
+  let years;
+  try { years = readdirSync(sessionsDir, { withFileTypes: true }); } catch { return null; }
+  for (const year of years) {
+    if (!year.isDirectory()) continue;
+    let months;
+    try { months = readdirSync(join(sessionsDir, year.name), { withFileTypes: true }); } catch { continue; }
+    for (const month of months) {
+      if (!month.isDirectory()) continue;
+      let days;
+      try { days = readdirSync(join(sessionsDir, year.name, month.name), { withFileTypes: true }); } catch { continue; }
+      for (const day of days) {
+        if (!day.isDirectory()) continue;
+        const dayPath = join(sessionsDir, year.name, month.name, day.name);
+        let files;
+        try { files = readdirSync(dayPath); } catch { continue; }
+        const filename = files.find((name) => name.startsWith('rollout-') && name.endsWith(`-${sessionId}.jsonl`));
+        if (!filename) continue;
+        let descriptor: number | undefined;
+        try {
+          descriptor = openSync(join(dayPath, filename), 'r');
+          const buffer = Buffer.allocUnsafe(64 * 1024);
+          const bytesRead = readSync(descriptor, buffer, 0, buffer.length, 0);
+          const newline = buffer.subarray(0, bytesRead).indexOf(0x0a);
+          const firstLine = buffer.subarray(0, newline >= 0 ? newline : bytesRead).toString('utf8').replace(/\r$/, '');
+          const row = JSON.parse(firstLine) as Record<string, unknown>;
+          if (normalizePath(asRecord(row.payload).cwd) !== normalizePath(cwd)) return false;
+          const identity = readTerminalIdentitySync(descriptor);
+          return identity === null || identity === terminalId;
+        } catch {
+          return false;
+        } finally {
+          if (descriptor !== undefined) closeSync(descriptor);
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function readTerminalIdentitySync(descriptor: number): string | null {
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  const bytesRead = readSync(descriptor, buffer, 0, buffer.length, 0);
+  for (const line of buffer.subarray(0, bytesRead).toString('utf8').split('\n')) {
+    try {
+      const identity = terminalIdentity(JSON.parse(line.replace(/\r$/, '')) as Record<string, unknown>);
+      if (identity) return identity;
+    } catch { /* Registro parcial ignorado. */ }
+  }
+  return null;
+}
 
 /** Associa a thread pelo ID ou pelo cwd e a identidade que o Codex registra em response_item/developer. */
 export class CodexRolloutWatcher {
@@ -167,6 +246,11 @@ export class CodexRolloutWatcher {
         } else {
           this.nextKnownSessionSearchAt = Date.now() + retryMs;
           this.knownSessionSearchDelayMs = Math.min(retryMs * 2, 10_000);
+          if (Date.now() >= this.nextDiscoveryAt) {
+            this.nextDiscoveryAt = Date.now() + this.discoveryMs;
+            await this.discoverRecentSessions();
+            for (const candidate of [...this.candidates.values()]) await this.readCandidate(candidate);
+          }
         }
       } else {
         await this.discoverRecentSessions();
@@ -187,6 +271,11 @@ export class CodexRolloutWatcher {
       const filename = names.find((name) => name.startsWith('rollout-') && name.endsWith(`-${this.expectedSessionId}.jsonl`));
       if (!filename) continue;
       const path = join(dayDir, filename);
+      const existing = this.candidates.get(path);
+      if (existing) {
+        await this.readCandidate(existing);
+        return;
+      }
       const candidate = await this.openCandidate(path, true);
       if (!candidate) return;
       candidate.sessionId = this.expectedSessionId;
@@ -194,14 +283,27 @@ export class CodexRolloutWatcher {
       if (firstLine) {
         try {
           const row = JSON.parse(firstLine) as Record<string, unknown>;
-          candidate.rolloutTimestamp = timestampValue(row.timestamp) ?? timestampValue(asRecord(row.payload).timestamp) ?? candidate.rolloutTimestamp;
+          const metadata = asRecord(row.payload);
+          candidate.rolloutTimestamp = timestampValue(row.timestamp) ?? timestampValue(metadata.timestamp) ?? candidate.rolloutTimestamp;
+          candidate.cwd = normalizePath(metadata.cwd);
         } catch { /* O timestamp do nome do arquivo permanece como fallback. */ }
+      }
+      if (candidate.cwd !== normalizePath(this.opts.cwd)) {
+        this.opts.log.warn({ terminal: this.opts.terminalName, terminalId: this.opts.terminalId, sessionId: candidate.sessionId, terminalCwd: this.opts.cwd, rolloutCwd: candidate.cwd, rollout: path }, 'rollout Codex ignorado: cwd não corresponde ao terminal');
+        await candidate.cursor.close();
+        return;
+      }
+      const rolloutTerminalId = await candidate.cursor.readTerminalId();
+      if (rolloutTerminalId && rolloutTerminalId !== this.opts.terminalId) {
+        this.opts.log.warn({ terminal: this.opts.terminalName, terminalId: this.opts.terminalId, rolloutTerminalId, sessionId: candidate.sessionId, cwd: candidate.cwd, rollout: path }, 'rollout Codex ignorado: id do terminal não corresponde');
+        await candidate.cursor.close();
+        return;
       }
       candidate.selected = true;
       this.selected = candidate;
       this.candidates.set(path, candidate);
       this.emit({ kind: 'session', sessionId: candidate.sessionId! });
-      this.opts.log.info({ terminal: this.opts.terminalName, sessionId: candidate.sessionId, rollout: path }, 'rollout Codex associado pelo ID');
+      this.opts.log.info({ terminal: this.opts.terminalName, terminalId: this.opts.terminalId, cwd: candidate.cwd, sessionId: candidate.sessionId, rollout: path }, 'rollout Codex associado pelo ID e cwd');
       return;
     }
   }
@@ -219,7 +321,7 @@ export class CodexRolloutWatcher {
         try { info = await stat(path); } catch { continue; }
         const createdAt = info.birthtimeMs || info.ctimeMs;
         if (createdAt < this.startedAt - 10_000) continue;
-        const candidate = await this.openCandidate(path, false, true);
+        const candidate = await this.openCandidate(path, false);
         if (candidate) this.candidates.set(path, candidate);
       }
     }
@@ -230,6 +332,7 @@ export class CodexRolloutWatcher {
       return {
         cursor: await RolloutCursor.open(path, fromEnd),
         sessionId: null,
+        cwd: null,
         rolloutTimestamp: rolloutTimestampFromPath(path),
         eligible,
         selected: false,
@@ -251,14 +354,24 @@ export class CodexRolloutWatcher {
         const metadata = asRecord(row.payload);
         const id = firstString(metadata.id, metadata.session_id);
         candidate.rolloutTimestamp = timestampValue(row.timestamp) ?? timestampValue(metadata.timestamp) ?? candidate.rolloutTimestamp;
-        if (!candidate.eligible && normalizePath(metadata.cwd) !== normalizePath(this.opts.cwd)) {
+        candidate.cwd = normalizePath(metadata.cwd);
+        if (candidate.cwd !== normalizePath(this.opts.cwd)) {
+          this.olderRollouts.add(candidate.cursor.path);
           await this.removeCandidate(candidate);
           return;
         }
+        candidate.eligible = true;
         candidate.sessionId = id ?? candidate.sessionId ?? sessionIdFromFilename(candidate.cursor.path);
       }
 
-      if (!candidate.selected && isTerminalDeveloperMessage(row, this.opts.terminalName)) {
+      if (!candidate.selected && isDeveloperMessage(row)) {
+        const candidateTerminalId = terminalIdentity(row);
+        if (candidateTerminalId && candidateTerminalId !== this.opts.terminalId) {
+          this.olderRollouts.add(candidate.cursor.path);
+          await this.removeCandidate(candidate);
+          return;
+        }
+        if (candidateTerminalId !== this.opts.terminalId) continue;
         if (!candidate.eligible || !candidate.sessionId) continue;
         if (this.selected && !isNewerRollout(candidate.rolloutTimestamp, this.selected.rolloutTimestamp)) {
           this.olderRollouts.add(candidate.cursor.path);
@@ -270,7 +383,7 @@ export class CodexRolloutWatcher {
         this.emit({ kind: 'session', sessionId: candidate.sessionId });
         for (const pending of candidate.pendingEvents) this.emit({ ...pending, sessionId: candidate.sessionId });
         candidate.pendingEvents = [];
-        this.opts.log.info({ terminal: this.opts.terminalName, sessionId: candidate.sessionId, rollout: candidate.cursor.path }, 'rollout Codex associado por cwd e identidade');
+        this.opts.log.info({ terminal: this.opts.terminalName, terminalId: this.opts.terminalId, cwd: candidate.cwd, sessionId: candidate.sessionId, rollout: candidate.cursor.path }, 'rollout Codex associado por cwd e identidade');
         await this.closeOtherCandidates(candidate);
       }
 
@@ -318,16 +431,21 @@ function parseEvent(row: Record<string, unknown>, payload: Record<string, unknow
   return null;
 }
 
-function isTerminalDeveloperMessage(row: Record<string, unknown>, terminalName: string): boolean {
-  if (row.type !== 'response_item') return false;
+function isDeveloperMessage(row: Record<string, unknown>): boolean {
   const payload = asRecord(row.payload);
-  if (payload.type !== 'message' || payload.role !== 'developer' || !Array.isArray(payload.content)) return false;
-  const marker = `Seu terminal se chama ${terminalName}.`;
-  return payload.content.some((item) => markerIsPresent(asRecord(item).text, marker));
+  return row.type === 'response_item' && payload.type === 'message' && payload.role === 'developer' && Array.isArray(payload.content);
 }
 
-function markerIsPresent(value: unknown, marker: string): boolean {
-  return typeof value === 'string' && value.includes(marker);
+function terminalIdentity(row: Record<string, unknown>): string | null {
+  if (!isDeveloperMessage(row)) return null;
+  const payload = asRecord(row.payload);
+  for (const item of payload.content as unknown[]) {
+    const text = asRecord(item).text;
+    if (typeof text !== 'string') continue;
+    const match = text.match(/Identificador do terminal no Orquestra: ([^\s.]+)\./);
+    if (match) return match[1] ?? null;
+  }
+  return null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

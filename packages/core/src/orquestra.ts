@@ -7,6 +7,7 @@ import { AskBroker } from './ask-broker.js';
 import { CLAUDE_CLEAR_INPUT, ClaudeStatusWatcher } from './adapters/claude-status.js';
 import { BackgroundJobWatcher, backgroundJobNotice, claudeConfigDir, findBackgroundJob, type ListPipes } from './background-job.js';
 import { childEnv, prependPath } from './env.js';
+import { codexRolloutMatchesTerminal } from './codex-rollout-watcher.js';
 import { createHandlers, type RegentHandler, type RegentMethod } from './handlers.js';
 import type { Logger } from './log.js';
 import { NoteStore, USER_AUTHOR, type Note } from './notes.js';
@@ -178,7 +179,13 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
   function spawnTerminal(input: CreateTerminalInput, adapter: AgentAdapter): Session {
     const id = input.id ?? randomUUID();
     const resume = input.resume ?? true;
-    const resumeSessionId = resume ? (input.agentSessionId ?? null) : null;
+    let resumeSessionId = resume ? (input.agentSessionId ?? null) : null;
+    let ignoredCodexResume = false;
+    if (adapter.kind === 'codex' && resumeSessionId && codexRolloutMatchesTerminal(resumeSessionId, input.cwd, id) === false) {
+      opts.log.warn({ terminal: input.name, terminalId: id, cwd: input.cwd, sessionId: resumeSessionId }, 'resume do Codex ignorado: rollout pertence a outro cwd ou terminal');
+      resumeSessionId = null;
+      ignoredCodexResume = true;
+    }
     // Pastas de sessão dos lançamentos anteriores deste terminal: o job em segundo plano nasce com outro
     // sessionId e só o --settings do respawnFlags o liga ao terminal. O lançamento atual entra mais abaixo.
     const sessionDirs = [...(input.sessionDirs ?? [])];
@@ -201,6 +208,7 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
       hookCommand: (event) => `node "${opts.cliScript}" hook ${adapter.kind} ${event}`,
       resumeSessionId,
       terminalName: input.name,
+      terminalId: id,
       regente: input.regente ?? false,
     });
     const args = input.args ?? [];
@@ -213,7 +221,7 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
       pty = host.spawn({ file: executable.file, args: [...executable.argsPrefix, ...launch.args, ...args], cwd: input.cwd, env });
     }
     const log = opts.log.child({ session: input.name, sessionId: id, agent: adapter.kind });
-    const agentSessionId = unloaded ? input.agentSessionId ?? null : launch.agentSessionId ?? input.agentSessionId ?? null;
+    const agentSessionId = unloaded ? input.agentSessionId ?? null : launch.agentSessionId ?? (ignoredCodexResume ? null : input.agentSessionId ?? null);
     const session = new Session({ id, name: input.name, adapter, pty, cwd: input.cwd, log, readyQuietMs: opts.readyQuietMs, agentSessionId, unloaded, idleGraceMs: opts.claudeIdleGraceMs });
     // session.name, não input.name: o terminal pode ser renomeado depois.
     const stopOutput = session.onOutput((data) => emit({ type: 'output', name: session.name, data }));
