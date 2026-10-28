@@ -96,7 +96,15 @@ test('Portal de Navegador: criação via Palette, navegação desktop e mobile, 
     const inspect = () => app.evaluate(async ({ webContents, BrowserWindow }, targetUrl) => {
       const wc = webContents.getAllWebContents().find((wc) => wc.getURL().startsWith(targetUrl));
       if (!wc) return null;
-      const view = BrowserWindow.getAllWindows()[0]?.contentView.children.find((view) => (view as any).webContents?.id === wc.id);
+      const findView = (parent: any): any => {
+        for (const view of parent.children ?? []) {
+          if (view.webContents?.id === wc.id) return view;
+          const nested = findView(view);
+          if (nested) return nested;
+        }
+        return undefined;
+      };
+      const view = findView(BrowserWindow.getAllWindows()[0]?.contentView);
       return { id: wc.id, visible: view?.getVisible(), bounds: view?.getBounds(), page: await wc.executeJavaScript('({width:innerWidth,height:innerHeight,ua:navigator.userAgent,touch:navigator.maxTouchPoints,bridge:typeof window.orquestra,title:document.title})') };
     }, serverUrl);
     await expect.poll(async () => (await inspect())?.page.title).toBe('Portal E2E Test Server');

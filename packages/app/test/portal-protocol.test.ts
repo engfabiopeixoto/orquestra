@@ -6,6 +6,7 @@ import {
   getDevicePreset,
   normalizePortalUrl,
   rotateDimensions,
+  portalCanvasFrameBounds,
   PORTAL_IPC,
 } from '../src/shared/portal-protocol';
 
@@ -53,6 +54,30 @@ describe('portal-protocol', () => {
       const landscape = rotateDimensions(393, 852, 'landscape');
       expect(landscape.width).toBe(852);
       expect(landscape.height).toBe(393);
+    });
+  });
+
+  describe('moldura do canvas', () => {
+    it('exclui as faixas ocupadas por controles superiores e inferiores', () => {
+      const canvas = { x: 220, y: 32, width: 1180, height: 868 };
+      const controls = [
+        { x: 400, y: 44, width: 500, height: 40 },
+        { x: 1210, y: 50, width: 170, height: 100 },
+        { x: 230, y: 820, width: 500, height: 50 },
+        { x: 1300, y: 830, width: 80, height: 40 },
+      ];
+
+      expect(portalCanvasFrameBounds(canvas, controls)).toEqual({ x: 220, y: 154, width: 1180, height: 662 });
+    });
+
+    it('mantém o canvas inteiro quando não há controles e nunca retorna tamanho negativo', () => {
+      const canvas = { x: 220, y: 32, width: 1180, height: 868 };
+      expect(portalCanvasFrameBounds(canvas, [])).toEqual(canvas);
+      expect(portalCanvasFrameBounds(canvas, [{ x: 300, y: 35, width: 0, height: 100 }])).toEqual(canvas);
+      expect(portalCanvasFrameBounds(canvas, [
+        { x: 0, y: 500, width: 1400, height: 450 },
+        { x: 0, y: 0, width: 1400, height: 500 },
+      ])).toEqual({ x: 220, y: 504, width: 1180, height: 0 });
     });
   });
 

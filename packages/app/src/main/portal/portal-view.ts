@@ -2,6 +2,7 @@ import { shell, WebContentsView, type Session } from 'electron';
 import {
   getDevicePreset,
   normalizePortalUrl,
+  portalZoomFactor,
   rotateDimensions,
   type DevicePreset,
   type PortalEvent,
@@ -37,6 +38,7 @@ export class PortalView {
   private readyForEmulation = false;
   private emulation?: { preset: DevicePreset; orientation: PortalOrientation };
   private touchMode?: boolean;
+  private canvasZoom = 1;
 
   constructor(private readonly opts: PortalViewOptions) {
     this.portalId = opts.portalId;
@@ -229,7 +231,7 @@ export class PortalView {
         screenSize: { width: dims.width, height: dims.height },
         viewPosition: { x: 0, y: 0 },
         deviceScaleFactor: preset.deviceScaleFactor,
-        scale: Math.max(0.05, Math.min(1, this.currentBounds.width / dims.width, this.currentBounds.height / dims.height)),
+        scale: Math.max(0.05, Math.min(1, this.currentBounds.width / Math.max(0.001, this.canvasZoom) / dims.width, this.currentBounds.height / Math.max(0.001, this.canvasZoom) / dims.height)),
         viewSize: { width: dims.width, height: dims.height },
       });
       if (preset.userAgent) {
@@ -265,6 +267,17 @@ export class PortalView {
       height: Math.max(0, Math.round(bounds.height)),
     });
     if (resized && this.readyForEmulation && this.emulation?.preset.isMobile) this.applyEmulation(this.emulation.preset, this.emulation.orientation);
+  }
+
+  setZoomFactor(canvasZoom: number, portalZoom: number): void {
+    if (this.isDestroyed) return;
+    const nextCanvasZoom = Math.max(0.05, canvasZoom);
+    const emulationScaleChanged = this.canvasZoom !== nextCanvasZoom;
+    this.canvasZoom = nextCanvasZoom;
+    this.view.webContents.setZoomFactor(Math.max(0.05, portalZoomFactor(nextCanvasZoom, portalZoom)));
+    if (emulationScaleChanged && this.readyForEmulation && this.emulation?.preset.isMobile) {
+      this.applyEmulation(this.emulation.preset, this.emulation.orientation);
+    }
   }
 
   setVisible(visible: boolean): void {

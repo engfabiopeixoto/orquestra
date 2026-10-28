@@ -5,6 +5,7 @@ import {
   MOBILE_PRESETS,
   MAX_TABS_PER_PORTAL,
   getDevicePreset,
+  portalCanvasFrameBounds,
   rotateDimensions,
   type PortalMode,
   type PortalOrientation,
@@ -40,6 +41,7 @@ export function PortalNode({ id, data, selected }: NodeProps<PortalFlowNode>) {
   const [nativeReady, setNativeReady] = useState(false);
   const [error, setError] = useState('');
   const viewContainerRef = useRef<HTMLDivElement>(null);
+  const lastSyncKeyRef = useRef('');
 
   // Inicializa o portal no main process e na store se não existir
   useEffect(() => {
@@ -101,72 +103,85 @@ export function PortalNode({ id, data, selected }: NodeProps<PortalFlowNode>) {
     return () => {
       unmounted = true;
       unsubscribeEvents();
-      void bridge.syncBounds({ portalId: id, workspaceId, bounds: { x: 0, y: 0, width: 0, height: 0 }, visible: false }).catch(() => {});
+      void bridge.syncBounds({
+        portalId: id,
+        workspaceId,
+        bounds: { x: 0, y: 0, width: 0, height: 0 },
+        frameBounds: { x: 0, y: 0, width: 0, height: 0 },
+        canvasZoom: 1,
+        visible: false,
+      }).catch(() => {});
     };
   }, [id, workspaceId]);
 
-  // Sincroniza coordenadas (bounds) e recorta contra a área útil do canvas (não cobrir sidebar ou toolbars)
+  // Mantém bounds lógicos completos e alterna entre WebContentsView e snapshot DOM.
   useEffect(() => {
     if (!nativeReady) return;
     const el = viewContainerRef.current;
     if (!el) return;
 
-    let previousBounds = '';
+    let rafId: number | null = null;
     const sync = () => {
       if (!viewContainerRef.current) return;
-      const containerRect = viewContainerRef.current.getBoundingClientRect();
-
-      // Encontra a área real do canvas para clipping
+      const rect = viewContainerRef.current.getBoundingClientRect();
       const canvasEl = document.querySelector('.canvas');
-      const canvasRect = canvasEl
-        ? canvasEl.getBoundingClientRect()
-        : { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight };
-
-      const clipLeft = Math.max(containerRect.left, canvasRect.left);
-      let clipTop = Math.max(containerRect.top, canvasRect.top);
-      const clipRight = Math.min(containerRect.right, canvasRect.right);
-      let clipBottom = Math.min(containerRect.bottom, canvasRect.bottom);
-      for (const selector of ['.palette', '.group-tools', '.flow-toolbar', '.zoom-control', '.subscription-usage']) {
-        const control = document.querySelector(selector)?.getBoundingClientRect();
-        if (!control || control.right <= clipLeft || control.left >= clipRight || control.bottom <= clipTop || control.top >= clipBottom) continue;
-        if (control.top > containerRect.top + containerRect.height / 2) clipBottom = Math.min(clipBottom, control.top - 4);
-        else clipTop = Math.max(clipTop, control.bottom + 4);
-      }
-
-      const isVisible =
-        clipRight > clipLeft &&
-        clipBottom > clipTop &&
-        containerRect.width > 0 &&
-        containerRect.height > 0;
-      const clippedWidth = Math.max(0, clipRight - clipLeft);
-      const clippedHeight = Math.max(0, clipBottom - clipTop);
-
-      const key = `${clipLeft}:${clipTop}:${clippedWidth}:${clippedHeight}:${isVisible}`;
-      if (key === previousBounds) return;
-      previousBounds = key;
-      void bridge.syncBounds({
-        portalId: id,
-        workspaceId,
-        bounds: {
-          x: clipLeft,
-          y: clipTop,
-          width: isVisible ? clippedWidth : 0,
-          height: isVisible ? clippedHeight : 0,
-        },
-        visible: isVisible,
+      const canvasRect = canvasEl?.getBoundingClientRect();
+      const bounds = { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
+      const canvasBounds = canvasRect
+        ? { x: canvasRect.left, y: canvasRect.top, width: canvasRect.width, height: canvasRect.height }
+        : { x: 0, y: 0, width: window.innerWidth, height: window.innerHeight };
+      const controls = [...document.querySelectorAll<HTMLElement>(
+        '.palette, .group-tools, .flow-toolbar, .zoom-control, .zoom, .subscription-usage',
+      )].map((control) => {
+        const controlRect = control.getBoundingClientRect();
+        return { x: controlRect.left, y: controlRect.top, width: controlRect.width, height: controlRect.height };
       });
+      const frameBounds = portalCanvasFrameBounds(canvasBounds, controls);
+      const modal = document.querySelector<HTMLElement>('.dialog-backdrop, [role="dialog"]');
+      const modalRect = modal?.getBoundingClientRect();
+      const clippedByModal = Boolean(modalRect && modalRect.width > 0 && modalRect.height > 0);
+      const syncKey = `${workspaceId}:${bounds.x}:${bounds.y}:${bounds.width}:${bounds.height}:${frameBounds.x}:${frameBounds.y}:${frameBounds.width}:${frameBounds.height}:${viewport.zoom}:${clippedByModal}`;
+      if (syncKey === lastSyncKeyRef.current) return;
+      lastSyncKeyRef.current = syncKey;
+      void bridge.syncBounds({ portalId: id, workspaceId, bounds, frameBounds, canvasZoom: viewport.zoom, visible: true, clippedByModal })
+        .catch((syncError: Error) => setError(syncError.message));
     };
 
     const observer = new ResizeObserver(() => sync());
     observer.observe(el);
+    const canvasElement = document.querySelector('.canvas');
+    const controlsSelector = '.palette, .group-tools, .flow-toolbar, .zoom-control, .zoom, .subscription-usage';
+    const observedControls = new Set<Element>();
+    const observeControls = () => {
+      const currentControls = new Set(document.querySelectorAll(controlsSelector));
+      for (const control of observedControls) if (!currentControls.has(control)) {
+        observer.unobserve(control);
+        observedControls.delete(control);
+      }
+      for (const control of currentControls) if (!observedControls.has(control)) {
+        observer.observe(control);
+        observedControls.add(control);
+      }
+    };
+    if (canvasElement) observer.observe(canvasElement);
+    observeControls();
+    const controlsMutationObserver = new MutationObserver(() => {
+      observeControls();
+      sync();
+    });
+    if (canvasElement) controlsMutationObserver.observe(canvasElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class', 'style', 'hidden'],
+    });
 
     // Sincroniza em animações de scroll/zoom e movimentação do canvas
     window.addEventListener('scroll', sync, true);
     window.addEventListener('resize', sync);
     sync();
 
-    // Loop contínuo durante arrasto ou animação
-    let rafId: number | null = null;
+    // Durante movimento, mede uma vez por frame; no modo snapshot não envia bounds ao main.
     const onMove = () => {
       if (!rafId) {
         rafId = requestAnimationFrame(() => {
@@ -180,6 +195,7 @@ export function PortalNode({ id, data, selected }: NodeProps<PortalFlowNode>) {
     return () => {
       if (rafId) cancelAnimationFrame(rafId);
       observer.disconnect();
+      controlsMutationObserver.disconnect();
       window.removeEventListener('scroll', sync, true);
       window.removeEventListener('resize', sync);
       window.removeEventListener('pointermove', onMove);
@@ -444,17 +460,12 @@ export function PortalNode({ id, data, selected }: NodeProps<PortalFlowNode>) {
 
       {isMobile && <div className="portal-notch" />}
 
-      {/* Container visual da WebContentsView */}
+      {/* Região visual alinhada à WebContentsView nativa */}
       <div
         ref={viewContainerRef}
         className="portal-view-container nowheel nodrag"
         data-testid={`portal-view-container-${id}`}
-      >
-        <div className="portal-view-placeholder">
-          <span>{activeTab?.isLoading ? 'Carregando página...' : 'Portal Web Ativo'}</span>
-          <small>{activeTab?.url}</small>
-        </div>
-      </div>
+      />
     </div>
   );
 }

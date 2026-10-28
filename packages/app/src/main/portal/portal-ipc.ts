@@ -63,8 +63,7 @@ export function setupPortalIpc(
     if (!payload || typeof payload.portalId !== 'string' || !payload.bounds) {
       throw new Error('Parâmetros inválidos para syncBounds');
     }
-    portalManager.syncBounds(payload);
-    return { ok: true };
+    return portalManager.syncBounds(payload);
   });
 
   ipcMain.handle(
