@@ -158,6 +158,35 @@ export interface PortalViewBounds {
   height: number;
 }
 
+export function portalBoundsInFrame(node: PortalViewBounds, frame: PortalViewBounds): PortalViewBounds {
+  return { x: node.x - frame.x, y: node.y - frame.y, width: node.width, height: node.height };
+}
+
+export function portalCanvasFrameBounds(canvas: PortalViewBounds, controls: readonly PortalViewBounds[]): PortalViewBounds {
+  let top = canvas.y;
+  let bottom = canvas.y + canvas.height;
+  const midpoint = canvas.y + canvas.height / 2;
+
+  for (const control of controls) {
+    if (control.width <= 0 || control.height <= 0) continue;
+    const intersectsCanvas =
+      control.x < canvas.x + canvas.width &&
+      control.x + control.width > canvas.x &&
+      control.y < canvas.y + canvas.height &&
+      control.y + control.height > canvas.y;
+    if (!intersectsCanvas) continue;
+
+    if (control.y > midpoint) bottom = Math.min(bottom, control.y - 4);
+    else top = Math.max(top, control.y + control.height + 4);
+  }
+
+  return { x: canvas.x, y: top, width: canvas.width, height: Math.max(0, bottom - top) };
+}
+
+export function portalZoomFactor(canvasZoom: number, portalZoom: number): number {
+  return canvasZoom * portalZoom;
+}
+
 export interface PortalState {
   id: string;
   workspaceId: string;
@@ -193,6 +222,8 @@ export interface PortalSyncBoundsPayload {
   portalId: string;
   workspaceId: string;
   bounds: PortalViewBounds;
+  frameBounds: PortalViewBounds;
+  canvasZoom: number;
   visible: boolean;
   clippedByModal?: boolean;
 }
@@ -209,7 +240,6 @@ export const PORTAL_IPC = {
   NAVIGATE: 'orq:portal:navigate',
   ACTION: 'orq:portal:action',
   SYNC_BOUNDS: 'orq:portal:sync-bounds',
-  CAPTURE_SNAPSHOT: 'orq:portal:capture-snapshot',
   SET_MODE: 'orq:portal:set-mode',
   CREATE_TAB: 'orq:portal:create-tab',
   SWITCH_TAB: 'orq:portal:switch-tab',

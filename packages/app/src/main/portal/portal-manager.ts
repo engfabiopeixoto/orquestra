@@ -1,9 +1,10 @@
-import type { BrowserWindow } from 'electron';
+import { View, type BrowserWindow } from 'electron';
 import { createHash } from 'node:crypto';
 import {
   getDevicePreset,
   MAX_PORTALS_PER_WORKSPACE,
   MAX_TABS_PER_PORTAL,
+  portalBoundsInFrame,
   type DevicePreset,
   type PortalCreateOptions,
   type PortalEvent,
@@ -33,8 +34,9 @@ interface InternalPortalRecord {
   orientation: PortalOrientation;
   zoomLevel: number;
   lastBounds?: { x: number; y: number; width: number; height: number };
+  lastFrameBounds?: PortalSyncBoundsPayload['frameBounds'];
+  lastCanvasZoom: number;
   lastVisible?: boolean;
-  presentationLive: boolean;
   presentationTail: Promise<void>;
 }
 
@@ -44,6 +46,9 @@ export class PortalManager {
   private activeWorkspaceId = '';
   private isModalOpen = false;
   private isWindowMinimized = false;
+  private canvasFrame: View | null = null;
+  private canvasFrameWindow: BrowserWindow | null = null;
+  private canvasFrameBounds: PortalSyncBoundsPayload['frameBounds'] = { x: 0, y: 0, width: 0, height: 0 };
   private readonly sessionKeys = new Map<string, string>();
   private readonly commands = new Map<string, { tail: Promise<unknown>; count: number }>();
 
@@ -173,8 +178,8 @@ export class PortalManager {
       orientation,
       zoomLevel: 1,
       lastBounds: opts.bounds,
+      lastCanvasZoom: 1,
       lastVisible: true,
-      presentationLive: true,
       presentationTail: Promise.resolve(),
     };
 
@@ -237,16 +242,23 @@ export class PortalManager {
     return this.serializePortalState(portal);
   }
 
-  syncBounds(payload: PortalSyncBoundsPayload): Promise<string | null> {
+  syncBounds(payload: PortalSyncBoundsPayload): Promise<void> {
     const wsId = payload.workspaceId || this.activeWorkspaceId;
     const portal = this.workspaces.get(wsId)?.get(payload.portalId);
-    if (!portal) return Promise.resolve(null);
+    if (!portal) return Promise.resolve();
 
     const sync = portal.presentationTail.then(async () => {
       portal.lastBounds = payload.bounds;
+      if (payload.frameBounds.width > 0 && payload.frameBounds.height > 0) {
+        portal.lastFrameBounds = payload.frameBounds;
+        portal.lastCanvasZoom = payload.canvasZoom;
+        this.canvasFrameBounds = payload.frameBounds;
+        const frame = this.ensureCanvasFrame();
+        frame?.setBounds(payload.frameBounds);
+      }
       portal.lastVisible = payload.visible && !payload.clippedByModal;
       const activeView = portal.tabs.get(portal.activeTabId);
-      if (!activeView) return null;
+      if (!activeView) return;
 
       const shouldBeVisible =
         wsId === this.activeWorkspaceId &&
@@ -255,28 +267,16 @@ export class PortalManager {
         !this.isWindowMinimized;
 
       if (!shouldBeVisible) {
-        const snapshot = portal.presentationLive ? await activeView.captureSnapshot() : null;
         activeView.setVisible(false);
-        portal.presentationLive = false;
-        return snapshot;
+        return;
       }
 
-      activeView.setBounds(payload.bounds);
+      activeView.setBounds(portalBoundsInFrame(payload.bounds, payload.frameBounds));
+      activeView.setZoomFactor(payload.canvasZoom, portal.zoomLevel);
       activeView.setVisible(true);
-      portal.presentationLive = true;
-      return null;
     });
     portal.presentationTail = sync.then(() => undefined, () => undefined);
     return sync;
-  }
-
-  captureSnapshot(portalId: string, workspaceId?: string): Promise<string | null> {
-    const wsId = workspaceId || this.activeWorkspaceId;
-    const portal = this.workspaces.get(wsId)?.get(portalId);
-    if (!portal) return Promise.resolve(null);
-    const capture = portal.presentationTail.then(() => portal.tabs.get(portal.activeTabId)?.captureSnapshot() ?? null);
-    portal.presentationTail = capture.then(() => undefined, () => undefined);
-    return capture;
   }
 
   createTab(portalId: string, initialUrl?: string, workspaceId?: string): PortalState | null {
@@ -302,9 +302,7 @@ export class PortalManager {
       onEvent: (event) => this.emitEvent(event),
     });
 
-    if (portal.lastBounds) {
-      newView.setBounds(portal.lastBounds);
-    }
+    this.applyViewGeometry(portal, newView);
 
     portal.tabs.set(newTabId, newView);
     this.switchTab(portalId, newTabId, wsId);
@@ -325,12 +323,10 @@ export class PortalManager {
     portal.activeTabId = tabId;
     const newView = portal.tabs.get(tabId)!;
 
-    if (portal.lastBounds) {
-      newView.setBounds(portal.lastBounds);
-    }
+    this.applyViewGeometry(portal, newView);
 
     if (wsId === this.activeWorkspaceId && !this.isModalOpen && !this.isWindowMinimized) {
-      this.attachView(newView, portal.presentationLive && (portal.lastVisible ?? true));
+      this.attachView(newView, (portal.lastVisible ?? true) && !this.isModalOpen && !this.isWindowMinimized);
     }
 
     return this.serializePortalState(portal);
@@ -401,13 +397,18 @@ export class PortalManager {
     for (const workspaceId of Array.from(this.workspaces.keys())) {
       this.destroyWorkspacePortals(workspaceId);
     }
+    if (this.canvasFrame && this.canvasFrameWindow) {
+      try { this.canvasFrameWindow.contentView.removeChildView(this.canvasFrame); } catch { /* Janela encerrada. */ }
+    }
+    this.canvasFrame = null;
+    this.canvasFrameWindow = null;
   }
 
   private attachView(portalView: PortalView, visible = true): void {
-    const win = this.getWindow();
-    if (!win) return;
+    const frame = this.ensureCanvasFrame();
+    if (!frame) return;
     try {
-      win.contentView.addChildView(portalView.view);
+      frame.addChildView(portalView.view);
       portalView.setVisible(visible);
     } catch {
       // Ignora erro se já estiver anexada ou destruída
@@ -415,14 +416,32 @@ export class PortalManager {
   }
 
   private detachView(portalView: PortalView): void {
-    const win = this.getWindow();
-    if (!win) return;
+    const frame = this.canvasFrame;
+    if (!frame) return;
     try {
       portalView.setVisible(false);
-      win.contentView.removeChildView(portalView.view);
+      frame.removeChildView(portalView.view);
     } catch {
       // Ignora se não estiver anexada
     }
+  }
+
+  private ensureCanvasFrame(): View | null {
+    const win = this.getWindow();
+    if (!win || win.isDestroyed()) return null;
+    if (this.canvasFrame && this.canvasFrameWindow === win) return this.canvasFrame;
+    if (this.canvasFrame && this.canvasFrameWindow) {
+      try {
+        for (const child of [...this.canvasFrame.children]) this.canvasFrame.removeChildView(child);
+        this.canvasFrameWindow.contentView.removeChildView(this.canvasFrame);
+      } catch { /* A janela anterior já foi encerrada. */ }
+    }
+    const frame = new View();
+    frame.setBounds(this.canvasFrameBounds);
+    win.contentView.addChildView(frame);
+    this.canvasFrame = frame;
+    this.canvasFrameWindow = win;
+    return frame;
   }
 
   private attachActiveWorkspaceViews(): void {
@@ -433,7 +452,8 @@ export class PortalManager {
     for (const portal of workspaceMap.values()) {
       const activeView = portal.tabs.get(portal.activeTabId);
       if (activeView) {
-        this.attachView(activeView, portal.presentationLive && (portal.lastVisible ?? true));
+        this.applyViewGeometry(portal, activeView);
+        this.attachView(activeView, (portal.lastVisible ?? true) && !this.isModalOpen && !this.isWindowMinimized);
       }
     }
   }
@@ -446,6 +466,13 @@ export class PortalManager {
       for (const view of portal.tabs.values()) {
         this.detachView(view);
       }
+    }
+  }
+
+  private applyViewGeometry(portal: InternalPortalRecord, view: PortalView): void {
+    if (portal.lastBounds && portal.lastFrameBounds) {
+      view.setBounds(portalBoundsInFrame(portal.lastBounds, portal.lastFrameBounds));
+      view.setZoomFactor(portal.lastCanvasZoom, portal.zoomLevel);
     }
   }
 

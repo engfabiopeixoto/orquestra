@@ -1,10 +1,11 @@
-import { Handle, Position, NodeResizer, useReactFlow, useViewport, type Node, type NodeProps } from '@xyflow/react';
+import { Handle, Position, NodeResizer, useViewport, type Node, type NodeProps } from '@xyflow/react';
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import {
   ALL_PRESETS,
   MOBILE_PRESETS,
   MAX_TABS_PER_PORTAL,
   getDevicePreset,
+  portalCanvasFrameBounds,
   rotateDimensions,
   type PortalMode,
   type PortalOrientation,
@@ -14,10 +15,8 @@ import {
 import { activeWorkspaceId } from '../workspace-context';
 import { getPortalBridge } from './portal-bridge';
 import { portalStore, usePortalStore } from './portal-state';
-import { portalNodeBounds, portalPresentation, type PortalRect } from './portal-presentation';
 import './portal.css';
-import { appStore, useApp } from '../store';
-import { focusTerminalRequest } from '../canvas/focus-terminal';
+import { useApp } from '../store';
 
 export interface PortalNodeData {
   name: string;
@@ -35,21 +34,14 @@ export function PortalNode({ id, data, selected }: NodeProps<PortalFlowNode>) {
   const bridge = getPortalBridge();
   const portal = usePortalStore((state) => state.portals[id]);
   const viewport = useViewport();
-  const { getNode, setCenter, setNodes } = useReactFlow();
   const connectedAgents = useApp((state) => state.edges.filter((edge) => edge.a === id && state.terminals[edge.b] || edge.b === id && state.terminals[edge.a]).length);
 
   const [inputUrl, setInputUrl] = useState(data?.initialUrl ?? 'https://duckduckgo.com');
   const urlDirty = useRef(false);
   const [nativeReady, setNativeReady] = useState(false);
-  const [liveView, setLiveView] = useState(false);
-  const [snapshot, setSnapshot] = useState<string | null>(null);
   const [error, setError] = useState('');
   const viewContainerRef = useRef<HTMLDivElement>(null);
-  const lastGeometryRef = useRef('');
-  const lastMotionAtRef = useRef(0);
-  const presentationRef = useRef<'live' | 'snapshot' | null>(null);
-  const lastBoundsRef = useRef('');
-  const syncSequenceRef = useRef(0);
+  const lastSyncKeyRef = useRef('');
 
   // Inicializa o portal no main process e na store se não existir
   useEffect(() => {
@@ -84,19 +76,10 @@ export function PortalNode({ id, data, selected }: NodeProps<PortalFlowNode>) {
 
     void init().catch((error) => { if (!unmounted) setError((error as Error).message); });
 
-    const refreshSnapshot = () => {
-      if (unmounted || presentationRef.current !== 'snapshot') return;
-      const request = ++syncSequenceRef.current;
-      void bridge.captureSnapshot(id, workspaceId).then((image) => {
-        if (!unmounted && image && request === syncSequenceRef.current && presentationRef.current === 'snapshot') setSnapshot(image);
-      }).catch((captureError: Error) => { if (!unmounted) setError(captureError.message); });
-    };
-
     const unsubscribeEvents = bridge.onEvent((event) => {
       if (event.portalId !== id) return;
       if (event.type === 'portal:loading') {
         portalStore.getState().updateTab(id, event.tabId, { isLoading: event.isLoading });
-        if (!event.isLoading) refreshSnapshot();
       } else if (event.type === 'portal:navigated') {
         setError('');
         portalStore.getState().updateTab(id, event.tabId, {
@@ -108,7 +91,6 @@ export function PortalNode({ id, data, selected }: NodeProps<PortalFlowNode>) {
         if (currentActive === event.tabId && !urlDirty.current) {
           setInputUrl(event.url);
         }
-        refreshSnapshot();
       } else if (event.type === 'portal:title') {
         portalStore.getState().updateTab(id, event.tabId, { title: event.title });
       } else if (event.type === 'portal:favicon') {
@@ -121,7 +103,14 @@ export function PortalNode({ id, data, selected }: NodeProps<PortalFlowNode>) {
     return () => {
       unmounted = true;
       unsubscribeEvents();
-      void bridge.syncBounds({ portalId: id, workspaceId, bounds: { x: 0, y: 0, width: 0, height: 0 }, visible: false }).catch(() => {});
+      void bridge.syncBounds({
+        portalId: id,
+        workspaceId,
+        bounds: { x: 0, y: 0, width: 0, height: 0 },
+        frameBounds: { x: 0, y: 0, width: 0, height: 0 },
+        canvasZoom: 1,
+        visible: false,
+      }).catch(() => {});
     };
   }, [id, workspaceId]);
 
@@ -132,58 +121,60 @@ export function PortalNode({ id, data, selected }: NodeProps<PortalFlowNode>) {
     if (!el) return;
 
     let rafId: number | null = null;
-    let settleTimer: number | null = null;
     const sync = () => {
       if (!viewContainerRef.current) return;
-      const containerRect = viewContainerRef.current.getBoundingClientRect();
-      const nodeRect: PortalRect = { left: containerRect.left, top: containerRect.top, right: containerRect.right, bottom: containerRect.bottom };
+      const rect = viewContainerRef.current.getBoundingClientRect();
       const canvasEl = document.querySelector('.canvas');
-      const canvasRect = canvasEl
-        ? canvasEl.getBoundingClientRect()
-        : { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight };
-      const visibleRect: PortalRect = { left: canvasRect.left, top: canvasRect.top, right: canvasRect.right, bottom: canvasRect.bottom };
-      const overlays = document.querySelectorAll<HTMLElement>(
-        '.side, .palette, .group-tools, .flow-toolbar, .zoom, .subscription-usage, .ctx-menu, .terminal-menu, .dialog-backdrop, [role="dialog"], [role="menu"]',
-      );
-      const overlapped = [...overlays].some((overlay) => {
-        if (overlay === el || el.contains(overlay)) return false;
-        const rect = overlay.getBoundingClientRect();
-        return rect.width > 0 && rect.height > 0 && rect.left < nodeRect.right && rect.right > nodeRect.left && rect.top < nodeRect.bottom && rect.bottom > nodeRect.top;
+      const canvasRect = canvasEl?.getBoundingClientRect();
+      const bounds = { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
+      const canvasBounds = canvasRect
+        ? { x: canvasRect.left, y: canvasRect.top, width: canvasRect.width, height: canvasRect.height }
+        : { x: 0, y: 0, width: window.innerWidth, height: window.innerHeight };
+      const controls = [...document.querySelectorAll<HTMLElement>(
+        '.palette, .group-tools, .flow-toolbar, .zoom-control, .zoom, .subscription-usage',
+      )].map((control) => {
+        const controlRect = control.getBoundingClientRect();
+        return { x: controlRect.left, y: controlRect.top, width: controlRect.width, height: controlRect.height };
       });
-
-      const bounds = portalNodeBounds(nodeRect);
-      const boundsKey = `${bounds.x}:${bounds.y}:${bounds.width}:${bounds.height}`;
-      const geometryKey = `${boundsKey}:${viewport.zoom}`;
-      const now = performance.now();
-      if (lastGeometryRef.current && geometryKey !== lastGeometryRef.current) lastMotionAtRef.current = now;
-      lastGeometryRef.current = geometryKey;
-      const moving = now - lastMotionAtRef.current < 150;
-      const nextPresentation = portalPresentation({ nodeRect, visibleRect, zoom: viewport.zoom, overlapped, moving });
-      const presentationChanged = presentationRef.current !== nextPresentation;
-      const boundsChanged = lastBoundsRef.current !== boundsKey;
-
-      if ((nextPresentation === 'live' && (presentationChanged || boundsChanged)) || (nextPresentation === 'snapshot' && presentationChanged)) {
-        presentationRef.current = nextPresentation;
-        if (nextPresentation === 'live') lastBoundsRef.current = boundsKey;
-        const request = ++syncSequenceRef.current;
-        void bridge.syncBounds({ portalId: id, workspaceId, bounds, visible: nextPresentation === 'live' }).then((image) => {
-          if (request !== syncSequenceRef.current) return;
-          if (nextPresentation === 'snapshot') {
-            if (image) setSnapshot(image);
-            setLiveView(false);
-          } else {
-            setLiveView(true);
-          }
-        }).catch((syncError: Error) => setError(syncError.message));
-      }
-
-      if (settleTimer !== null) window.clearTimeout(settleTimer);
-      const settleIn = 150 - (performance.now() - lastMotionAtRef.current);
-      if (settleIn > 0) settleTimer = window.setTimeout(sync, settleIn + 1);
+      const frameBounds = portalCanvasFrameBounds(canvasBounds, controls);
+      const modal = document.querySelector<HTMLElement>('.dialog-backdrop, [role="dialog"]');
+      const modalRect = modal?.getBoundingClientRect();
+      const clippedByModal = Boolean(modalRect && modalRect.width > 0 && modalRect.height > 0);
+      const syncKey = `${workspaceId}:${bounds.x}:${bounds.y}:${bounds.width}:${bounds.height}:${frameBounds.x}:${frameBounds.y}:${frameBounds.width}:${frameBounds.height}:${viewport.zoom}:${clippedByModal}`;
+      if (syncKey === lastSyncKeyRef.current) return;
+      lastSyncKeyRef.current = syncKey;
+      void bridge.syncBounds({ portalId: id, workspaceId, bounds, frameBounds, canvasZoom: viewport.zoom, visible: true, clippedByModal })
+        .catch((syncError: Error) => setError(syncError.message));
     };
 
     const observer = new ResizeObserver(() => sync());
     observer.observe(el);
+    const canvasElement = document.querySelector('.canvas');
+    const controlsSelector = '.palette, .group-tools, .flow-toolbar, .zoom-control, .zoom, .subscription-usage';
+    const observedControls = new Set<Element>();
+    const observeControls = () => {
+      const currentControls = new Set(document.querySelectorAll(controlsSelector));
+      for (const control of observedControls) if (!currentControls.has(control)) {
+        observer.unobserve(control);
+        observedControls.delete(control);
+      }
+      for (const control of currentControls) if (!observedControls.has(control)) {
+        observer.observe(control);
+        observedControls.add(control);
+      }
+    };
+    if (canvasElement) observer.observe(canvasElement);
+    observeControls();
+    const controlsMutationObserver = new MutationObserver(() => {
+      observeControls();
+      sync();
+    });
+    if (canvasElement) controlsMutationObserver.observe(canvasElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class', 'style', 'hidden'],
+    });
 
     // Sincroniza em animações de scroll/zoom e movimentação do canvas
     window.addEventListener('scroll', sync, true);
@@ -203,8 +194,8 @@ export function PortalNode({ id, data, selected }: NodeProps<PortalFlowNode>) {
 
     return () => {
       if (rafId) cancelAnimationFrame(rafId);
-      if (settleTimer !== null) window.clearTimeout(settleTimer);
       observer.disconnect();
+      controlsMutationObserver.disconnect();
       window.removeEventListener('scroll', sync, true);
       window.removeEventListener('resize', sync);
       window.removeEventListener('pointermove', onMove);
@@ -275,20 +266,6 @@ export function PortalNode({ id, data, selected }: NodeProps<PortalFlowNode>) {
     void bridge.destroy(id, workspaceId);
     portalStore.getState().removePortal(id);
     ((data as unknown as PortalNodeData)?.onRemove)?.(id);
-  };
-
-  const zoomReadOnly = Math.abs(viewport.zoom - 1) > 0.001;
-  const focusAtFullZoom = () => {
-    const focused = focusTerminalRequest(id, {
-      getNode,
-      setCenter,
-      setFocus: () => {},
-      sizeOf: () => portal?.size ?? { width: 800, height: 600 },
-    });
-    if (focused) {
-      setNodes((nodes) => nodes.map((node) => node.id === id ? { ...node, selected: false } : node));
-      appStore.setState((state) => ({ selectedNodes: state.selectedNodes.filter((name) => name !== id) }));
-    }
   };
 
   // Se estiver no modo mobile, define dimensões proporcionais sugeridas no container
@@ -483,31 +460,12 @@ export function PortalNode({ id, data, selected }: NodeProps<PortalFlowNode>) {
 
       {isMobile && <div className="portal-notch" />}
 
-      {/* Container visual da WebContentsView */}
+      {/* Região visual alinhada à WebContentsView nativa */}
       <div
         ref={viewContainerRef}
         className="portal-view-container nowheel nodrag"
         data-testid={`portal-view-container-${id}`}
-      >
-        {liveView ? (
-          <div className="portal-view-placeholder" aria-hidden="true"><span>Portal Web Ativo</span></div>
-        ) : (
-          <div
-            className={`portal-snapshot ${zoomReadOnly ? 'is-zoomed nodrag' : ''}`}
-            data-testid={`portal-snapshot-${id}`}
-            onPointerDown={zoomReadOnly ? (event) => event.stopPropagation() : undefined}
-            onDoubleClick={zoomReadOnly ? focusAtFullZoom : undefined}
-          >
-            {snapshot ? <img src={snapshot} alt="" draggable={false} data-testid={`portal-snapshot-image-${id}`} /> : (
-              <div className="portal-view-placeholder">
-                <span>{activeTab?.title || 'Portal pronto'}</span>
-                <small>{activeTab?.url || inputUrl}</small>
-              </div>
-            )}
-            {zoomReadOnly ? <div className="portal-live-hint" data-testid={`portal-live-hint-${id}`}>duplo clique para interagir</div> : null}
-          </div>
-        )}
-      </div>
+      />
     </div>
   );
 }

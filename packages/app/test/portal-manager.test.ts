@@ -13,6 +13,7 @@ vi.mock('electron', () => {
     enableDeviceEmulation = vi.fn();
     disableDeviceEmulation = vi.fn();
     setUserAgent = vi.fn();
+    setZoomFactor = vi.fn();
     getUserAgent = vi.fn().mockReturnValue('Mozilla/5.0 Desktop');
     isLoading = vi.fn().mockReturnValue(false);
     setWindowOpenHandler = vi.fn();
@@ -20,16 +21,25 @@ vi.mock('electron', () => {
     close = vi.fn();
     isDestroyed = vi.fn().mockReturnValue(false);
     destroy = vi.fn();
-    capturePage = vi.fn().mockResolvedValue({ toDataURL: () => 'data:image/png;base64,snapshot' });
   }
 
   class MockWebContentsView {
     webContents = new MockWebContents();
     setBounds = vi.fn();
     setVisible = vi.fn();
+    parent: MockView | null = null;
+  }
+
+  class MockView {
+    children: any[] = [];
+    bounds: any;
+    setBounds = vi.fn((bounds) => { this.bounds = bounds; });
+    addChildView = vi.fn((view: any) => { this.children.push(view); view.parent = this; });
+    removeChildView = vi.fn((view: any) => { this.children = this.children.filter((child) => child !== view); view.parent = null; });
   }
 
   return {
+    View: MockView,
     WebContentsView: MockWebContentsView,
     session: {
       fromPartition: vi.fn().mockReturnValue({
@@ -52,10 +62,13 @@ import type { PortalEvent } from '../src/shared/portal-protocol';
 function createMockWindow() {
   const addedViews: unknown[] = [];
   const removedViews: unknown[] = [];
+  const children: any[] = [];
   const win = {
+    isDestroyed: () => false,
     contentView: {
-      addChildView: vi.fn((v) => addedViews.push(v)),
-      removeChildView: vi.fn((v) => removedViews.push(v)),
+      children,
+      addChildView: vi.fn((v) => { addedViews.push(v); children.push(v); }),
+      removeChildView: vi.fn((v) => { removedViews.push(v); const index = children.indexOf(v); if (index >= 0) children.splice(index, 1); }),
     },
   } as unknown as BrowserWindow;
   return { win, addedViews, removedViews };
@@ -81,6 +94,7 @@ describe('PortalManager', () => {
     expect(portal.tabs).toHaveLength(1);
     expect(portal.tabs[0]?.url).toBe('https://duckduckgo.com');
     expect(addedViews).toHaveLength(1);
+    expect((addedViews[0] as any).children).toHaveLength(1);
   });
 
   it('respeita o limite estrito de 3 workspaces simultâneos descartando o mais antigo', () => {
@@ -129,62 +143,45 @@ describe('PortalManager', () => {
     expect(stateWithoutModal?.visible).toBe(true);
   });
 
-  it('captures before hiding the live portal and keeps its full bounds while showing a snapshot', async () => {
+  it('sincroniza bounds relativos à moldura e compõe zoom sem ocultar o portal', async () => {
     const { win, addedViews } = createMockWindow();
     const manager = new PortalManager(() => win, () => {});
     manager.setActiveWorkspace('ws-1');
     manager.createPortal({ portalId: 'p1', workspaceId: 'ws-1', bounds: { x: 100, y: 100, width: 800, height: 500 } });
-    const view = addedViews[0] as any;
-    view.setBounds.mockClear();
-    const order: string[] = [];
-    view.webContents.capturePage.mockImplementation(async () => { order.push('capture'); return { toDataURL: () => 'data:image/png;base64,snapshot' }; });
-    view.setVisible.mockImplementation((visible: boolean) => { order.push(visible ? 'show' : 'hide'); });
+    const frame = addedViews[0] as any;
+    const view = frame.children[0] as any;
+    await manager.syncBounds({
+      portalId: 'p1',
+      workspaceId: 'ws-1',
+      bounds: { x: 20, y: 200, width: 400, height: 250 },
+      frameBounds: { x: 220, y: 154, width: 1180, height: 662 },
+      canvasZoom: 0.5,
+      visible: true,
+    });
 
-    const snapshot = await manager.syncBounds({ portalId: 'p1', workspaceId: 'ws-1', bounds: { x: 90, y: 100, width: 800, height: 500 }, visible: false });
-
-    expect(snapshot).toBe('data:image/png;base64,snapshot');
-    expect(order).toEqual(['capture', 'hide']);
-    expect(view.setBounds).not.toHaveBeenCalled();
-
-    await manager.syncBounds({ portalId: 'p1', workspaceId: 'ws-1', bounds: { x: 50, y: 100, width: 800, height: 500 }, visible: true });
-    expect(view.setBounds).toHaveBeenCalledWith({ x: 50, y: 100, width: 800, height: 500 });
-    expect(order.at(-1)).toBe('show');
-    expect(view.webContents.capturePage).toHaveBeenCalledTimes(1);
+    expect(frame.bounds).toEqual({ x: 220, y: 154, width: 1180, height: 662 });
+    expect(view.setBounds).toHaveBeenLastCalledWith({ x: -200, y: 46, width: 400, height: 250 });
+    expect(view.webContents.setZoomFactor).toHaveBeenLastCalledWith(0.5);
+    expect(view.setVisible).toHaveBeenLastCalledWith(true);
   });
 
-  it('keeps tab views hidden while the portal presentation is a snapshot', async () => {
+  it('cleanup de um portal não zera a moldura compartilhada pelos outros', async () => {
     const { win, addedViews } = createMockWindow();
     const manager = new PortalManager(() => win, () => {});
     manager.setActiveWorkspace('ws-1');
-    manager.createPortal({ portalId: 'p1', workspaceId: 'ws-1', bounds: { x: 100, y: 100, width: 800, height: 500 } });
-    await manager.syncBounds({ portalId: 'p1', workspaceId: 'ws-1', bounds: { x: 100, y: 100, width: 800, height: 500 }, visible: false });
+    manager.createPortal({ portalId: 'p1', workspaceId: 'ws-1' });
+    manager.createPortal({ portalId: 'p2', workspaceId: 'ws-1' });
+    const frame = addedViews[0] as any;
+    const frameBounds = { x: 220, y: 154, width: 1180, height: 662 };
 
-    manager.createTab('p1', 'https://example.com', 'ws-1');
+    await manager.syncBounds({ portalId: 'p1', workspaceId: 'ws-1', bounds: { x: 300, y: 100, width: 400, height: 300 }, frameBounds, canvasZoom: 1, visible: true });
+    await manager.syncBounds({ portalId: 'p1', workspaceId: 'ws-1', bounds: { x: 0, y: 0, width: 0, height: 0 }, frameBounds: { x: 0, y: 0, width: 0, height: 0 }, canvasZoom: 1, visible: false });
 
-    expect(addedViews).toHaveLength(2);
-    expect((addedViews[1] as any).setVisible).toHaveBeenCalledWith(false);
-    expect((addedViews[1] as any).setVisible).not.toHaveBeenCalledWith(true);
-  });
-
-  it('can refresh a snapshot without showing or resizing the hidden view', async () => {
-    const { win, addedViews } = createMockWindow();
-    const manager = new PortalManager(() => win, () => {});
-    manager.setActiveWorkspace('ws-1');
-    manager.createPortal({ portalId: 'p1', workspaceId: 'ws-1', bounds: { x: 100, y: 100, width: 800, height: 500 } });
-    const view = addedViews[0] as any;
-    await manager.syncBounds({ portalId: 'p1', workspaceId: 'ws-1', bounds: { x: 100, y: 100, width: 800, height: 500 }, visible: false });
-    view.setBounds.mockClear();
-    view.setVisible.mockClear();
-
-    const snapshot = await manager.captureSnapshot('p1', 'ws-1');
-
-    expect(snapshot).toBe('data:image/png;base64,snapshot');
-    expect(view.setBounds).not.toHaveBeenCalled();
-    expect(view.setVisible).not.toHaveBeenCalled();
+    expect(frame.bounds).toEqual(frameBounds);
   });
 
   it('destrói portal limpamente sem processos órfãos', () => {
-    const { win, removedViews } = createMockWindow();
+    const { win, addedViews } = createMockWindow();
     const manager = new PortalManager(() => win, () => {});
 
     manager.setActiveWorkspace('ws-1');
@@ -194,7 +191,7 @@ describe('PortalManager', () => {
 
     manager.destroyPortal('p1', 'ws-1');
     expect(manager.getPortalState('p1', 'ws-1')).toBeNull();
-    expect(removedViews).toHaveLength(1);
+    expect((addedViews[0] as any).children).toHaveLength(0);
   });
 
   it('permite criar e alternar abas dentro do mesmo portal', () => {

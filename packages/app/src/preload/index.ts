@@ -41,8 +41,6 @@ const bridge: OrquestraBridge = {
       ipcRenderer.invoke(PORTAL_IPC.ACTION, { portalId, action, workspaceId }),
     syncBounds: (payload) =>
       ipcRenderer.invoke(PORTAL_IPC.SYNC_BOUNDS, { ...payload, workspaceId: payload.workspaceId || selectedWorkspace }),
-    captureSnapshot: (portalId, workspaceId = selectedWorkspace) =>
-      ipcRenderer.invoke(PORTAL_IPC.CAPTURE_SNAPSHOT, { portalId, workspaceId }) as Promise<string | null>,
     setMode: (portalId, mode, presetId, orientation, workspaceId = selectedWorkspace) =>
       ipcRenderer.invoke(PORTAL_IPC.SET_MODE, { portalId, mode, presetId, orientation, workspaceId }),
     createTab: (portalId, initialUrl, workspaceId = selectedWorkspace) =>

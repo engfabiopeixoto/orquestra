@@ -1,31 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { portalNodeBounds, portalPresentation, type PortalRect } from '../src/renderer/src/portal/portal-presentation';
+import { portalBoundsInFrame, portalZoomFactor } from '../src/shared/portal-protocol';
 
-const canvas: PortalRect = { left: 0, top: 0, right: 1200, bottom: 800 };
-const node: PortalRect = { left: 100, top: 100, right: 900, bottom: 600 };
-
-describe('portalPresentation', () => {
-  it('uses the live view only when at 100%, fully visible, unobstructed and stopped', () => {
-    expect(portalPresentation({ nodeRect: node, visibleRect: canvas, zoom: 1, overlapped: false, moving: false })).toBe('live');
+describe('bounds e zoom do portal', () => {
+  it('mantém o retângulo inteiro do nó relativo à moldura, inclusive fora dela', () => {
+    const frame = { x: 220, y: 32, width: 1180, height: 868 };
+    const node = { x: 20, y: 273, width: 798, height: 478 };
+    expect(portalBoundsInFrame(node, frame)).toEqual({ x: -200, y: 241, width: 798, height: 478 });
   });
 
-  it.each([
-    ['zoomed out', { zoom: 0.5 }],
-    ['zoomed in', { zoom: 1.5 }],
-    ['slightly outside visible area', { nodeRect: { ...node, left: -1 } }],
-    ['covered by an overlay', { overlapped: true }],
-    ['moving', { moving: true }],
-  ])('uses a snapshot when %s', (_label, override) => {
-    expect(portalPresentation({ nodeRect: node, visibleRect: canvas, zoom: 1, overlapped: false, moving: false, ...override })).toBe('snapshot');
-  });
-
-  it('keeps full node bounds without intersecting the visible canvas', () => {
-    const partiallyOffscreen: PortalRect = { left: -400, top: 20, right: 400, bottom: 520 };
-    expect(portalNodeBounds(partiallyOffscreen)).toEqual({ x: -400, y: 20, width: 800, height: 500 });
-  });
-
-  it('accepts the terminal zoom tolerance around 100%', () => {
-    expect(portalPresentation({ nodeRect: node, visibleRect: canvas, zoom: 1.001, overlapped: false, moving: false })).toBe('live');
-    expect(portalPresentation({ nodeRect: node, visibleRect: canvas, zoom: 1.0011, overlapped: false, moving: false })).toBe('snapshot');
+  it('compõe o zoom do canvas com o zoom próprio do portal', () => {
+    expect(portalZoomFactor(0.5, 1)).toBe(0.5);
+    expect(portalZoomFactor(1, 1.25)).toBe(1.25);
+    expect(portalZoomFactor(0.5, 1.25)).toBe(0.625);
   });
 });

@@ -66,12 +66,6 @@ export function setupPortalIpc(
     return portalManager.syncBounds(payload);
   });
 
-  ipcMain.handle(PORTAL_IPC.CAPTURE_SNAPSHOT, (event, payload: { portalId: string; workspaceId?: string }) => {
-    validateSender(event);
-    if (!payload || typeof payload.portalId !== 'string') throw new Error('Parâmetros inválidos para captureSnapshot');
-    return portalManager.captureSnapshot(payload.portalId, payload.workspaceId);
-  });
-
   ipcMain.handle(
     PORTAL_IPC.SET_MODE,
     (
