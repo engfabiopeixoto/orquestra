@@ -25,7 +25,8 @@ export interface OrquestraPortalBridge {
   create(opts: PortalCreateOptions): Promise<PortalState>;
   navigate(portalId: string, url: string, workspaceId?: string): Promise<{ ok: boolean }>;
   action(portalId: string, action: PortalNavigationAction, workspaceId?: string): Promise<{ ok: boolean }>;
-  syncBounds(payload: PortalSyncBoundsPayload): Promise<{ ok: boolean }>;
+  syncBounds(payload: PortalSyncBoundsPayload): Promise<string | null>;
+  captureSnapshot(portalId: string, workspaceId?: string): Promise<string | null>;
   setMode(
     portalId: string,
     mode: PortalMode,

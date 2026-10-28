@@ -13,7 +13,8 @@ export interface PortalBridgeApi {
   create(opts: PortalCreateOptions): Promise<PortalState>;
   navigate(portalId: string, url: string, workspaceId?: string): Promise<void>;
   action(portalId: string, action: PortalNavigationAction, workspaceId?: string): Promise<void>;
-  syncBounds(payload: PortalSyncBoundsPayload): Promise<void>;
+  syncBounds(payload: PortalSyncBoundsPayload): Promise<string | null>;
+  captureSnapshot(portalId: string, workspaceId?: string): Promise<string | null>;
   setMode(
     portalId: string,
     mode: PortalMode,
@@ -92,10 +93,12 @@ export function createInMemoryPortalBridge(): PortalBridgeApi {
     },
     async syncBounds(payload) {
       const state = states.get(payload.portalId);
-      if (!state) return;
+      if (!state) return null;
       state.bounds = payload.bounds;
       state.visible = payload.visible;
+      return null;
     },
+    async captureSnapshot() { return null; },
     async setMode(portalId, mode, presetId, orientation) {
       const state = states.get(portalId);
       if (!state) return null;

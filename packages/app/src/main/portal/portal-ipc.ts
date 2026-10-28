@@ -63,8 +63,13 @@ export function setupPortalIpc(
     if (!payload || typeof payload.portalId !== 'string' || !payload.bounds) {
       throw new Error('Parâmetros inválidos para syncBounds');
     }
-    portalManager.syncBounds(payload);
-    return { ok: true };
+    return portalManager.syncBounds(payload);
+  });
+
+  ipcMain.handle(PORTAL_IPC.CAPTURE_SNAPSHOT, (event, payload: { portalId: string; workspaceId?: string }) => {
+    validateSender(event);
+    if (!payload || typeof payload.portalId !== 'string') throw new Error('Parâmetros inválidos para captureSnapshot');
+    return portalManager.captureSnapshot(payload.portalId, payload.workspaceId);
   });
 
   ipcMain.handle(

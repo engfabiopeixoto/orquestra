@@ -267,6 +267,16 @@ export class PortalView {
     if (resized && this.readyForEmulation && this.emulation?.preset.isMobile) this.applyEmulation(this.emulation.preset, this.emulation.orientation);
   }
 
+  async captureSnapshot(): Promise<string | null> {
+    if (this.isDestroyed) return null;
+    try {
+      const image = await this.view.webContents.capturePage();
+      return image.toDataURL();
+    } catch {
+      return null;
+    }
+  }
+
   setVisible(visible: boolean): void {
     if (this.isDestroyed) return;
     this.view.setVisible(visible);

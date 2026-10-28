@@ -20,6 +20,7 @@ vi.mock('electron', () => {
     close = vi.fn();
     isDestroyed = vi.fn().mockReturnValue(false);
     destroy = vi.fn();
+    capturePage = vi.fn().mockResolvedValue({ toDataURL: () => 'data:image/png;base64,snapshot' });
   }
 
   class MockWebContentsView {
@@ -126,6 +127,60 @@ describe('PortalManager', () => {
     manager.setModalState(false);
     const stateWithoutModal = manager.getPortalState('p1', 'ws-1');
     expect(stateWithoutModal?.visible).toBe(true);
+  });
+
+  it('captures before hiding the live portal and keeps its full bounds while showing a snapshot', async () => {
+    const { win, addedViews } = createMockWindow();
+    const manager = new PortalManager(() => win, () => {});
+    manager.setActiveWorkspace('ws-1');
+    manager.createPortal({ portalId: 'p1', workspaceId: 'ws-1', bounds: { x: 100, y: 100, width: 800, height: 500 } });
+    const view = addedViews[0] as any;
+    view.setBounds.mockClear();
+    const order: string[] = [];
+    view.webContents.capturePage.mockImplementation(async () => { order.push('capture'); return { toDataURL: () => 'data:image/png;base64,snapshot' }; });
+    view.setVisible.mockImplementation((visible: boolean) => { order.push(visible ? 'show' : 'hide'); });
+
+    const snapshot = await manager.syncBounds({ portalId: 'p1', workspaceId: 'ws-1', bounds: { x: 90, y: 100, width: 800, height: 500 }, visible: false });
+
+    expect(snapshot).toBe('data:image/png;base64,snapshot');
+    expect(order).toEqual(['capture', 'hide']);
+    expect(view.setBounds).not.toHaveBeenCalled();
+
+    await manager.syncBounds({ portalId: 'p1', workspaceId: 'ws-1', bounds: { x: 50, y: 100, width: 800, height: 500 }, visible: true });
+    expect(view.setBounds).toHaveBeenCalledWith({ x: 50, y: 100, width: 800, height: 500 });
+    expect(order.at(-1)).toBe('show');
+    expect(view.webContents.capturePage).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps tab views hidden while the portal presentation is a snapshot', async () => {
+    const { win, addedViews } = createMockWindow();
+    const manager = new PortalManager(() => win, () => {});
+    manager.setActiveWorkspace('ws-1');
+    manager.createPortal({ portalId: 'p1', workspaceId: 'ws-1', bounds: { x: 100, y: 100, width: 800, height: 500 } });
+    await manager.syncBounds({ portalId: 'p1', workspaceId: 'ws-1', bounds: { x: 100, y: 100, width: 800, height: 500 }, visible: false });
+
+    manager.createTab('p1', 'https://example.com', 'ws-1');
+
+    expect(addedViews).toHaveLength(2);
+    expect((addedViews[1] as any).setVisible).toHaveBeenCalledWith(false);
+    expect((addedViews[1] as any).setVisible).not.toHaveBeenCalledWith(true);
+  });
+
+  it('can refresh a snapshot without showing or resizing the hidden view', async () => {
+    const { win, addedViews } = createMockWindow();
+    const manager = new PortalManager(() => win, () => {});
+    manager.setActiveWorkspace('ws-1');
+    manager.createPortal({ portalId: 'p1', workspaceId: 'ws-1', bounds: { x: 100, y: 100, width: 800, height: 500 } });
+    const view = addedViews[0] as any;
+    await manager.syncBounds({ portalId: 'p1', workspaceId: 'ws-1', bounds: { x: 100, y: 100, width: 800, height: 500 }, visible: false });
+    view.setBounds.mockClear();
+    view.setVisible.mockClear();
+
+    const snapshot = await manager.captureSnapshot('p1', 'ws-1');
+
+    expect(snapshot).toBe('data:image/png;base64,snapshot');
+    expect(view.setBounds).not.toHaveBeenCalled();
+    expect(view.setVisible).not.toHaveBeenCalled();
   });
 
   it('destrói portal limpamente sem processos órfãos', () => {

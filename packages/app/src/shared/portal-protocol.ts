@@ -209,6 +209,7 @@ export const PORTAL_IPC = {
   NAVIGATE: 'orq:portal:navigate',
   ACTION: 'orq:portal:action',
   SYNC_BOUNDS: 'orq:portal:sync-bounds',
+  CAPTURE_SNAPSHOT: 'orq:portal:capture-snapshot',
   SET_MODE: 'orq:portal:set-mode',
   CREATE_TAB: 'orq:portal:create-tab',
   SWITCH_TAB: 'orq:portal:switch-tab',

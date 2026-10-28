@@ -34,6 +34,8 @@ interface InternalPortalRecord {
   zoomLevel: number;
   lastBounds?: { x: number; y: number; width: number; height: number };
   lastVisible?: boolean;
+  presentationLive: boolean;
+  presentationTail: Promise<void>;
 }
 
 export class PortalManager {
@@ -172,6 +174,8 @@ export class PortalManager {
       zoomLevel: 1,
       lastBounds: opts.bounds,
       lastVisible: true,
+      presentationLive: true,
+      presentationTail: Promise.resolve(),
     };
 
     workspaceMap.set(portalId, record);
@@ -233,26 +237,46 @@ export class PortalManager {
     return this.serializePortalState(portal);
   }
 
-  syncBounds(payload: PortalSyncBoundsPayload): void {
+  syncBounds(payload: PortalSyncBoundsPayload): Promise<string | null> {
     const wsId = payload.workspaceId || this.activeWorkspaceId;
     const portal = this.workspaces.get(wsId)?.get(payload.portalId);
-    if (!portal) return;
+    if (!portal) return Promise.resolve(null);
 
-    portal.lastBounds = payload.bounds;
-    portal.lastVisible = payload.visible && !payload.clippedByModal;
-    const activeView = portal.tabs.get(portal.activeTabId);
-    if (!activeView) return;
+    const sync = portal.presentationTail.then(async () => {
+      portal.lastBounds = payload.bounds;
+      portal.lastVisible = payload.visible && !payload.clippedByModal;
+      const activeView = portal.tabs.get(portal.activeTabId);
+      if (!activeView) return null;
 
-    activeView.setBounds(payload.bounds);
+      const shouldBeVisible =
+        wsId === this.activeWorkspaceId &&
+        portal.lastVisible &&
+        !this.isModalOpen &&
+        !this.isWindowMinimized;
 
-    const isCurrentWs = wsId === this.activeWorkspaceId;
-    const shouldBeVisible =
-      isCurrentWs &&
-      portal.lastVisible &&
-      !this.isModalOpen &&
-      !this.isWindowMinimized;
+      if (!shouldBeVisible) {
+        const snapshot = portal.presentationLive ? await activeView.captureSnapshot() : null;
+        activeView.setVisible(false);
+        portal.presentationLive = false;
+        return snapshot;
+      }
 
-    activeView.setVisible(shouldBeVisible);
+      activeView.setBounds(payload.bounds);
+      activeView.setVisible(true);
+      portal.presentationLive = true;
+      return null;
+    });
+    portal.presentationTail = sync.then(() => undefined, () => undefined);
+    return sync;
+  }
+
+  captureSnapshot(portalId: string, workspaceId?: string): Promise<string | null> {
+    const wsId = workspaceId || this.activeWorkspaceId;
+    const portal = this.workspaces.get(wsId)?.get(portalId);
+    if (!portal) return Promise.resolve(null);
+    const capture = portal.presentationTail.then(() => portal.tabs.get(portal.activeTabId)?.captureSnapshot() ?? null);
+    portal.presentationTail = capture.then(() => undefined, () => undefined);
+    return capture;
   }
 
   createTab(portalId: string, initialUrl?: string, workspaceId?: string): PortalState | null {
@@ -306,7 +330,7 @@ export class PortalManager {
     }
 
     if (wsId === this.activeWorkspaceId && !this.isModalOpen && !this.isWindowMinimized) {
-      this.attachView(newView);
+      this.attachView(newView, portal.presentationLive && (portal.lastVisible ?? true));
     }
 
     return this.serializePortalState(portal);
@@ -379,12 +403,12 @@ export class PortalManager {
     }
   }
 
-  private attachView(portalView: PortalView): void {
+  private attachView(portalView: PortalView, visible = true): void {
     const win = this.getWindow();
     if (!win) return;
     try {
       win.contentView.addChildView(portalView.view);
-      portalView.setVisible(true);
+      portalView.setVisible(visible);
     } catch {
       // Ignora erro se já estiver anexada ou destruída
     }
@@ -409,7 +433,7 @@ export class PortalManager {
     for (const portal of workspaceMap.values()) {
       const activeView = portal.tabs.get(portal.activeTabId);
       if (activeView) {
-        this.attachView(activeView);
+        this.attachView(activeView, portal.presentationLive && (portal.lastVisible ?? true));
       }
     }
   }
