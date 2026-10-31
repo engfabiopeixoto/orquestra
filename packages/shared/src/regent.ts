@@ -20,10 +20,14 @@ export const REGENT_COMMANDS: Array<{ usage: string; description: string }> = [
   { usage: 'orq persona list | show <f> | write <f> <texto|-> [--global] | remove <f> [--global]', description: 'gerencia as funções' },
 ];
 
+/** As skills maestri* ficam instaladas para o app Maestri e os agentes as escolheriam aqui também. */
+export const MAESTRI_SKILLS_NOTE = 'As skills maestri* são do app Maestri e não funcionam no Orquestra: não as use; use o orq.';
+
 export function regentGuide(): string {
   return [
     '[orq] Você é regente neste canvas. Comandos:',
     'Este ambiente é o Orquestra. A comunicação com os outros terminais usa o CLI orq, disponível na ferramenta de shell.',
+    MAESTRI_SKILLS_NOTE,
     'Execute orq whoami e orq peers para confirmar sua identidade e os terminais conectados antes de enviar tarefas.',
     ...REGENT_COMMANDS.map((command) => `  ${command.usage}  ${command.description}`),
     'Use orq prompt <terminal> "<tarefa>" para passar tarefas e orq read <terminal> para acompanhar.',
@@ -38,6 +42,7 @@ export function orquestraGuide(opts: { terminalName?: string; regent: boolean; c
     'A integração com o canvas está disponível no servidor MCP orquestra: ferramentas whoami, peers, prompt, read, result, note_list, note_show, note_write, regent_link, regent_new e outras.',
     'Prefira as ferramentas MCP orquestra para comunicação. Elas funcionam mesmo quando o sandbox impede comandos de shell de abrir o pipe local.',
     'Use orq para interagir com terminais e notas deste canvas.',
+    MAESTRI_SKILLS_NOTE,
     'Comece usando as ferramentas whoami e peers do MCP orquestra (equivalentes a orq whoami e orq peers). Use os nomes exatos retornados por peers.',
     'Para enviar uma tarefa: orq prompt <peer> "<texto>" --timeout 8m. Este comando entrega a tarefa e espera a resposta.',
     'Para acompanhar: orq read <peer> --lines 40. Para consultar resposta pendente: orq result <id>.',
