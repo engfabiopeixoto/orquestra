@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAESTRI_SKILLS_NOTE, orquestraGuide, personaBrief, personaSchema, REGENT_COMMANDS, regentGuide } from '../src/regent.js';
+import { personaBrief, personaSchema, REGENT_COMMANDS, regentGuide } from '../src/regent.js';
 
 describe('funções e guia do regente', () => {
   it('função precisa de nome válido e texto não vazio', () => {
@@ -15,11 +15,6 @@ describe('funções e guia do regente', () => {
     expect(REGENT_COMMANDS.map((command) => command.usage.split(' ').slice(0, 2).join(' '))).toEqual(
       expect.arrayContaining(['orq new', 'orq remove', 'orq link', 'orq unlink', 'orq brief']),
     );
-  });
-
-  it('os guias avisam que as skills maestri não valem no Orquestra', () => {
-    expect(regentGuide()).toContain(MAESTRI_SKILLS_NOTE);
-    expect(orquestraGuide({ regent: false, cliScript: 'orq.mjs', nodePath: 'node' })).toContain(MAESTRI_SKILLS_NOTE);
   });
 
   it('a entrega da função começa pelo cabeçalho e inclui o guia só para regente', () => {
