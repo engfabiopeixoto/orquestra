@@ -3,11 +3,10 @@
  * o cobre. Sem este repasse a roda sobre a camada ia para o React Flow, que a trata como rolagem do canvas
  * (panOnScroll): o canvas andava e o histórico do terminal ficava inacessível.
  *
- * Comportamento por agente, com a roda repassada ao xterm (medido no Claude Code 2.1.300 e no agy 1.3.4):
+ * Comportamento por agente: Codex usa scrollback local; demais TUIs recebem eventos de mouse quando ativam tracking.
  * - shell (e agy): buffer normal, sem mouse tracking. O xterm rola o próprio histórico (scrollback).
- * - claude: tela alternativa + mouse tracking. Não há histórico no xterm: ele envia a roda ao agente como
- *   evento de mouse (ESC[<64;col;rowM) e é a interface do Claude que rola a conversa.
- * - codex: não foi possível medir (CLI ausente na máquina de teste); segue o mesmo caminho do xterm.
+ * - claude: buffer normal e sem mouse tracking; o xterm rola o historico local.
+ * - codex: usa --no-alt-screen; o Orquestra rola o scrollback local e mantem a selecao do xterm.
  */
 
 type WheelTerm = { options: { disableStdin?: boolean } };
@@ -63,14 +62,14 @@ export function wheelToLines(event: { deltaY: number; deltaMode: number }, cellH
 }
 
 /**
- * Rola o histórico (buffer normal, sem mouse tracking) direto no buffer do xterm.
+ * Rola o historico direto no buffer normal do xterm.
  * O caminho padrão do xterm move o scrollTop do DOM e depende do evento de scroll para sincronizar o buffer:
  * se a saída do terminal chega no mesmo quadro, com o viewport no fim, ela sobrescreve o deslocamento e a roda se perde.
- * Em tela alternativa ou com mouse tracking (TUIs) devolve false: o xterm envia a roda ao agente.
+ * Em tela alternativa devolve false. O Codex ignora mouse tracking para manter a roda local.
  */
-export function applyWheelScroll(term: ScrollTerm, event: WheelEvent, cellHeight: number, state: { carry: number }): boolean {
+export function applyWheelScroll(term: ScrollTerm, event: WheelEvent, cellHeight: number, state: { carry: number }, ignoreMouseTracking = false): boolean {
   if (event.ctrlKey || event.metaKey || cellHeight <= 0) return false;
-  if (term.buffer.active.type !== 'normal' || term.modes.mouseTrackingMode !== 'none') return false;
+  if (term.buffer.active.type !== 'normal' || (!ignoreMouseTracking && term.modes.mouseTrackingMode !== 'none')) return false;
   event.preventDefault();
   event.stopPropagation();
   const { lines, carry } = wheelToLines(event, cellHeight, term.rows, state.carry);

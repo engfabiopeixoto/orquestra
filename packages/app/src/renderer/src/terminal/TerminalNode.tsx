@@ -20,6 +20,7 @@ import { recoverGroupLayout } from '../groups/helpers';
 import { NodeConnectors } from '../canvas/NodeConnectors';
 import { TerminalFlowPorts } from '../flow/TerminalFlowPorts';
 import { AGENT_FLOW_IO } from '../flow/feature-flags';
+import { encodeWin32KeyEvent, installCodexInputMode } from './codex-input';
 
 export type { TerminalFlowNode };
 
@@ -39,12 +40,13 @@ function cellHeightOf(term: Terminal): number {
   return screen && term.rows > 0 ? screen.clientHeight / term.rows : 0;
 }
 
-function TerminalBody({ name, readOnly }: { name: string; readOnly: boolean }) {
+function TerminalBody({ name, readOnly, agent }: { name: string; readOnly: boolean; agent: string }) {
   const host = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const readOnlyRef = useRef(readOnly);
   readOnlyRef.current = readOnly;
   const wheelState = useRef({ carry: 0 });
+  const win32Input = useRef({ win32Input: false });
   const isFocused = useApp((state) => state.focusedTerminal === name);
 
   useEffect(() => {
@@ -58,6 +60,8 @@ function TerminalBody({ name, readOnly }: { name: string; readOnly: boolean }) {
     });
     termRef.current = term;
     muteTerminalReplies(term);
+    win32Input.current.win32Input = false;
+    if (agent === 'codex') installCodexInputMode(term.parser, win32Input.current);
     // Só nos testes de ponta a ponta: deixa o teste ler o que a interface desenhou.
     if (window.orquestra.testProject) (window.__orqTerms ??= {})[name] = term;
     const fit = new FitAddon();
@@ -76,7 +80,15 @@ function TerminalBody({ name, readOnly }: { name: string; readOnly: boolean }) {
     const pasteClipboard = () => { if (!readOnlyRef.current) void window.orquestra.readClipboard().then((text) => { if (!readOnlyRef.current) term.paste(text); }); };
     term.attachCustomKeyEventHandler((event) => {
       const action = terminalKeyAction(event, term.hasSelection());
-      if (action === 'pass') return true;
+      if (action === 'pass') {
+        if (agent === 'codex' && !readOnlyRef.current && win32Input.current.win32Input && (event.type === 'keydown' || event.type === 'keyup')) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          void api.command('terminal.input', { name, data: encodeWin32KeyEvent(event, event.type === 'keydown') }).catch(() => {});
+          return false;
+        }
+        return true;
+      }
       // Sem isto o navegador dispararia a própria colagem e o texto chegaria duas vezes.
       event.preventDefault();
       if (action === 'copy') copySelection();
@@ -95,7 +107,7 @@ function TerminalBody({ name, readOnly }: { name: string; readOnly: boolean }) {
     const onWheel = (event: WheelEvent) => {
       // Ctrl+roda é zoom do canvas em qualquer zoom: nunca rola o histórico nem chega ao agente.
       if (forwardWheelToCanvas(event, hostElement.closest('.term-node'))) return;
-      applyWheelScroll(term, event, cellHeightOf(term), wheelState.current);
+      applyWheelScroll(term, event, cellHeightOf(term), wheelState.current, agent === 'codex');
     };
     hostElement.addEventListener('wheel', onWheel, { capture: true, passive: false });
     const onFocus = () => appStore.getState().setFocus(name);
@@ -137,7 +149,7 @@ function TerminalBody({ name, readOnly }: { name: string; readOnly: boolean }) {
       if (window.__orqTerms?.[name] === term) delete window.__orqTerms[name];
       term.dispose();
     };
-  }, [name]);
+  }, [name, agent]);
 
   // A camada de zoom (.term-readonly) é irmã do corpo: ela escuta a roda no nó para repassá-la ao xterm.
   useEffect(() => {
@@ -147,13 +159,13 @@ function TerminalBody({ name, readOnly }: { name: string; readOnly: boolean }) {
       if (!(event.target as Element).closest('.term-readonly')) return;
       const term = termRef.current;
       if (!term) return;
-      if (applyWheelScroll(term, event as WheelEvent, cellHeightOf(term), wheelState.current)) return;
+      if (applyWheelScroll(term, event as WheelEvent, cellHeightOf(term), wheelState.current, agent === 'codex')) return;
       forwardWheelToTerminal(term, term.element ?? null, event as WheelEvent);
     };
     // passive: false, senão o preventDefault é ignorado e a página ainda rola.
     node.addEventListener('wheel', onWheel, { passive: false });
     return () => node.removeEventListener('wheel', onWheel);
-  }, []);
+  }, [agent]);
 
   useEffect(() => {
     if (termRef.current) termRef.current.options.disableStdin = readOnly;
@@ -237,7 +249,7 @@ export function TerminalNode({ id, data, selected }: NodeProps<TerminalFlowNode>
         {AGENT_FLOW_IO ? <TerminalFlowPorts name={data.name} /> : null}
         <div className="term-display">
           {view.unloaded ? <div className="terminal-unloaded nodrag nopan" data-testid={`terminal-unloaded-${data.name}`}><span>Agente parado</span><button onClick={() => void reload()}>Recarregar terminal</button></div> : <>
-            <div className={view.blurred ? 'term-content is-blurred' : 'term-content'}><NodeErrorBoundary name={data.name}><TerminalBody key={view.epoch} name={data.name} readOnly={readOnly} /></NodeErrorBoundary></div>
+            <div className={view.blurred ? 'term-content is-blurred' : 'term-content'}><NodeErrorBoundary name={data.name}><TerminalBody key={view.epoch} name={data.name} readOnly={readOnly} agent={view.agent} /></NodeErrorBoundary></div>
             {view.blurred ? <div className="terminal-privacy nodrag nopan"><span>Conteúdo desfocado</span><button onClick={() => void api.command('terminal.presentation', { name: data.name, blurred: false }).then(() => appStore.getState().setTerminalPresentation(data.name, { blurred: false })).catch((error: Error) => appStore.getState().notify('error', error.message))}>Mostrar conteúdo</button></div> : null}
           </>}
         </div>

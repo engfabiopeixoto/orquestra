@@ -30,7 +30,7 @@ export const codexAdapter: AgentAdapter = {
     ];
     return {
       command: 'codex',
-      args: ctx.resumeSessionId ? ['resume', ctx.resumeSessionId, ...config] : config,
+      args: [...(ctx.resumeSessionId ? ['resume', ctx.resumeSessionId] : []), '--no-alt-screen', ...config],
       env: {},
       ...(ctx.resumeSessionId ? { agentSessionId: ctx.resumeSessionId } : {}),
     };
