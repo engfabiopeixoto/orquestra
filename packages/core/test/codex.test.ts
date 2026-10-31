@@ -9,6 +9,7 @@ describe('Codex', () => {
   it('configura hook AfterAgent via stdin, sem notify de payload em argv', () => {
     const launch = codexAdapter.launch({ ...context, hookCommand: (event) => `node "C:/Program Files/Orquestra/orq.mjs" hook codex ${event}` });
     expect(launch.args).toContain('features.hooks=true');
+    expect(launch.args).toContain('--no-alt-screen');
     expect(launch.args.some((arg) => arg.startsWith('hooks.Stop='))).toBe(true);
     expect(launch.args.some((arg) => arg.startsWith('hooks.SessionStart='))).toBe(true);
     expect(launch.args).toContain('notify=[]');

@@ -106,6 +106,14 @@ describe('applyWheelScroll', () => {
     }
   });
 
+  it('Codex pode rolar o scrollback local mesmo se o agente deixou mouse tracking ativo', () => {
+    const term = termWith({ mouse: 'any' });
+    const event = wheel();
+    expect(applyWheelScroll(term, event, 15, { carry: 0 }, true)).toBe(true);
+    expect(term.scrollLines).toHaveBeenCalledWith(-8);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
   it('deixa Ctrl e Meta (zoom) e altura de célula desconhecida para o comportamento padrão', () => {
     const term = termWith();
     expect(applyWheelScroll(term, wheel({ ctrlKey: true }), 15, { carry: 0 })).toBe(false);
