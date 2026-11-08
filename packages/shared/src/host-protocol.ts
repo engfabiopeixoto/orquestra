@@ -54,12 +54,8 @@ const groupNamed = z.object({ id: z.string().uuid() });
 const groupAssignmentSchema = z.object({ member: groupMemberSchema, groupId: z.string().uuid().nullable() });
 export const groupLayoutSchema = z.object({ groups: z.array(canvasGroupSchema), layout: z.record(rectSchema) });
 export type GroupLayout = z.infer<typeof groupLayoutSchema>;
-export const subscriptionUsageSchema = z.object({
-  checkedAt: z.string(),
-  windows: z.array(z.object({ label: z.string(), usedPercent: z.number().finite().min(0).max(100), resetsAt: z.string().nullable() })),
-  credits: z.string().nullable(),
-  details: z.array(z.object({ label: z.string(), value: z.string() })).default([]),
-});
+import { subscriptionUsageSchema, type SubscriptionUsage } from './usage-schema.js';
+export { subscriptionUsageSchema, type SubscriptionUsage };
 export const projectFileSchema = z.object({
   name: z.string(), path: z.string(), kind: z.enum(['directory', 'file', 'link']),
   change: z.enum(['none', 'added', 'modified', 'removed']),

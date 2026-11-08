@@ -3,6 +3,9 @@ import { errorCodeSchema, OrqError } from './errors.js';
 import { terminalNameSchema } from './names.js';
 import { personaScopeSchema } from './regent.js';
 import { browserMethodSchemas, browserNodeSchema } from './browser.js';
+import { usageParamsSchema, usageResultSchema } from './usage-schema.js';
+
+export * from './usage-schema.js';
 
 export const PROTOCOL_VERSION = 1;
 
@@ -16,6 +19,10 @@ const pending = z.object({ status: z.literal('pending'), askId: z.string() });
 export const methodSchemas = {
   ...browserMethodSchemas,
   whoami: { params: empty, result: z.object({ name: z.string(), agent: z.string() }) },
+  usage: {
+    params: usageParamsSchema,
+    result: usageResultSchema,
+  },
   peers: {
     params: empty,
     result: z.object({

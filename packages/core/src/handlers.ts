@@ -1,4 +1,4 @@
-import { OrqError, type MethodName, type Params, type Result } from '@orquestra/shared';
+import { OrqError, type MethodName, type Params, type Result, type UsageProvider, type ProviderUsageResult, type SubscriptionUsage } from '@orquestra/shared';
 import type { AskBroker } from './ask-broker.js';
 import type { Note, NoteStore } from './notes.js';
 import type { Caller, Dispatch } from './pipe-server.js';
@@ -30,6 +30,7 @@ export type HandlerDeps = {
   regent?: RegentHandler;
   browser?: BrowserHandler;
   browserNodes?: () => BrowserNode[];
+  usage?: (provider: UsageProvider) => Promise<SubscriptionUsage>;
 };
 
 type Handlers = { [M in MethodName]: (params: Params<M>, caller: Caller, signal: AbortSignal) => Promise<Result<M>> };
@@ -81,6 +82,22 @@ export function createHandlers(deps: HandlerDeps): Dispatch {
     whoami: async (_params, caller) => {
       const session = requireSession(caller.session);
       return { name: session.name, agent: session.adapter.kind };
+    },
+    usage: async (params) => {
+      if (!deps.usage) throw new OrqError('APP_UNAVAILABLE', 'A consulta de uso precisa do app do Orquestra.');
+      const providersToQuery: UsageProvider[] = params.provider ? [params.provider] : ['claude', 'codex', 'agy'];
+      const results = await Promise.all(
+        providersToQuery.map(async (provider): Promise<ProviderUsageResult> => {
+          try {
+            const usage = await deps.usage!(provider);
+            return { provider, usage, error: null };
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            return { provider, usage: null, error: message };
+          }
+        }),
+      );
+      return { providers: results };
     },
     peers: async (_params, caller) => ({
       peers: deps.topology.neighbors(caller.session, 'terminal').map((name) => {

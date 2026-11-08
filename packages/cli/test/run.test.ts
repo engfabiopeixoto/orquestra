@@ -292,5 +292,65 @@ describe('orq', () => {
     expect(result.stderr).toContain('orq unlink');
     expect(result.stderr).toContain('orq brief');
     expect(result.stderr).toContain('orq persona');
+    expect(result.stderr).toContain('usage [claude|codex|agy]');
+  });
+
+  it('usage sem argumento consulta todas as assinaturas e exibe em texto', async () => {
+    let calledMethod: string | undefined;
+    let calledParams: unknown;
+    const result = await cli(['usage'], async (method, params) => {
+      calledMethod = method;
+      calledParams = params;
+      return {
+        providers: [
+          { provider: 'claude', usage: { checkedAt: '2026-11-08T12:00:00Z', windows: [{ label: '5 h', usedPercent: 82, resetsAt: null }], credits: null, details: [] }, error: null },
+          { provider: 'codex', usage: { checkedAt: '2026-11-08T12:00:00Z', windows: [{ label: '7 dias', usedPercent: 40, resetsAt: null }], credits: null, details: [] }, error: null },
+          { provider: 'agy', usage: null, error: 'Falha temporária' },
+        ],
+      };
+    });
+    expect(result.code).toBe(0);
+    expect(calledMethod).toBe('usage');
+    expect(calledParams).toEqual({});
+    expect(result.stdout).toContain('claude  sessão 5h: 82% usado');
+    expect(result.stdout).toContain('codex   semanal: 40% usado');
+    expect(result.stdout).toContain('agy     erro: Falha temporária');
+  });
+
+  it('usage com argumento consulta apenas o provedor especificado', async () => {
+    let calledParams: unknown;
+    const result = await cli(['usage', 'claude'], async (method, params) => {
+      expect(method).toBe('usage');
+      calledParams = params;
+      return {
+        providers: [
+          { provider: 'claude', usage: { checkedAt: '2026-11-08T12:00:00Z', windows: [{ label: '5 h', usedPercent: 10, resetsAt: null }], credits: null, details: [] }, error: null },
+        ],
+      };
+    });
+    expect(result.code).toBe(0);
+    expect(calledParams).toEqual({ provider: 'claude' });
+    expect(result.stdout).toBe('claude  sessão 5h: 10% usado\n');
+  });
+
+  it('usage com provedor inválido falha com erro de uso', async () => {
+    const result = await cli(['usage', 'invalido'], async () => ({}));
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('Provedor desconhecido');
+  });
+
+  it('usage --json devolve os dados estruturados', async () => {
+    const data = {
+      providers: [
+        { provider: 'codex', usage: { checkedAt: '2026-11-08T12:00:00Z', windows: [{ label: '5 h', usedPercent: 5, resetsAt: null }], credits: 'Ilimitado', details: [] }, error: null },
+      ],
+    };
+    const result = await cli(['usage', 'codex', '--json'], async (method, params) => {
+      expect(method).toBe('usage');
+      expect(params).toEqual({ provider: 'codex' });
+      return data;
+    });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual(data);
   });
 });

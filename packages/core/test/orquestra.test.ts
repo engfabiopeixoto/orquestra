@@ -400,6 +400,46 @@ describe('Orquestra (PTY falso)', () => {
     expect(events).toContainEqual({ type: 'turn', name: 'A', owner: 'user', outcome: 'ended' });
     expect(events).toContainEqual({ type: 'turn', name: 'A', owner: 'broker', outcome: 'failed' });
   });
+
+  it('usage consulta assinaturas pelo host e tolera falha de um provedor', async () => {
+    const usageCalls: string[] = [];
+    const dummyUsage = { checkedAt: '2026-11-08T12:00:00Z', windows: [], credits: null, details: [] };
+    const { orq } = await setupOrquestra({
+      usage: async (provider) => {
+        usageCalls.push(provider);
+        if (provider === 'agy') throw new Error('Agy indisponível');
+        return dummyUsage;
+      },
+    });
+    orq.createTerminal({ name: 'A', agent: 'fake', cwd: tmpdir() });
+
+    // Consulta geral (todas as 3 assinaturas)
+    const all = await orq.dispatchForTest('usage', {}, { session: 'A' }, new AbortController().signal);
+    expect(usageCalls).toEqual(['claude', 'codex', 'agy']);
+    expect(all).toEqual({
+      providers: [
+        { provider: 'claude', usage: dummyUsage, error: null },
+        { provider: 'codex', usage: dummyUsage, error: null },
+        { provider: 'agy', usage: null, error: 'Agy indisponível' },
+      ],
+    });
+
+    // Consulta específica de um provedor
+    usageCalls.length = 0;
+    const single = await orq.dispatchForTest('usage', { provider: 'claude' }, { session: 'A' }, new AbortController().signal);
+    expect(usageCalls).toEqual(['claude']);
+    expect(single).toEqual({
+      providers: [{ provider: 'claude', usage: dummyUsage, error: null }],
+    });
+  });
+
+  it('usage sem callback no orquestra falha com APP_UNAVAILABLE', async () => {
+    const { orq } = await setupOrquestra();
+    orq.createTerminal({ name: 'A', agent: 'fake', cwd: tmpdir() });
+    await expect(orq.dispatchForTest('usage', {}, { session: 'A' }, new AbortController().signal)).rejects.toMatchObject({
+      code: 'APP_UNAVAILABLE',
+    });
+  });
 });
 
 describe('conversa do Claude em segundo plano (daemon)', () => {
