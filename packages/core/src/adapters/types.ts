@@ -1,11 +1,12 @@
 import type { ScreenRule } from '../screen-watcher.js';
 
 export type HookSignal =
-  | { kind: 'turn-end'; text: string | null; transcriptPath: string | null; agentSessionId: string | null; completionId?: string }
+  /** model: modelo que o agente informa no hook (o agy manda modelName no Stop). */
+  | { kind: 'turn-end'; text: string | null; transcriptPath: string | null; agentSessionId: string | null; completionId?: string; model?: string }
   | { kind: 'activity' }
   | { kind: 'turn-failed' }
   | { kind: 'waiting'; detail: string }
-  | { kind: 'session-start'; agentSessionId: string | null }
+  | { kind: 'session-start'; agentSessionId: string | null; model?: string }
   | { kind: 'ignored' };
 
 export type ScreenSignal = 'waiting' | 'interrupted' | 'failed' | 'turn-end';
@@ -22,6 +23,8 @@ export type LaunchContext = {
   /** Identidade e papel que continuam disponíveis ao retomar o terminal. */
   terminalName?: string;
   regente?: boolean;
+  /** Modelo escolhido na tag do terminal: o adapter passa na flag de modelo do CLI. */
+  model?: string | null;
 };
 
 /** agentSessionId: id já conhecido no lançamento (o Claude nasce com --session-id). */

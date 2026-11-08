@@ -207,6 +207,7 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
 
   const info = (session: Session): TerminalInfo => {
     const descriptor = orquestra.describeTerminals().find((terminal) => terminal.name === session.name);
+    const model = orquestra.modelOf(session.name);
     return {
       id: session.id,
       name: session.name,
@@ -219,6 +220,7 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
       regente: descriptor?.regente ?? false,
       monitor: descriptor?.monitor ?? false,
       ...(descriptor?.unloaded ? { unloaded: true } : {}),
+      ...(model ? { model } : {}),
       ...project?.state.presentation(session.name),
     };
   };
@@ -252,6 +254,7 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
     regente?: boolean;
     persona?: string;
     monitor?: boolean;
+    model?: string | null;
   }): Promise<Session> {
     const current = requireProject();
     if (input.agent === 'agy') {
@@ -274,6 +277,7 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
       regente: input.regente,
       persona: input.persona,
       monitor: input.monitor,
+      model: input.model,
     });
     recordPids();
     changed();
@@ -431,6 +435,10 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
       if (event.type === 'answered') return opts.send({ kind: 'event', event: { type: 'ask.answered', askId: event.askId, from: event.asker, target: event.target } });
       if (event.type === 'notice') return opts.send({ kind: 'event', event: { type: 'terminal.notice', name: event.name, message: event.message } });
       if (event.type === 'agent-session') return changed();
+      if (event.type === 'model') {
+        changed();
+        return opts.send({ kind: 'event', event: { type: 'terminal.model', name: event.name, model: event.model } });
+      }
       if (event.type === 'note') return onAgentNote(event.note, event.createdBy, event.renamedFrom);
       if (event.type === 'removed') {
         batcher.drop(event.name);
@@ -530,6 +538,7 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
           regente: terminal.regente,
           persona: terminal.persona,
           monitor: terminal.monitor,
+          model: terminal.model,
           unloaded: terminal.unloaded,
           sessionDirs: terminal.sessionDirs,
         });
@@ -766,7 +775,7 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
         newName = name.slice(0, 40 - suffix.length) + suffix;
         if (!orquestra.topology.kindOf(newName)) break;
       }
-      const session = await createTerminalFor({ name: newName, agent: source.agent as HostAgent, cwd: source.cwd, args: [...source.args], resume: source.resume, regente: source.regente, persona: source.persona ?? undefined, monitor: source.monitor });
+      const session = await createTerminalFor({ name: newName, agent: source.agent as HostAgent, cwd: source.cwd, args: [...source.args], resume: source.resume, regente: source.regente, persona: source.persona ?? undefined, monitor: source.monitor, model: source.model });
       const origin = current.state.rectOf(name) ?? { x: 80, y: 80, ...TERMINAL_SIZE };
       const size = { width: origin.width, height: origin.height };
       const rect = { ...placeBeside(origin, Object.values(current.state.layout()), size), ...size };
@@ -776,6 +785,10 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
       else if (source.regente && session.adapter.acceptsPrompts) orquestra.brief(newName, 'Orquestra', regentGuide());
       changed();
       return { info: info(session), rect };
+    },
+    'terminal.model': async ({ name, model }) => {
+      opts.log.info({ terminal: name, method: 'terminal.model', model }, 'comando da interface');
+      return info(await orquestra.setModel(name, model));
     },
     'terminal.rename': async ({ name, newName }) => {
       const session = orquestra.renameTerminal(name, newName);

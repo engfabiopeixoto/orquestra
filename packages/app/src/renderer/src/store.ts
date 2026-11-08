@@ -24,6 +24,8 @@ export type TerminalView = {
   unloaded?: boolean;
   blurred?: boolean;
   locked?: boolean;
+  /** Modelo escolhido na tag e modelo que o agente informa; ausente no shell. */
+  model?: TerminalInfo['model'];
   position: Position;
   size: Size;
   notice: string | null;
@@ -204,6 +206,9 @@ export function createAppStore() {
         const view = get().terminals[event.name];
         // Mensagem vazia limpa o aviso (ex.: a conversa voltou do segundo plano).
         if (view) set({ terminals: { ...get().terminals, [event.name]: { ...view, notice: event.message || null } } });
+      } else if (event.type === 'terminal.model') {
+        const view = get().terminals[event.name];
+        if (view) set({ terminals: { ...get().terminals, [event.name]: { ...view, model: event.model } } });
       } else if (event.type === 'notice') {
         get().notify(event.level, event.message);
       } else if (event.type === 'note.changed') {

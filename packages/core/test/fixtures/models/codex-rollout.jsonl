@@ -1,0 +1,5 @@
+{"timestamp":"2026-10-08T10:00:00.000Z","type":"session_meta","payload":{"id":"22222222-2222-4222-8222-222222222222","cwd":"C:\\workspace\\sample","model_provider":"openai"}}
+{"timestamp":"2026-10-08T10:00:01.000Z","type":"turn_context","payload":{"turn_id":"t1","cwd":"C:\\workspace\\sample","model":"gpt-6.1-sol","effort":"medium"}}
+{"timestamp":"2026-10-08T10:00:05.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1"}}
+{"timestamp":"2026-10-08T10:05:01.000Z","type":"turn_context","payload":{"turn_id":"t2","cwd":"C:\\workspace\\sample","model":"gpt-6-luna","effort":"low"}}
+{"timestamp":"2026-10-08T10:05:09.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"t2"}}

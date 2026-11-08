@@ -1,13 +1,14 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { defaultMonitor, OrqError, reservedArgError, terminalNameSchema, type QueueEntry, type SessionState } from '@orquestra/shared';
+import { defaultMonitor, isModelAgent, modelCommand, modelNameSchema, OrqError, reservedArgError, terminalModel, terminalNameSchema, type ModelObservation, type QueueEntry, type SessionState, type TerminalModel } from '@orquestra/shared';
+import { findClaudeTranscript, readClaudeModel, readCodexModel } from './agent-model.js';
 import type { AgentAdapter } from './adapters/types.js';
 import { AskBroker } from './ask-broker.js';
 import { CLAUDE_CLEAR_INPUT, ClaudeStatusWatcher } from './adapters/claude-status.js';
 import { BackgroundJobWatcher, backgroundJobNotice, claudeConfigDir, findBackgroundJob, type ListPipes } from './background-job.js';
 import { childEnv, prependPath } from './env.js';
-import { codexRolloutMatchesTerminal } from './codex-rollout-watcher.js';
+import { codexRolloutMatchesTerminal, findCodexRollout } from './codex-rollout-watcher.js';
 import { createHandlers, type RegentHandler, type RegentMethod } from './handlers.js';
 import type { Logger } from './log.js';
 import { NoteStore, USER_AUTHOR, type Note } from './notes.js';
@@ -25,8 +26,8 @@ const DRAFT_NOTICE = 'Há um rascunho na caixa de entrada; envie ou apague para 
 /** Quantos lançamentos por terminal entram no vínculo com o job em segundo plano. */
 const MAX_SESSION_DIRS = 20;
 
-export type TerminalDescriptor = { id: string; name: string; agent: string; cwd: string; args: string[]; resume: boolean; agentSessionId: string | null; regente: boolean; persona: string | null; monitor: boolean; unloaded?: boolean; /** Pastas de sessão de cada lançamento (vínculo com o job em segundo plano); não vai para o workspace. */ sessionDirs?: string[] };
-export type CreateTerminalInput = { name: string; agent: string; cwd: string; id?: string; args?: string[]; resume?: boolean; agentSessionId?: string | null; regente?: boolean; persona?: string | null; monitor?: boolean; unloaded?: boolean; sessionDirs?: string[] };
+export type TerminalDescriptor = { id: string; name: string; agent: string; cwd: string; args: string[]; resume: boolean; agentSessionId: string | null; regente: boolean; persona: string | null; monitor: boolean; /** Modelo escolhido na tag; null deixa o padrão do CLI. */ model?: string | null; unloaded?: boolean; /** Pastas de sessão de cada lançamento (vínculo com o job em segundo plano); não vai para o workspace. */ sessionDirs?: string[] };
+export type CreateTerminalInput = { name: string; agent: string; cwd: string; id?: string; args?: string[]; resume?: boolean; agentSessionId?: string | null; regente?: boolean; persona?: string | null; monitor?: boolean; model?: string | null; unloaded?: boolean; sessionDirs?: string[] };
 export type TerminalChanges = { newName?: string; cwd?: string; args?: string[]; resume?: boolean; regente?: boolean; monitor?: boolean };
 
 export type OrquestraOptions = {
@@ -42,6 +43,10 @@ export type OrquestraOptions = {
   claudeDir?: string;
   /** Intervalo da verificação periódica dos jobs em segundo plano (padrão 5 s). */
   backgroundJobPollMs?: number;
+  /** Pasta do Codex (rollouts com o modelo de cada turno). Padrão: CODEX_HOME ou ~/.codex. */
+  codexHome?: string;
+  /** Espera depois do fim do turno antes de ler o modelo na transcrição, gravada de forma assíncrona (padrão 1 s). */
+  modelReadDelayMs?: number;
   /** Intervalo da leitura do status da sessão do Claude enquanto há turno em curso (padrão 200 ms). */
   claudeStatusPollMs?: number;
   /** Tolerância ao hook de fim de turno depois que o status do Claude volta a idle (padrão 2,5 s). */
@@ -64,6 +69,8 @@ export type OrquestraEvent =
   | { type: 'removed'; name: string }
   | { type: 'agent-session'; name: string }
   | { type: 'notice'; name: string; message: string }
+  /** Modelo escolhido ou modelo efetivo do agente mudou. */
+  | { type: 'model'; name: string; model: TerminalModel }
   /** Nota criada ou alterada pelo orq; createdBy é o terminal autor quando a nota nasce. */
   | { type: 'note'; note: Note; createdBy: string | null; renamedFrom?: string }
   | { type: 'turn'; name: string; owner: TurnOwner; outcome: 'ended' | 'failed' };
@@ -85,6 +92,10 @@ export type Orquestra = {
   unloadTerminal(name: string): Promise<Session>;
   /** Edita nome, pasta, argumentos e retomada de um terminal, relançando quando preciso. */
   updateTerminal(name: string, changes: TerminalChanges): Promise<Session>;
+  /** Troca o modelo com o /model do agente (sem reiniciar) e guarda a escolha para os próximos lançamentos. */
+  setModel(name: string, model: string): Promise<Session>;
+  /** Modelo escolhido e efetivo do terminal; null no shell. */
+  modelOf(name: string): TerminalModel | null;
   queue(name: string): QueueEntry[];
   connect(a: string, b: string): void;
   disconnect(a: string, b: string): void;
@@ -116,7 +127,9 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
   const host = opts.ptyHost ?? nodePtyHost;
   const topology = new Topology();
   const notes = new NoteStore();
-  const sessions = new Map<string, { session: Session; token: string; stopOutput: () => void; stopWatcher: () => void }>();
+  /** model: quando a escolha valeu (lançamento ou /model) e o último modelo que o agente informou. */
+  type ModelTrack = { chosenAt: number; observed: ModelObservation | null };
+  const sessions = new Map<string, { session: Session; token: string; stopOutput: () => void; stopWatcher: () => void; model: ModelTrack }>();
   const claudeDir = opts.claudeDir ?? claudeConfigDir();
   const tokens = new Map<string, string>();
   const broker = new AskBroker({
@@ -165,6 +178,7 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
     if (!adapter) throw new OrqError('USAGE', `Tipo de agente desconhecido: ${input.agent}. Use ${Object.keys(opts.adapters).join(', ')}.`);
     const reserved = reservedArgError(input.agent, input.args ?? []);
     if (reserved) throw new OrqError('USAGE', reserved);
+    if (input.model != null) parseModel(input.agent, input.model);
     // Sem esta checagem, o ConPTY falha com "Cannot create process, error code: 267".
     if (!existsSync(input.cwd) || !statSync(input.cwd).isDirectory()) {
       throw new OrqError('USAGE', `A pasta ${input.cwd} não existe. Crie a pasta ou escolha outra.`);
@@ -200,6 +214,7 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
       opts.log.warn({ session: input.name, sessionId: resumeSessionId }, 'sessão presa a um job em segundo plano; terminal não retomado para não abrir uma segunda cópia');
     }
     const token = randomBytes(32).toString('hex');
+    const chosenModel = isModelAgent(adapter.kind) ? (input.model ?? null) : null;
     // Pasta por lançamento: o id do terminal se repete a cada relançamento.
     const sessionDir = join(opts.dataDir, 'sessions', randomUUID());
     mkdirSync(sessionDir, { recursive: true });
@@ -213,6 +228,7 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
       terminalName: input.name,
       terminalId: id,
       regente: input.regente ?? false,
+      model: chosenModel,
     });
     const args = input.args ?? [];
     const env = prependPath({ ...childEnv(process.env), ...launch.env, ORQ_PIPE: opts.pipePath, ORQ_TOKEN: token }, binDir);
@@ -253,15 +269,103 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
     if (resumeSessionId && !unloaded) watchResume(session, Date.now(), sessionDirs);
     const stopJobWatcher = adapter.kind === 'claude' ? watchBackgroundJob(session, log, sessionDirs) : () => {};
     const stopStatusWatcher = adapter.kind === 'claude' && !unloaded ? watchClaudeStatus(session, log) : () => {};
-    const stopWatcher = () => { stopJobWatcher(); stopStatusWatcher(); };
-    sessions.set(input.name, { session, token, stopOutput, stopWatcher });
+    const model: ModelTrack = { chosenAt: Date.now(), observed: null };
+    const stopModelWatcher = unloaded ? () => {} : watchModel(session, model);
+    const stopWatcher = () => { stopJobWatcher(); stopStatusWatcher(); stopModelWatcher(); };
+    sessions.set(input.name, { session, token, stopOutput, stopWatcher, model });
     const regente = input.regente ?? false;
     const persona = input.persona ?? null;
     const monitor = input.monitor ?? defaultMonitor(input.agent);
-    configs.set(input.name, { id, agent: input.agent, cwd: input.cwd, args, resume, agentSessionId, regente, persona, monitor, sessionDirs, ...(unloaded ? { unloaded: true } : {}) });
+    configs.set(input.name, { id, agent: input.agent, cwd: input.cwd, args, resume, agentSessionId, regente, persona, monitor, model: chosenModel, sessionDirs, ...(unloaded ? { unloaded: true } : {}) });
     if (!unloaded) tokens.set(token, input.name);
-    log.info({ cwd: input.cwd, resumeSessionId, args }, 'terminal criado');
+    log.info({ cwd: input.cwd, resumeSessionId, args, model: chosenModel }, 'terminal criado');
     return session;
+  }
+
+  function parseModel(agent: string, model: string): string {
+    if (!isModelAgent(agent)) throw new OrqError('USAGE', 'O shell não tem modelo.');
+    const parsed = modelNameSchema.safeParse(model);
+    if (!parsed.success) throw new OrqError('USAGE', `Modelo inválido: ${parsed.error.issues[0]?.message ?? model}`);
+    return parsed.data;
+  }
+
+  function modelOf(name: string): TerminalModel | null {
+    const entry = sessions.get(name);
+    const config = configs.get(name);
+    if (!entry || !config || !isModelAgent(config.agent)) return null;
+    return terminalModel(config.agent, config.model ?? null, entry.model.chosenAt, entry.model.observed);
+  }
+
+  const emitModel = (name: string) => {
+    const model = modelOf(name);
+    if (model) emit({ type: 'model', name, model });
+  };
+
+  /**
+   * Modelo efetivo: o Claude informa no SessionStart e grava o modelo de cada resposta na transcrição; o Codex grava
+   * turn_context.model no rollout; o agy manda modelName no Stop. As transcrições são lidas quando o turno acaba.
+   */
+  function watchModel(session: Session, track: ModelTrack): () => void {
+    const kind = session.adapter.kind;
+    if (!isModelAgent(kind)) return () => {};
+    let stopped = false;
+    let timer: NodeJS.Timeout | undefined;
+    let transcript: { sessionId: string; path: string } | null = null;
+    const observe = (observed: ModelObservation) => {
+      const last = track.observed;
+      if (stopped || (last && (observed.at < last.at || (observed.at === last.at && observed.model === last.model)))) return;
+      track.observed = observed;
+      emitModel(session.name);
+    };
+    const locate = (sessionId: string): string | null => {
+      if (transcript?.sessionId === sessionId) return transcript.path;
+      const path = kind === 'claude' ? findClaudeTranscript(claudeDir, session.cwd, sessionId) : findCodexRollout(sessionId, opts.codexHome);
+      if (path) transcript = { sessionId, path };
+      return path;
+    };
+    const readFile = async () => {
+      const sessionId = session.agentSessionId;
+      const path = sessionId ? locate(sessionId) : null;
+      if (!path) return;
+      try {
+        const observed = kind === 'claude' ? await readClaudeModel(path) : await readCodexModel(path);
+        if (observed) observe(observed);
+      } catch (error) {
+        opts.log.warn({ err: error, session: session.name, path }, 'falha ao ler o modelo na transcrição');
+      }
+    };
+    const schedule = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => void readFile(), opts.modelReadDelayMs ?? 1000);
+    };
+    const onHookModel = (model: string) => observe({ model, at: Date.now() });
+    const onState = (state: SessionState) => { if (state === 'idle') schedule(); };
+    session.on('agentModel', onHookModel);
+    if (kind !== 'agy') {
+      session.on('state', onState);
+      // Retomada: a transcrição anterior já diz o último modelo usado.
+      void readFile();
+    }
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+      session.off('agentModel', onHookModel);
+      session.off('state', onState);
+    };
+  }
+
+  async function setModel(name: string, model: string): Promise<Session> {
+    const entry = sessions.get(name);
+    const config = configs.get(name);
+    if (!entry || !config) throw new OrqError('NOT_FOUND', `Terminal ${name} não existe.`);
+    const chosen = parseModel(config.agent, model);
+    // Parado: só guarda; a flag de modelo aplica a escolha quando o terminal for recarregado.
+    if (!config.unloaded && entry.session.state !== 'exited') await entry.session.sendCommand(modelCommand(chosen));
+    config.model = chosen;
+    entry.model.chosenAt = Date.now();
+    opts.log.info({ session: name, model: chosen }, 'modelo do terminal trocado');
+    emitModel(name);
+    return entry.session;
   }
 
   /**
@@ -334,7 +438,7 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
     const neighbors = topology.neighbors(name);
     await removeTerminal(name, { announce: false });
     try {
-      createTerminal({ name, agent: config.agent, cwd: config.cwd, id: config.id, args: config.args, resume: config.resume, agentSessionId: null, regente: config.regente, persona: config.persona, monitor: config.monitor, sessionDirs: config.sessionDirs });
+      createTerminal({ name, agent: config.agent, cwd: config.cwd, id: config.id, args: config.args, resume: config.resume, agentSessionId: null, regente: config.regente, persona: config.persona, monitor: config.monitor, model: config.model, sessionDirs: config.sessionDirs });
       for (const neighbor of neighbors) if (topology.kindOf(neighbor)) topology.connect(name, neighbor);
       emit({ type: 'notice', name, message: 'a sessão anterior não pôde ser retomada. O terminal começou uma sessão nova.' });
       emitState(name);
@@ -386,7 +490,7 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
     await removeTerminal(name, { announce: false });
     let session: Session;
     try {
-      session = createTerminal({ name, agent: config.agent, cwd: config.cwd, id: config.id, args: config.args, resume: config.resume, agentSessionId: config.agentSessionId, regente: config.regente, persona: config.persona, monitor: config.monitor, sessionDirs: config.sessionDirs, unloaded: keepUnloaded });
+      session = createTerminal({ name, agent: config.agent, cwd: config.cwd, id: config.id, args: config.args, resume: config.resume, agentSessionId: config.agentSessionId, regente: config.regente, persona: config.persona, monitor: config.monitor, model: config.model, sessionDirs: config.sessionDirs, unloaded: keepUnloaded });
     } catch (error) {
       // O terminal antigo já saiu: sem este aviso a interface ficaria com um nó que não existe mais.
       emit({ type: 'removed', name });
@@ -462,6 +566,7 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
         regente: config.regente,
         persona: config.persona,
         monitor: config.monitor,
+        ...(config.model ? { model: config.model } : {}),
         // Só o Claude tem conversa em segundo plano: os outros agentes não precisam do vínculo.
         ...(config.agent === 'claude' && config.sessionDirs?.length ? { sessionDirs: [...config.sessionDirs] } : {}),
         ...(config.unloaded ? { unloaded: true } : {}),
@@ -477,6 +582,8 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
     restartTerminal,
     unloadTerminal,
     updateTerminal,
+    setModel,
+    modelOf,
     queue: (name) => broker.list(name),
     connect: (a, b) => topology.connect(a, b),
     disconnect: (a, b) => topology.disconnect(a, b),

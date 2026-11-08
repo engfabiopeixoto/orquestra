@@ -118,46 +118,45 @@ type Candidate = {
   pendingEvents: Array<{ kind: 'task-started'; turnId: string } | { kind: 'task-complete'; turnId: string; answer: string | null } | { kind: 'turn-aborted'; turnId: string; reason: string | null }>;
 };
 
-/** Valida cwd sempre e o id terminal quando o rollout já tem a marcação estável. */
-export function codexRolloutMatchesTerminal(sessionId: string, cwd: string, terminalId: string, codexHome = process.env.CODEX_HOME ?? join(homedir(), '.codex')): boolean | null {
+/** Arquivo de rollout da thread (sessions/AAAA/MM/DD/rollout-*-<id>.jsonl), ou null se não existe. */
+export function findCodexRollout(sessionId: string, codexHome = process.env.CODEX_HOME ?? join(homedir(), '.codex')): string | null {
   const sessionsDir = join(codexHome, 'sessions');
-  let years;
-  try { years = readdirSync(sessionsDir, { withFileTypes: true }); } catch { return null; }
-  for (const year of years) {
-    if (!year.isDirectory()) continue;
-    let months;
-    try { months = readdirSync(join(sessionsDir, year.name), { withFileTypes: true }); } catch { continue; }
-    for (const month of months) {
-      if (!month.isDirectory()) continue;
-      let days;
-      try { days = readdirSync(join(sessionsDir, year.name, month.name), { withFileTypes: true }); } catch { continue; }
-      for (const day of days) {
-        if (!day.isDirectory()) continue;
-        const dayPath = join(sessionsDir, year.name, month.name, day.name);
+  const dirs = (path: string) => {
+    try { return readdirSync(path, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => join(path, entry.name)); } catch { return []; }
+  };
+  for (const year of dirs(sessionsDir)) {
+    for (const month of dirs(year)) {
+      for (const dayPath of dirs(month)) {
         let files;
         try { files = readdirSync(dayPath); } catch { continue; }
         const filename = files.find((name) => name.startsWith('rollout-') && name.endsWith(`-${sessionId}.jsonl`));
-        if (!filename) continue;
-        let descriptor: number | undefined;
-        try {
-          descriptor = openSync(join(dayPath, filename), 'r');
-          const buffer = Buffer.allocUnsafe(64 * 1024);
-          const bytesRead = readSync(descriptor, buffer, 0, buffer.length, 0);
-          const newline = buffer.subarray(0, bytesRead).indexOf(0x0a);
-          const firstLine = buffer.subarray(0, newline >= 0 ? newline : bytesRead).toString('utf8').replace(/\r$/, '');
-          const row = JSON.parse(firstLine) as Record<string, unknown>;
-          if (normalizePath(asRecord(row.payload).cwd) !== normalizePath(cwd)) return false;
-          const identity = readTerminalIdentitySync(descriptor);
-          return identity === null || identity === terminalId;
-        } catch {
-          return false;
-        } finally {
-          if (descriptor !== undefined) closeSync(descriptor);
-        }
+        if (filename) return join(dayPath, filename);
       }
     }
   }
   return null;
+}
+
+/** Valida cwd sempre e o id terminal quando o rollout já tem a marcação estável. */
+export function codexRolloutMatchesTerminal(sessionId: string, cwd: string, terminalId: string, codexHome = process.env.CODEX_HOME ?? join(homedir(), '.codex')): boolean | null {
+  const path = findCodexRollout(sessionId, codexHome);
+  if (!path) return null;
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(path, 'r');
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    const bytesRead = readSync(descriptor, buffer, 0, buffer.length, 0);
+    const newline = buffer.subarray(0, bytesRead).indexOf(0x0a);
+    const firstLine = buffer.subarray(0, newline >= 0 ? newline : bytesRead).toString('utf8').replace(/\r$/, '');
+    const row = JSON.parse(firstLine) as Record<string, unknown>;
+    if (normalizePath(asRecord(row.payload).cwd) !== normalizePath(cwd)) return false;
+    const identity = readTerminalIdentitySync(descriptor);
+    return identity === null || identity === terminalId;
+  } catch {
+    return false;
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
 }
 
 function readTerminalIdentitySync(descriptor: number): string | null {

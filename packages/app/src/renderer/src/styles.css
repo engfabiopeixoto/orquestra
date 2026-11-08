@@ -144,6 +144,17 @@ input { font: inherit; color: var(--text); background: var(--bg); border: 1px so
 .term-name { font-weight: 600; }
 .chip { font-size: 10px; padding: 0 6px; border-radius: 9px; border: 1px solid var(--line); color: var(--muted); }
 .chip.regente { background: #f2a33a33; color: #f2a33a; }
+.model-tag { background: transparent; cursor: pointer; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-tag:hover { color: var(--text); }
+.model-tag.is-mismatch { color: var(--danger); border-color: var(--danger); background: #ef6b6b22; }
+.term-node.model-mismatch, .term-node.model-mismatch.is-selected { border-color: var(--danger); box-shadow: 0 0 0 1px var(--danger); }
+.model-menu { position: fixed; z-index: 1000; max-height: calc(100vh - 16px); overflow-y: auto; display: flex; flex-direction: column; gap: 2px; padding: 5px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 10px 30px #0007; font-size: 12px; }
+.model-menu > button { text-align: left; border: 0; padding: 5px 10px; color: var(--text); }
+.model-menu > button[aria-checked="true"] { color: var(--acc); }
+.model-menu > button:hover:not(:disabled) { background: #ffffff0b; }
+.model-menu form { display: flex; gap: 4px; padding: 4px 2px 2px; border-top: 1px solid var(--line); margin-top: 2px; }
+.model-menu input { flex: 1; min-width: 0; }
+.model-error { margin: 2px 4px; color: var(--danger); font-size: 11px; }
 .term-state { margin-left: auto; display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 11px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: var(--exited); }
 .st-idle .dot, .queue-status.st-idle { background: var(--idle); }

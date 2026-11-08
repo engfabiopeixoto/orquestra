@@ -4,6 +4,7 @@ import { terminalNameSchema } from './names.js';
 import { personaSchema } from './regent.js';
 import { flowGraphSchema, type FlowGraph } from './flow.js';
 import { browserNodeSchema } from './browser.js';
+import { modelNameSchema } from './models.js';
 
 export const WORKSPACE_DIR = '.orquestra';
 export const WORKSPACE_FILE = 'workspace.json';
@@ -40,6 +41,8 @@ export const workspaceTerminalSchema = z.object({
   blurred: z.boolean().optional(),
   locked: z.boolean().optional(),
   agentSessionId: z.string().min(1).nullable(),
+  /** Modelo escolhido na tag do terminal; vai na flag de modelo do CLI a cada lançamento. */
+  model: modelNameSchema.nullable().optional(),
   /**
    * Pastas de sessão dos lançamentos do terminal (até 20). O job em segundo plano do Claude nasce com outro
    * sessionId e só o --settings dele aponta para o lançamento: guardar as pastas mantém o vínculo ao reabrir o app.

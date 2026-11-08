@@ -11,7 +11,7 @@ const stopPayload = z.object({
   last_assistant_message: z.string().nullable().optional(),
 });
 const notificationPayload = z.object({ message: z.string().optional(), notification_type: z.string().optional() });
-const sessionStartPayload = z.object({ session_id: z.string().optional() });
+const sessionStartPayload = z.object({ session_id: z.string().optional(), model: z.string().min(1).optional() });
 
 export function claudeHookSettings(hookCommand: (event: string) => string): object {
   const handler = (event: string) => ({ type: 'command', command: hookCommand(event), timeout: 10 });
@@ -43,7 +43,7 @@ export const claudeAdapter: AgentAdapter = {
   launch: (ctx) => {
     const settingsPath = join(ctx.sessionDir, 'claude-settings.json');
     writeFileSync(settingsPath, JSON.stringify(claudeHookSettings(ctx.hookCommand), null, 2));
-    const settings = ['--settings', settingsPath];
+    const settings = ['--settings', settingsPath, ...(ctx.model ? ['--model', ctx.model] : [])];
     if (ctx.resumeSessionId) return { command: 'claude', args: [...settings, '--resume', ctx.resumeSessionId], env: {}, agentSessionId: ctx.resumeSessionId };
     const id = randomUUID();
     return { command: 'claude', args: [...settings, '--session-id', id], env: {}, agentSessionId: id };
@@ -72,7 +72,8 @@ export const claudeAdapter: AgentAdapter = {
     }
     if (event === 'SessionStart') {
       const parsed = sessionStartPayload.safeParse(payload);
-      return parsed.success ? { kind: 'session-start', agentSessionId: parsed.data.session_id ?? null } : { kind: 'ignored' };
+      if (!parsed.success) return { kind: 'ignored' };
+      return { kind: 'session-start', agentSessionId: parsed.data.session_id ?? null, ...(parsed.data.model ? { model: parsed.data.model } : {}) };
     }
     return { kind: 'ignored' };
   },
