@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { hostEventSchema, terminalInfoSchema } from '../src/host-protocol.js';
-import { AGENT_MODELS, isModelAgent, modelCommand, modelNameSchema, sameModel, terminalModel } from '../src/models.js';
+import { AGENT_MODELS, agyModelId, isModelAgent, modelCommand, modelNameSchema, sameModel, terminalModel } from '../src/models.js';
 import { workspaceTerminalSchema } from '../src/workspace.js';
 
 describe('lista de modelos', () => {
@@ -50,6 +50,15 @@ describe('comparação do modelo', () => {
     expect(sameModel('claude', 'opusplan', 'claude-sonnet-5-5')).toBe(true);
     // Alias só vale para o Claude: no agy o nome é o id exato.
     expect(sameModel('agy', 'opus', 'claude-opus-5-5-high')).toBe(false);
+  });
+
+  it('agy: nome de exibição (settings do agy) e id (hook e flag) são o mesmo modelo', () => {
+    expect(agyModelId('Gemini 3.8 Flash (Medium)')).toBe('gemini-3.8-flash-medium');
+    expect(agyModelId('Claude Opus 5.5 (High)')).toBe('claude-opus-5-5-high');
+    expect(agyModelId('Modelo Novo (Low)')).toBe('Modelo Novo (Low)');
+    expect(sameModel('agy', 'gemini-3.8-flash-medium', 'Gemini 3.8 Flash (Medium)')).toBe(true);
+    expect(sameModel('agy', 'gemini-5-flash-low', 'Gemini 5 Flash (Low)')).toBe(true);
+    expect(sameModel('agy', 'gemini-3.8-flash-high', 'Gemini 3.8 Flash (Medium)')).toBe(false);
   });
 
   it('estado da tag: sem escolha, sem informação, pendente, confirmado e divergente', () => {

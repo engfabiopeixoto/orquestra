@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { defaultMonitor, isModelAgent, modelCommand, modelNameSchema, OrqError, reservedArgError, terminalModel, terminalNameSchema, type ModelObservation, type QueueEntry, type SessionState, type TerminalModel } from '@orquestra/shared';
-import { findClaudeTranscript, readClaudeModel, readCodexModel } from './agent-model.js';
+import { findClaudeTranscript, readClaudeModel, readCodexModel, startupModel } from './agent-model.js';
 import type { AgentAdapter } from './adapters/types.js';
 import { AskBroker } from './ask-broker.js';
 import { CLAUDE_CLEAR_INPUT, ClaudeStatusWatcher } from './adapters/claude-status.js';
@@ -45,6 +45,8 @@ export type OrquestraOptions = {
   backgroundJobPollMs?: number;
   /** Pasta do Codex (rollouts com o modelo de cada turno). Padrão: CODEX_HOME ou ~/.codex. */
   codexHome?: string;
+  /** settings.json do agy, onde fica o modelo padrão. Padrão: ~/.gemini/antigravity-cli/settings.json. */
+  agySettingsFile?: string;
   /** Espera depois do fim do turno antes de ler o modelo na transcrição, gravada de forma assíncrona (padrão 1 s). */
   modelReadDelayMs?: number;
   /** Intervalo da leitura do status da sessão do Claude enquanto há turno em curso (padrão 200 ms). */
@@ -241,7 +243,7 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
     }
     const log = opts.log.child({ session: input.name, sessionId: id, agent: adapter.kind });
     const agentSessionId = unloaded ? input.agentSessionId ?? null : launch.agentSessionId ?? (ignoredCodexResume ? null : input.agentSessionId ?? null);
-    const session = new Session({ id, name: input.name, adapter, pty, cwd: input.cwd, log, readyQuietMs: opts.readyQuietMs, agentSessionId, unloaded, idleGraceMs: opts.claudeIdleGraceMs });
+    const session = new Session({ id, name: input.name, adapter, pty, cwd: input.cwd, log, readyQuietMs: opts.readyQuietMs, agentSessionId, unloaded, idleGraceMs: opts.claudeIdleGraceMs, codexHome: opts.codexHome });
     // session.name, não input.name: o terminal pode ser renomeado depois.
     const stopOutput = session.onOutput((data) => emit({ type: 'output', name: session.name, data }));
     session.on('state', () => {
@@ -269,7 +271,10 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
     if (resumeSessionId && !unloaded) watchResume(session, Date.now(), sessionDirs);
     const stopJobWatcher = adapter.kind === 'claude' ? watchBackgroundJob(session, log, sessionDirs) : () => {};
     const stopStatusWatcher = adapter.kind === 'claude' && !unloaded ? watchClaudeStatus(session, log) : () => {};
-    const model: ModelTrack = { chosenAt: Date.now(), observed: null };
+    // Codex e agy só informam o modelo no fim do turno: até lá vale o modelo com que o CLI começa.
+    const launchedAt = Date.now();
+    const initialModel = isModelAgent(adapter.kind) && !unloaded ? startupModel(adapter.kind, { chosen: chosenModel, args, codexHome: opts.codexHome, agySettingsFile: opts.agySettingsFile }) : null;
+    const model: ModelTrack = { chosenAt: launchedAt, observed: initialModel ? { model: initialModel, at: launchedAt } : null };
     const stopModelWatcher = unloaded ? () => {} : watchModel(session, model);
     const stopWatcher = () => { stopJobWatcher(); stopStatusWatcher(); stopModelWatcher(); };
     sessions.set(input.name, { session, token, stopOutput, stopWatcher, model });
@@ -304,6 +309,7 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
   /**
    * Modelo efetivo: o Claude informa no SessionStart e grava o modelo de cada resposta na transcrição; o Codex grava
    * turn_context.model no rollout; o agy manda modelName no Stop. As transcrições são lidas quando o turno acaba.
+   * Antes do primeiro turno, o Codex e o agy ficam com o modelo de lançamento (startupModel).
    */
   function watchModel(session: Session, track: ModelTrack): () => void {
     const kind = session.adapter.kind;

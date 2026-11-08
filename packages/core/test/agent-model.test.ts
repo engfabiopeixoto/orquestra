@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { claudeProjectDirName, findClaudeTranscript, readClaudeModel, readCodexModel } from '../src/agent-model.js';
+import { claudeProjectDirName, findClaudeTranscript, modelFromArgs, readAgySettingsModel, readClaudeModel, readCodexConfigModel, readCodexModel, startupModel } from '../src/agent-model.js';
 import { findCodexRollout } from '../src/codex-rollout-watcher.js';
 
 const fixture = (path: string) => fileURLToPath(new URL(`./fixtures/models/${path}`, import.meta.url));
@@ -56,5 +56,52 @@ describe('modelo efetivo do Codex (rollout)', () => {
     copyFileSync(fixture('codex-rollout.jsonl'), path);
     expect(findCodexRollout(id, home)).toBe(path);
     expect(findCodexRollout('outra', home)).toBeNull();
+  });
+});
+
+describe('modelo no início, antes do primeiro turno', () => {
+  const codexHome = (toml: string) => {
+    const home = mkdtempSync(join(tmpdir(), 'orq-codex-'));
+    writeFileSync(join(home, 'config.toml'), toml);
+    return home;
+  };
+  const agySettings = (json: unknown) => {
+    const file = join(mkdtempSync(join(tmpdir(), 'orq-agy-')), 'settings.json');
+    writeFileSync(file, typeof json === 'string' ? json : JSON.stringify(json));
+    return file;
+  };
+
+  it('codex: model do config.toml, do perfil ativo ou do perfil pedido nos argumentos', () => {
+    const toml = ['model = "gpt-6.1-sol" # padrão', 'model_reasoning_effort = "medium"', '', '[profiles.rapido]', "model = 'gpt-6-luna'", '', '[tui.model_availability_nux]', '"gpt-6.1-sol" = 4', ''].join('\r\n');
+    expect(readCodexConfigModel(codexHome(toml))).toBe('gpt-6.1-sol');
+    expect(readCodexConfigModel(codexHome(toml), 'rapido')).toBe('gpt-6-luna');
+    expect(readCodexConfigModel(codexHome(`profile = "rapido"\n${toml}`))).toBe('gpt-6-luna');
+    expect(readCodexConfigModel(codexHome('[tui]\nmodel = "nao-e-o-topo"\n'))).toBeNull();
+    expect(readCodexConfigModel(mkdtempSync(join(tmpdir(), 'orq-codex-vazio-')))).toBeNull();
+  });
+
+  it('agy: settings.json guarda o nome de exibição; vira o id da lista', () => {
+    expect(readAgySettingsModel(agySettings({ model: 'Gemini 3.8 Flash (Medium)', permissions: {} }))).toBe('gemini-3.8-flash-medium');
+    expect(readAgySettingsModel(agySettings({ permissions: {} }))).toBeNull();
+    expect(readAgySettingsModel(agySettings('{ quebrado'))).toBeNull();
+  });
+
+  it('argumentos extras: --model, -m, --model=, -c model= e --profile', () => {
+    expect(modelFromArgs('codex', ['-m', 'gpt-6-sol'])).toEqual({ model: 'gpt-6-sol', profile: null });
+    expect(modelFromArgs('codex', ['-c', 'model="gpt-6-astra"', '--profile', 'rapido'])).toEqual({ model: 'gpt-6-astra', profile: 'rapido' });
+    expect(modelFromArgs('agy', ['--model=gemini-4-argon-high', '--mode', 'plan'])).toEqual({ model: 'gemini-4-argon-high', profile: null });
+    expect(modelFromArgs('agy', ['--mode', 'plan'])).toEqual({ model: null, profile: null });
+  });
+
+  it('a flag vence o padrão do CLI e os argumentos extras vencem a flag da tag', () => {
+    const home = codexHome('model = "gpt-6.1-sol"\n');
+    const settings = agySettings({ model: 'Gemini 3.8 Flash (Medium)' });
+    expect(startupModel('codex', { chosen: null, args: [], codexHome: home })).toBe('gpt-6.1-sol');
+    expect(startupModel('codex', { chosen: 'gpt-6-luna', args: [], codexHome: home })).toBe('gpt-6-luna');
+    expect(startupModel('codex', { chosen: 'gpt-6-luna', args: ['-m', 'gpt-6-sol'], codexHome: home })).toBe('gpt-6-sol');
+    expect(startupModel('agy', { chosen: null, args: [], agySettingsFile: settings })).toBe('gemini-3.8-flash-medium');
+    expect(startupModel('agy', { chosen: 'gemini-3.8-flash-low', args: [], agySettingsFile: settings })).toBe('gemini-3.8-flash-low');
+    // O Claude informa o modelo no SessionStart.
+    expect(startupModel('claude', { chosen: 'opus', args: [] })).toBeNull();
   });
 });

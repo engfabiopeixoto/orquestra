@@ -64,6 +64,13 @@ export const modelCommand = (model: string): string => `/model ${model}`;
 const CLAUDE_ALIASES: Record<string, string[]> = { opus: ['opus'], sonnet: ['sonnet'], haiku: ['haiku'], fable: ['fable'], opusplan: ['opus', 'sonnet'] };
 
 const normalize = (model: string) => model.trim().toLowerCase().replace(/\[[^\]]*\]$/, '');
+const modelSlug = (model: string) => model.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
+/** Id do agy para um nome de exibição da lista ("Gemini 3.8 Flash (Medium)"); nome desconhecido volta igual. */
+export function agyModelId(label: string): string {
+  const wanted = modelSlug(label);
+  return AGENT_MODELS.agy.find((option) => modelSlug(option.label) === wanted || modelSlug(option.id) === wanted)?.id ?? label.trim();
+}
 
 /** O modelo que o agente informa corresponde ao escolhido? Aceita alias do Claude e sufixo de data no id. */
 export function sameModel(agent: ModelAgent, chosen: string, effective: string): boolean {
@@ -71,6 +78,8 @@ export function sameModel(agent: ModelAgent, chosen: string, effective: string):
   const used = normalize(effective);
   if (wanted === used) return true;
   if (used.startsWith(`${wanted}-`) && /^\d{8}$/.test(used.slice(wanted.length + 1))) return true;
+  // O agy guarda o nome de exibição ("Gemini 3.8 Flash (Medium)") e o hook e a flag usam o id (gemini-3.8-flash-medium).
+  if (agent === 'agy') return modelSlug(chosen) === modelSlug(effective);
   if (agent !== 'claude') return false;
   if (wanted === 'default') return true;
   const families = CLAUDE_ALIASES[wanted];

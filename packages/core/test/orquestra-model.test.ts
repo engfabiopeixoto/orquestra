@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentAdapter } from '../src/adapters/types.js';
 import { claudeProjectDirName } from '../src/agent-model.js';
 import { silentLogger } from '../src/log.js';
-import { createOrquestra, type Orquestra, type OrquestraEvent } from '../src/orquestra.js';
+import { createOrquestra, type Orquestra, type OrquestraEvent, type OrquestraOptions } from '../src/orquestra.js';
 import { createFakeAdapter } from './helpers/fake-adapter.js';
 import { FakePtyHost } from './helpers/fake-pty-host.js';
 import { waitFor } from './helpers/wait.js';
@@ -15,7 +15,7 @@ import { waitFor } from './helpers/wait.js';
 const fixture = (path: string) => fileURLToPath(new URL(`./fixtures/models/${path}`, import.meta.url));
 
 /** Adapter falso com o tipo de um agente real: passa --model como o agy e informa modelName no Stop. */
-function modelAdapter(kind: 'agy' | 'claude', agentSessionId?: string): AgentAdapter {
+function modelAdapter(kind: 'agy' | 'claude' | 'codex', agentSessionId?: string): AgentAdapter {
   const fake = createFakeAdapter();
   return {
     ...fake,
@@ -35,7 +35,7 @@ afterEach(async () => {
   orquestra = undefined;
 });
 
-async function setup(adapters: Record<string, AgentAdapter>, claudeDir = mkdtempSync(join(tmpdir(), 'orq-claude-'))) {
+async function setup(adapters: Record<string, AgentAdapter>, claudeDir = mkdtempSync(join(tmpdir(), 'orq-claude-')), extra: Partial<OrquestraOptions> = {}) {
   const host = new FakePtyHost();
   const events: OrquestraEvent[] = [];
   orquestra = await createOrquestra({
@@ -50,7 +50,11 @@ async function setup(adapters: Record<string, AgentAdapter>, claudeDir = mkdtemp
     typingGuardMs: 0,
     modelReadDelayMs: 10,
     listPipes: () => [],
+    // Sem config do Codex nem settings do agy: os testes não leem os da máquina.
+    codexHome: mkdtempSync(join(tmpdir(), 'orq-codex-')),
+    agySettingsFile: join(tmpdir(), 'orq-sem-settings-do-agy.json'),
     onEvent: (event) => events.push(event),
+    ...extra,
   });
   return { orq: orquestra, host, events };
 }
@@ -155,5 +159,31 @@ describe('modelo do terminal', () => {
     session.userInput('oi\r');
     await session.handleHook('Stop', { modelName: 'gemini-3.8-flash-medium' });
     expect(orq.modelOf('A')).toEqual({ chosen: null, effective: 'gemini-3.8-flash-medium', status: 'unset' });
+  });
+
+  it('agy: no início vale o modelo padrão do settings.json, ou o da flag de lançamento', async () => {
+    const agySettingsFile = join(mkdtempSync(join(tmpdir(), 'orq-agy-')), 'settings.json');
+    writeFileSync(agySettingsFile, JSON.stringify({ model: 'Gemini 3.8 Flash (Medium)' }));
+    const { orq } = await setup({ agy: modelAdapter('agy') }, undefined, { agySettingsFile });
+    orq.createTerminal({ name: 'A', agent: 'agy', cwd: tmpdir() });
+    expect(orq.modelOf('A')).toEqual({ chosen: null, effective: 'gemini-3.8-flash-medium', status: 'unset' });
+    // A tag passa --model: o nome de exibição do settings não acende vermelho falso.
+    orq.createTerminal({ name: 'B', agent: 'agy', cwd: tmpdir(), model: 'gemini-3.8-flash-medium' });
+    expect(orq.modelOf('B')).toEqual({ chosen: 'gemini-3.8-flash-medium', effective: 'gemini-3.8-flash-medium', status: 'match' });
+    // Um --model nos argumentos extras vem depois da flag da tag e vence.
+    orq.createTerminal({ name: 'C', agent: 'agy', cwd: tmpdir(), model: 'gemini-3.8-flash-medium', args: ['--model', 'gemini-4-argon-high'] });
+    expect(orq.modelOf('C')).toMatchObject({ effective: 'gemini-4-argon-high', status: 'mismatch' });
+    await orq.restartTerminal('A');
+    expect(orq.modelOf('A')?.effective).toBe('gemini-3.8-flash-medium');
+  });
+
+  it('codex: no início vale o model do config.toml, ou o da flag de lançamento', async () => {
+    const codexHome = mkdtempSync(join(tmpdir(), 'orq-codex-'));
+    writeFileSync(join(codexHome, 'config.toml'), 'model = "gpt-6.1-sol"\nmodel_reasoning_effort = "medium"\n');
+    const { orq } = await setup({ codex: modelAdapter('codex') }, undefined, { codexHome });
+    orq.createTerminal({ name: 'A', agent: 'codex', cwd: tmpdir() });
+    expect(orq.modelOf('A')).toEqual({ chosen: null, effective: 'gpt-6.1-sol', status: 'unset' });
+    orq.createTerminal({ name: 'B', agent: 'codex', cwd: tmpdir(), model: 'gpt-6-luna' });
+    expect(orq.modelOf('B')).toEqual({ chosen: 'gpt-6-luna', effective: 'gpt-6-luna', status: 'match' });
   });
 });
