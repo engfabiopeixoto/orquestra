@@ -25,6 +25,7 @@ const stopPayload = z.object({
   conversationId: z.string().optional(),
   transcriptPath: z.string().optional(),
   fullyIdle: z.boolean().optional(),
+  modelName: z.string().min(1).optional(),
 });
 
 export function agyHookGroup(command: string): object {
@@ -51,7 +52,11 @@ export const agyAdapter: AgentAdapter = {
   ],
   // Hooks vêm do arquivo global (agy não tem config por sessão): ver agy-hooks.ts.
   // O histórico do agy é global: --conversation funciona em qualquer pasta.
-  launch: (ctx) => ({ command: 'agy', args: ctx.resumeSessionId ? ['--conversation', ctx.resumeSessionId] : [], env: {} }),
+  launch: (ctx) => ({
+    command: 'agy',
+    args: [...(ctx.resumeSessionId ? ['--conversation', ctx.resumeSessionId] : []), ...(ctx.model ? ['--model', ctx.model] : [])],
+    env: {},
+  }),
   interpretHook: (event, payload): HookSignal => {
     if (event !== 'Stop') return { kind: 'ignored' };
     const parsed = stopPayload.safeParse(payload);
@@ -61,6 +66,8 @@ export const agyAdapter: AgentAdapter = {
       text: null,
       transcriptPath: parsed.data.transcriptPath ?? null,
       agentSessionId: parsed.data.conversationId ?? null,
+      // O transcript do agy não traz o modelo: o Stop é a fonte do modelo efetivo.
+      ...(parsed.data.modelName ? { model: parsed.data.modelName } : {}),
     };
   },
   readTranscript: readAgyTranscript,

@@ -7,6 +7,7 @@ import { personaScopeSchema } from './regent.js';
 import { canvasGroupSchema, groupColorSchema, groupKindSchema, groupMemberSchema, positionSchema, sizeSchema, viewportSchema } from './workspace.js';
 import { flowGraphSchema, flowNodeSchema, flowRunSchema, flowNodeResultSchema, flowSnapshotSchema, flowTestReportSchema, jsonValueSchema } from './flow.js';
 import { browserNodeSchema, browserMethodSchemas } from './browser.js';
+import { modelNameSchema, terminalModelSchema } from './models.js';
 
 export { terminalNameSchema } from './names.js';
 
@@ -32,6 +33,8 @@ export const terminalInfoSchema = z.object({
   unloaded: z.boolean().optional(),
   blurred: z.boolean().optional(),
   locked: z.boolean().optional(),
+  /** Ausente no shell, que não tem modelo. */
+  model: terminalModelSchema.optional(),
 });
 export type TerminalInfo = z.infer<typeof terminalInfoSchema>;
 
@@ -169,6 +172,8 @@ export const hostMethodSchemas = {
     params: z.object({ name: z.string().min(1), blurred: z.boolean().optional(), locked: z.boolean().optional() }),
     result: terminalInfoSchema,
   },
+  /** Troca o modelo com o /model do agente, sem reiniciar, e guarda a escolha para os próximos lançamentos. */
+  'terminal.model': { params: z.object({ name: z.string().min(1), model: modelNameSchema }), result: terminalInfoSchema },
   'terminal.rename': { params: z.object({ name: z.string().min(1), newName: terminalNameSchema }), result: terminalInfoSchema },
   'terminal.input': { params: z.object({ name: z.string().min(1), data: z.string() }), result: empty },
   'terminal.resize': {
@@ -252,6 +257,7 @@ export const hostEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('ask.answered'), askId: z.string(), from: z.string(), target: z.string() }),
   z.object({ type: z.literal('terminal.removed'), name: z.string() }),
   z.object({ type: z.literal('terminal.notice'), name: z.string(), message: z.string() }),
+  z.object({ type: z.literal('terminal.model'), name: z.string(), model: terminalModelSchema }),
   z.object({ type: z.literal('notice'), level: z.enum(['info', 'warn', 'error']), message: z.string() }),
   // connectedTo e rect vêm preenchidos quando a nota nasceu de um agente.
   z.object({ type: z.literal('note.changed'), note: noteInfoSchema, connectedTo: z.string().nullable(), rect: rectSchema.nullable(), renamedFrom: z.string().optional() }),

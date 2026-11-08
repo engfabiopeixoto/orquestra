@@ -27,6 +27,8 @@ export const codexAdapter: AgentAdapter = {
       '-c', 'mcp_servers.orquestra.enabled=true',
       '-c', 'mcp_servers.orquestra.startup_timeout_sec=15',
       '-c', 'mcp_servers.orquestra.tool_timeout_sec=660',
+      // -c em vez de --model: vale também depois do subcomando resume.
+      ...(ctx.model ? ['-c', `model=${tomlString(ctx.model)}`] : []),
     ];
     return {
       command: 'codex',

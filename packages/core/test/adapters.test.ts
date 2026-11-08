@@ -181,3 +181,44 @@ describe('retomada no lançamento', () => {
     expect(agyAdapter.launch(ctx(null)).args).toEqual([]);
   });
 });
+
+describe('modelo escolhido no lançamento', () => {
+  const ctx = (model: string | null, resumeSessionId: string | null = null) => ({
+    cwd: tmpdir(),
+    sessionDir: mkdtempSync(join(tmpdir(), 'orq-launch-')),
+    hookCommand: (event: string) => `node C:/orq/bin/orq.mjs hook x ${event}`,
+    resumeSessionId,
+    model,
+  });
+  const flag = (args: string[], name: string) => args[args.indexOf(name) + 1];
+
+  it('claude e agy recebem --model, também ao retomar', () => {
+    expect(flag(claudeAdapter.launch(ctx('sonnet')).args, '--model')).toBe('sonnet');
+    expect(flag(claudeAdapter.launch(ctx('sonnet', '5f0c1d2e-0000-4000-8000-000000000001')).args, '--model')).toBe('sonnet');
+    expect(agyAdapter.launch(ctx('gemini-3.8-flash-low', 'conv-1')).args).toEqual(['--conversation', 'conv-1', '--model', 'gemini-3.8-flash-low']);
+  });
+
+  it('codex recebe -c model, que vale também depois do resume', () => {
+    const args = codexAdapter.launch(ctx('gpt-6-luna', 'thread-1')).args;
+    expect(args.slice(0, 2)).toEqual(['resume', 'thread-1']);
+    expect(args).toContain('model="gpt-6-luna"');
+    expect(args[args.indexOf('model="gpt-6-luna"') - 1]).toBe('-c');
+  });
+
+  it('sem modelo escolhido, nenhum agente recebe flag de modelo (vale o padrão do CLI)', () => {
+    expect(claudeAdapter.launch(ctx(null)).args).not.toContain('--model');
+    expect(agyAdapter.launch(ctx(null)).args).toEqual([]);
+    expect(codexAdapter.launch(ctx(null)).args.some((arg) => arg.startsWith('model='))).toBe(false);
+  });
+});
+
+describe('modelo informado nos hooks', () => {
+  it('o SessionStart do Claude traz o modelo da sessão', () => {
+    expect(claudeAdapter.interpretHook('SessionStart', envelopePayload('claude/session-start.json'))).toMatchObject({ kind: 'session-start', model: 'claude-opus-5-5' });
+    expect(claudeAdapter.interpretHook('SessionStart', { session_id: 's' })).toEqual({ kind: 'session-start', agentSessionId: 's' });
+  });
+
+  it('o Stop do agy traz modelName (o transcript do agy não tem o modelo)', () => {
+    expect(agyAdapter.interpretHook('Stop', envelopePayload('agy/stop.json'))).toMatchObject({ kind: 'turn-end', model: 'gemini-3.8-flash-high' });
+  });
+});

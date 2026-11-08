@@ -21,6 +21,8 @@ type SessionEvents = {
   agentSession: [string];
   /** Há (true) ou deixou de haver (false) rascunho do usuário na caixa de entrada do agente. */
   draft: [boolean];
+  /** Modelo que o agente informou num hook (SessionStart do Claude, Stop do agy). */
+  agentModel: [string];
 };
 
 export type SessionOptions = {
@@ -49,7 +51,11 @@ export type SessionOptions = {
   unloaded?: boolean;
   /** Tolerância para o hook de fim de turno depois que o agente informa ocioso (agentIdle). Padrão 2,5 s. */
   idleGraceMs?: number;
+  /** Pausa entre o texto de um comando do agente e o Enter (padrão 300 ms). */
+  commandSubmitDelayMs?: number;
 };
+
+const COMMAND_SUBMIT_DELAY_MS = 300;
 
 export class Session extends EventEmitter<SessionEvents> {
   readonly id: string;
@@ -269,6 +275,7 @@ export class Session extends EventEmitter<SessionEvents> {
       this.refreshWaiting();
       return;
     }
+    if ((signal.kind === 'session-start' || signal.kind === 'turn-end') && signal.model) this.emit('agentModel', signal.model);
     if (signal.kind === 'session-start') {
       this.learnAgentSession(signal.agentSessionId);
       return;
@@ -347,6 +354,23 @@ export class Session extends EventEmitter<SessionEvents> {
     this.draftChars = pending ? this.submittedChars : 0;
     if (pending) this.inputHasText = true;
     this.emit('draft', pending);
+  }
+
+  /**
+   * Digita um comando do próprio agente (ex.: /model) e envia com Enter. Só com o agente ocioso e a caixa de
+   * entrada vazia: o comando se misturaria ao rascunho ou entraria como pedido no meio do turno.
+   */
+  async sendCommand(text: string): Promise<void> {
+    if (this.currentState !== 'idle') throw new OrqError('USAGE', `${this.name} não está ocioso (${this.currentState}). Espere o fim do turno e tente de novo.`);
+    if (this.inputHasText || this.draftPending) throw new OrqError('USAGE', `Há texto na caixa de entrada de ${this.name}. Envie ou apague o texto e tente de novo.`);
+    // Conta como digitação: o broker espera e não injeta um pedido entre o texto e o Enter.
+    this.userInputAt = Date.now();
+    this.opts.pty.write(text);
+    // A TUI precisa processar o texto antes do Enter: o agy abre a lista de sugestões e o Enter escolhe dela.
+    await new Promise((resolve) => setTimeout(resolve, this.opts.commandSubmitDelayMs ?? COMMAND_SUBMIT_DELAY_MS));
+    if (this.state === 'exited') return;
+    this.opts.pty.write('\r');
+    this.opts.log.info({ command: text }, 'comando enviado ao agente');
   }
 
   /** Escreve uma tecla de controle no terminal sem contar como digitação do usuário (não atrasa a fila). */

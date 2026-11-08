@@ -11,7 +11,8 @@
     "./regent": "./src/regent.ts",
     "./group-layout": "./src/group-layout.ts",
     "./flow": "./src/flow.ts",
-    "./flow-contract": "./src/flow-contract.ts"
+    "./flow-contract": "./src/flow-contract.ts",
+    "./models": "./src/models.ts"
   },
   "dependencies": {
     "zod": "3.24.1"

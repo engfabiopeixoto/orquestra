@@ -21,6 +21,7 @@ import { NodeConnectors } from '../canvas/NodeConnectors';
 import { TerminalFlowPorts } from '../flow/TerminalFlowPorts';
 import { AGENT_FLOW_IO } from '../flow/feature-flags';
 import { encodeWin32KeyEvent, installCodexInputMode } from './codex-input';
+import { ModelTag } from './ModelTag';
 
 export type { TerminalFlowNode };
 
@@ -195,6 +196,7 @@ export function TerminalNode({ id, data, selected }: NodeProps<TerminalFlowNode>
   const zoomReadOnly = Math.abs(zoom - 1) > 0.001;
   const readOnly = zoomReadOnly || Boolean(view?.blurred) || view?.state === 'exited';
   if (!view) return null;
+  const mismatch = view.model?.status === 'mismatch';
   const openMenu = (x: number, y: number) => setMenu({ x: Math.max(8, Math.min(x, window.innerWidth - 230)), y: Math.max(8, Math.min(y, window.innerHeight - 360)) });
   const openFromButton = (event: React.MouseEvent<HTMLButtonElement>) => { event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); openMenu(rect.right - 220, rect.bottom + 4); };
   const reload = async () => {
@@ -231,11 +233,12 @@ export function TerminalNode({ id, data, selected }: NodeProps<TerminalFlowNode>
         }}
       />
       <NodeConnectors />
-      <div className={`term-node frame-${view.state} ${selected ? 'is-selected' : ''} ${view.locked ? 'is-locked nopan' : ''}`}>
+      <div className={`term-node frame-${view.state} ${selected ? 'is-selected' : ''} ${view.locked ? 'is-locked nopan' : ''} ${mismatch ? 'model-mismatch' : ''}`}>
         {view.state === 'waiting' ? <span className="waiting-badge" data-testid={`terminal-waiting-${data.name}`}>👋 aguardando você</span> : null}
         <header className="term-hd" data-testid={`terminal-header-${data.name}`} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); openMenu(event.clientX, event.clientY); }}>
           <span className="term-name">{view.name}</span>
           <span className="chip">{view.agent}</span>
+          <ModelTag name={view.name} agent={view.agent} model={view.model} api={api} />
           {view.regente ? <span className="chip regente" data-testid={`terminal-regente-${view.name}`}>regente</span> : null}
           {view.locked ? <span className="chip" title="Posição bloqueada">🔒</span> : null}
           <span className={`term-state st-${view.state}`} data-testid={`terminal-state-${data.name}`}>

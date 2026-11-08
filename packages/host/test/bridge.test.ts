@@ -695,3 +695,27 @@ describe('conversa em segundo plano depois de reabrir o projeto', () => {
     await waitFor(() => second.sent.some((message) => message.kind === 'event' && message.event.type === 'terminal.notice' && message.event.message.includes('claude stop b845e5a9')));
   });
 });
+
+describe('modelo do terminal na ponte', () => {
+  it('troca o modelo sem reiniciar, publica o evento, salva no workspace e relança com a flag', async () => {
+    const fake = createFakeAdapter();
+    const claude: AgentAdapter = { ...fake, kind: 'claude', launch: (ctx) => ({ ...fake.launch(ctx), args: ['agente', ...(ctx.model ? ['--model', ctx.model] : [])] }) };
+    const { command, sent, ptyHost } = await setup({ adapters: { claude }, claudeDir: mkdtempSync(join(tmpdir(), 'orq-claude-')), listPipes: () => [] });
+    const dir = mkdtempSync(join(tmpdir(), 'orq-model-'));
+    await command('m-open', 'project.open', { dir });
+    const created = await command('m-create', 'terminal.create', { name: 'A', agent: 'claude' });
+    expect(created).toMatchObject({ kind: 'response', result: { model: { chosen: null, effective: null, status: 'unset' } } });
+    ptyHost.last().emitData('pronto> ');
+    await waitFor(() => sent.some((message) => message.kind === 'event' && message.event.type === 'terminal.state' && message.event.name === 'A' && message.event.state === 'idle'));
+    const changed = await command('m-model', 'terminal.model', { name: 'A', model: 'sonnet' });
+    expect(changed).toMatchObject({ kind: 'response', result: { name: 'A', model: { chosen: 'sonnet', status: 'unknown' } } });
+    expect(ptyHost.spawned).toHaveLength(1);
+    expect(ptyHost.last().written).toContain('/model sonnet');
+    expect(sent.some((message) => message.kind === 'event' && message.event.type === 'terminal.model' && message.event.model.chosen === 'sonnet')).toBe(true);
+    expect(await command('m-bad', 'terminal.model', { name: 'A', model: 'son net' })).toMatchObject({ kind: 'response-error' });
+    await command('m-close', 'project.close', {});
+    expect(readWorkspace(dir).terminals[0]).toMatchObject({ name: 'A', model: 'sonnet' });
+    await command('m-reopen', 'project.open', { dir });
+    expect(ptyHost.spawned.at(-1)!.spec.args).toEqual(expect.arrayContaining(['--model', 'sonnet']));
+  });
+});
