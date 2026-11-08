@@ -18,6 +18,7 @@ export const ORQUESTRA_TOOLS = [
   tool('portal.screenshot', 'Captura a aba ativa e retorna o caminho local da imagem PNG para inspeção visual.', { id: text }, ['id'], true),
   tool('whoami', 'Identifica este terminal no canvas do Orquestra.', {}, [], true),
   tool('peers', 'Lista os terminais conectados a você no Orquestra, com nomes e estados.', {}, [], true),
+  tool('usage', 'Consulta o crédito e limites de uso das assinaturas de IA (claude, codex, agy). Use antes de delegar tarefas para escolher agentes com folga de cota.', { provider: { type: 'string', enum: ['claude', 'codex', 'agy'] } }, [], true),
   tool('prompt', 'Entrega uma tarefa a um terminal conectado e espera sua resposta. Se retornar pending, consulte result com askId.', { target: text, text, timeoutMs: { ...positive, maximum: 600000, default: 480000 } }, ['target', 'text']),
   tool('result', 'Consulta a resposta de uma tarefa pendente enviada no Orquestra.', { askId: text }, ['askId'], true),
   tool('read', 'Lê a tela atual de um terminal conectado no Orquestra.', { target: text, lines: positive }, ['target'], true),

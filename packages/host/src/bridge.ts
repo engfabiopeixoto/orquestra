@@ -407,6 +407,17 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
     return (regentHandlers[method] as (p: unknown, c: string) => Promise<never>)(params, caller);
   };
 
+  const getProviderUsage = async (provider: 'claude' | 'codex' | 'agy'): Promise<SubscriptionUsage> => {
+    if (provider === 'codex') return consultUsage('codex', readCodexUsage);
+    if (provider === 'claude') return consultUsage('claude', readClaudeUsage);
+    const cwd = orquestra?.sessions().find((session) => session.adapter.kind === 'agy')?.cwd ?? project?.dir ?? homedir();
+    return consultUsage(`agy:${cwd}`, () => readAgyUsageIsolated({
+      script: process.argv[1]!, cwd, signal: usageAbort.signal,
+      onStart: (pid) => { usagePids.add(pid); recordPids(); },
+      onExit: (pid) => { usagePids.delete(pid); recordPids(); },
+    }));
+  };
+
   orquestra = await createOrquestra({
     pipePath: opts.pipePath,
     dataDir: opts.dataDir,
@@ -421,6 +432,7 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
     regent,
     browser,
     browserNodes: () => project?.state.browserNodes() ?? [],
+    usage: getProviderUsage,
     onEvent: (event) => {
       if (event.type === 'output') return batcher.push(event.name, event.data);
       if (event.type === 'state') {
@@ -648,16 +660,9 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
       if (fileExplorer?.dir !== current.dir) fileExplorer = { dir: current.dir, files: new ProjectFiles(current.dir) };
       return fileExplorer.files.read(path);
     },
-    'usage.codex': async () => consultUsage('codex', readCodexUsage),
-    'usage.claude': async () => consultUsage('claude', readClaudeUsage),
-    'usage.agy': async () => {
-      const cwd = orquestra.sessions().find((session) => session.adapter.kind === 'agy')?.cwd ?? project?.dir ?? homedir();
-      return consultUsage(`agy:${cwd}`, () => readAgyUsageIsolated({
-        script: process.argv[1]!, cwd, signal: usageAbort.signal,
-        onStart: (pid) => { usagePids.add(pid); recordPids(); },
-        onExit: (pid) => { usagePids.delete(pid); recordPids(); },
-      }));
-    },
+    'usage.codex': async () => getProviderUsage('codex'),
+    'usage.claude': async () => getProviderUsage('claude'),
+    'usage.agy': async () => getProviderUsage('agy'),
     'project.open': async ({ dir }) => {
       if (!existsSync(dir) || !statSync(dir).isDirectory()) {
         throw new OrqError('USAGE', `A pasta ${dir} não existe. Escolha outra pasta de projeto.`);

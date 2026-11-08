@@ -16,6 +16,7 @@ it('expõe ferramentas nativas e entrega prompt pelo pipe autenticado', async ()
       if (method === 'whoami') return { name: caller.session, agent: 'codex' };
       if (method === 'prompt') { received = params; return { status: 'answered', askId: 'ping', answer: 'PONG' }; }
       if (method === 'portal.list') return { portals: [{ id: 'portal-1', title: 'Browser' }] };
+      if (method === 'usage') { received = params; return { providers: [{ provider: 'claude', usage: null, error: null }] }; }
       throw new Error('Unexpected method');
     } });
   const input = new PassThrough();
@@ -32,7 +33,7 @@ it('expõe ferramentas nativas e entrega prompt pelo pipe autenticado', async ()
   };
   expect((await request(1, 'initialize', { protocolVersion: '2025-06-18' })).result.serverInfo.name).toBe('orquestra');
   const tools = (await request(2, 'tools/list')).result.tools;
-  expect(tools.map((tool: { name: string }) => tool.name)).toEqual(expect.arrayContaining(['whoami', 'peers', 'prompt', 'read', 'regent_link', 'portal_list', 'portal_check', 'portal_navigate', 'portal_click', 'portal_type', 'portal_screenshot']));
+  expect(tools.map((tool: { name: string }) => tool.name)).toEqual(expect.arrayContaining(['whoami', 'peers', 'prompt', 'read', 'regent_link', 'portal_list', 'portal_check', 'portal_navigate', 'portal_click', 'portal_type', 'portal_screenshot', 'usage']));
   expect(JSON.parse((await request(3, 'tools/call', { name: 'whoami', arguments: {} })).result.content[0].text)).toEqual({ name: 'codex-1', agent: 'codex' });
   const answer = await request(4, 'tools/call', { name: 'prompt', arguments: { target: 'agy-1', text: 'PING' } });
   expect(JSON.parse(answer.result.content[0].text).answer).toBe('PONG');
@@ -41,4 +42,7 @@ it('expõe ferramentas nativas e entrega prompt pelo pipe autenticado', async ()
   const invalid = await request(5, 'tools/call', { name: 'prompt', arguments: { target: 'agy-1' } });
   expect(invalid.result.isError).toBe(true);
   expect(JSON.parse((await request(6, 'tools/call', { name: 'portal_list', arguments: {} })).result.content[0].text).portals[0].id).toBe('portal-1');
+  const usageRes = await request(7, 'tools/call', { name: 'usage', arguments: { provider: 'claude' } });
+  expect(JSON.parse(usageRes.result.content[0].text)).toEqual({ providers: [{ provider: 'claude', usage: null, error: null }] });
+  expect(received).toEqual({ provider: 'claude' });
 });

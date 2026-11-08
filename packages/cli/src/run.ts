@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
-import { call, exitCodeFor, OrqError, parseArgs as parseSharedArgs, REGENT_COMMANDS, type ClientOptions } from '@orquestra/shared';
+import { call, exitCodeFor, formatUsageSummary, OrqError, parseArgs as parseSharedArgs, REGENT_COMMANDS, type ClientOptions } from '@orquestra/shared';
 import { parseDuration } from './duration.js';
 import { runMcp } from './mcp.js';
 
@@ -16,6 +16,7 @@ type Output = { text: string; json: unknown };
 const HELP = `Uso: orq <comando>
   whoami                         seu nome e tipo no canvas
   peers                          terminais conectados a você
+  usage [claude|codex|agy]       crédito restante das assinaturas de IA
   prompt <peer> <texto|->        envia um prompt e espera a resposta (--timeout 8m, --file <arquivo>)
   result <id>                    resposta de um prompt pendente
   read <peer> [--lines N]        tela atual de um terminal conectado
@@ -106,6 +107,15 @@ async function execute(
       const lines = result.peers.map((peer) => `${peer.name}\t${peer.agent}\t${peer.state}${peer.queued > 0 ? `\t${peer.queued} na fila` : ''}`);
       lines.push(...(result.portals ?? []).map((portal) => `${portal.id}\tnavegador\t${portal.title} (orq portal check ${portal.id})`));
       return { text: lines.length > 0 ? lines.join('\n') : 'Nenhum terminal conectado a você.', json: result };
+    }
+    case 'usage': {
+      const providerArg = args[0];
+      if (providerArg && !['claude', 'codex', 'agy'].includes(providerArg)) {
+        throw new OrqError('USAGE', 'Provedor desconhecido. Use: orq usage [claude|codex|agy].');
+      }
+      const provider = providerArg as 'claude' | 'codex' | 'agy' | undefined;
+      const result = await call(client, 'usage', provider ? { provider } : {});
+      return { text: formatUsageSummary(result.providers), json: result };
     }
     case 'prompt': {
       const target = required(args[0], 'o terminal de destino');
