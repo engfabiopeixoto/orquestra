@@ -55,6 +55,13 @@ describe('parseResult', () => {
   });
 });
 
+describe('protocolo de peers descarregados', () => {
+  it('aceita unloaded opcional no resultado de peers', () => {
+    expect(parseResult('peers', { peers: [{ name: 'B', agent: 'claude', state: 'exited', queued: 0, unloaded: true }] }))
+      .toEqual({ peers: [{ name: 'B', agent: 'claude', state: 'exited', queued: 0, unloaded: true }] });
+  });
+});
+
 describe('isMethodName', () => {
   it('reconhece os métodos e recusa o resto', () => {
     expect(isMethodName('note.write')).toBe(true);

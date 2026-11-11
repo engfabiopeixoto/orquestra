@@ -561,13 +561,69 @@ describe('regente na ponte', () => {
     const result = await bridge!.dispatchForTest('regent.restart', { name: 'S' }, { session: 'R' });
     expect(result).toMatchObject({ name: 'S', state: expect.any(String) });
     expect(ptyHost.spawned).toHaveLength(before + 1);
-    expect(sent).toContainEqual({ kind: 'event', event: { type: 'terminal.restarted', info: expect.objectContaining({ name: 'S' }) } });
+    expect(sent).toContainEqual({ kind: 'event', event: { type: 'terminal.replaced', info: expect.objectContaining({ name: 'S' }) } });
     expect(sent).toContainEqual({ kind: 'event', event: { type: 'notice', level: 'info', message: 'R reiniciou S.' } });
     ptyHost.last().emitData('saída após reinício');
     await waitFor(() => sent.some((message) => message.kind === 'event' && message.event.type === 'terminal.output' && message.event.name === 'S' && message.event.data.includes('saída após reinício')));
-    const restartedIndex = sent.findIndex((message) => message.kind === 'event' && message.event.type === 'terminal.restarted' && message.event.info.name === 'S');
+    const restartedIndex = sent.findIndex((message) => message.kind === 'event' && message.event.type === 'terminal.replaced' && message.event.info.name === 'S');
     const outputIndex = sent.findIndex((message) => message.kind === 'event' && message.event.type === 'terminal.output' && message.event.name === 'S' && message.event.data.includes('saída após reinício'));
     expect(restartedIndex).toBeLessThan(outputIndex);
+  });
+
+  it('regent.unload e regent.load aplicam as regras, atualizam o canvas e são idempotentes', async () => {
+    const { sent, command, ptyHost } = await withRegent();
+    await command('4', 'terminal.create', { name: 'S', agent: 'shell' });
+    await expect(bridge!.dispatchForTest('regent.unload', { name: 'S' }, { session: 'S' })).rejects.toMatchObject({ code: 'NOT_REGENT' });
+    await expect(bridge!.dispatchForTest('regent.load', { name: 'S' }, { session: 'S' })).rejects.toMatchObject({ code: 'NOT_REGENT' });
+    await expect(bridge!.dispatchForTest('regent.unload', { name: 'R' }, { session: 'R' })).rejects.toMatchObject({ code: 'USAGE', message: expect.stringMatching(/descarregar a si mesmo/) });
+    await expect(bridge!.dispatchForTest('regent.load', { name: 'R' }, { session: 'R' })).rejects.toMatchObject({ code: 'USAGE', message: expect.stringMatching(/recarregar a si mesmo/) });
+    await expect(bridge!.dispatchForTest('regent.unload', { name: 'ausente' }, { session: 'R' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(bridge!.dispatchForTest('regent.load', { name: 'ausente' }, { session: 'R' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await command('5', 'note.create', { name: 'anotacao', content: 'texto' });
+    await expect(bridge!.dispatchForTest('regent.unload', { name: 'anotacao' }, { session: 'R' })).rejects.toMatchObject({ code: 'USAGE' });
+    await expect(bridge!.dispatchForTest('regent.load', { name: 'anotacao' }, { session: 'R' })).rejects.toMatchObject({ code: 'USAGE' });
+
+    await waitFor(() => sent.some((message) => message.kind === 'event' && message.event.type === 'terminal.state' && message.event.name === 'S' && message.event.state === 'idle'));
+    const unloaded = await bridge!.dispatchForTest('regent.unload', { name: 'S' }, { session: 'R' });
+    expect(unloaded).toEqual({ name: 'S' });
+    const unloadEvent = sent.find((message) => message.kind === 'event' && message.event.type === 'terminal.replaced' && message.event.info.name === 'S');
+    expect(unloadEvent).toMatchObject({ event: { info: { unloaded: true, state: 'exited' } } });
+    expect(sent).toContainEqual({ kind: 'event', event: { type: 'notice', level: 'info', message: 'R descarregou S.' } });
+
+    const countAfterUnload = ptyHost.spawned.length;
+    await expect(bridge!.dispatchForTest('regent.unload', { name: 'S' }, { session: 'R' })).resolves.toEqual({ name: 'S' });
+    expect(ptyHost.spawned).toHaveLength(countAfterUnload);
+    expect(sent.filter((message) => message.kind === 'event' && message.event.type === 'notice' && message.event.message === 'R descarregou S.')).toHaveLength(1);
+
+    const loaded = await bridge!.dispatchForTest('regent.load', { name: 'S' }, { session: 'R' });
+    expect(loaded).toMatchObject({ name: 'S', state: expect.stringMatching(/starting|idle/) });
+    expect(ptyHost.spawned).toHaveLength(countAfterUnload + 1);
+    const loadEvents = sent.filter((message) => message.kind === 'event' && message.event.type === 'terminal.replaced' && message.event.info.name === 'S');
+    expect(loadEvents).toHaveLength(2);
+    expect(loadEvents[1]).toMatchObject({ event: { info: { state: expect.stringMatching(/starting|idle/) } } });
+    expect(loadEvents[1]).not.toMatchObject({ event: { info: { unloaded: true } } });
+    expect(sent).toContainEqual({ kind: 'event', event: { type: 'notice', level: 'info', message: 'R recarregou S.' } });
+
+    const countAfterLoad = ptyHost.spawned.length;
+    await bridge!.dispatchForTest('regent.load', { name: 'S' }, { session: 'R' });
+    expect(ptyHost.spawned).toHaveLength(countAfterLoad);
+    expect(sent.filter((message) => message.kind === 'event' && message.event.type === 'notice' && message.event.message === 'R recarregou S.')).toHaveLength(1);
+  });
+
+  it('regent.unload recusa terminal ocupado ou com pedidos e recomenda esperar ou reiniciar', async () => {
+    const { sent, command } = await withRegent();
+    await command('4', 'terminal.create', { name: 'T', agent: 'claude' });
+    await command('5', 'edge.connect', { a: 'R', b: 'T' });
+    await waitFor(() => sent.some((message) => message.kind === 'event' && message.event.type === 'terminal.state' && message.event.name === 'T' && message.event.state === 'idle'));
+    const prompt = bridge!.dispatchForTest('prompt', { target: 'T', text: 'trabalho', timeoutMs: 60_000 }, { session: 'R' });
+    await waitFor(() => sent.some((message) => message.kind === 'event' && message.event.type === 'terminal.queue' && message.event.name === 'T' && message.event.entries.some((entry) => entry.status === 'running')));
+    await expect(bridge!.dispatchForTest('regent.unload', { name: 'T' }, { session: 'R' })).rejects.toMatchObject({
+      code: 'USAGE',
+      message: expect.stringMatching(/ocupado.*1 pedido.*espere.*orq restart T/i),
+    });
+    const failure = expect(prompt).rejects.toMatchObject({ code: 'PROMPT_FAILED' });
+    await bridge!.dispatchForTest('regent.restart', { name: 'T' }, { session: 'R' });
+    await failure;
   });
 
   it('regent.restart falha os pedidos do alvo com o nome do regente no motivo', async () => {

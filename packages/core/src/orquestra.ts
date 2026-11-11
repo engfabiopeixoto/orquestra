@@ -161,6 +161,7 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
     session: (name) => sessions.get(name)?.session,
     onNoteChanged: (note, createdBy) => emit({ type: 'note', note, createdBy }),
     isRegent: (name) => configs.get(name)?.regente ?? false,
+    isUnloaded: (name) => configs.get(name)?.unloaded ?? false,
     regent: opts.regent,
     browser: opts.browser,
     browserNodes: opts.browserNodes,

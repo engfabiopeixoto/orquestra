@@ -70,6 +70,20 @@ describe('Orquestra (PTY falso)', () => {
     expect(result).toMatchObject({ answer: 'resposta' });
     expect(events).toContainEqual({ type: 'answered', askId: result.askId, asker: 'A', target: 'B' });
   });
+
+  it('peers sinaliza terminal descarregado e prompt explica como recarregá-lo', async () => {
+    const { orq } = await setupOrquestra();
+    orq.createTerminal({ name: 'A', agent: 'fake', cwd: tmpdir() });
+    orq.createTerminal({ name: 'B', agent: 'fake', cwd: tmpdir() });
+    orq.connect('A', 'B');
+    await orq.unloadTerminal('B');
+
+    await expect(orq.dispatchForTest('peers', {}, { session: 'A' }, new AbortController().signal)).resolves.toMatchObject({
+      peers: [{ name: 'B', state: 'exited', unloaded: true }],
+    });
+    await expect(orq.dispatchForTest('prompt', { target: 'B', text: 'trabalho', timeoutMs: 1000 }, { session: 'A' }, new AbortController().signal))
+      .rejects.toMatchObject({ code: 'USAGE', message: 'B está descarregado. Recarregue com orq load B antes de enviar a tarefa.' });
+  });
   it('descarregar mantém o nó, invalida a credencial antiga e recarrega com as conexões', async () => {
     const { orq, host } = await setupOrquestra();
     const a = orq.createTerminal({ name: 'A', agent: 'fake', cwd: tmpdir(), agentSessionId: 'history-A' });

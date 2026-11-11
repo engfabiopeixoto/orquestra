@@ -26,7 +26,7 @@ export const methodSchemas = {
   peers: {
     params: empty,
     result: z.object({
-      peers: z.array(z.object({ name: z.string(), agent: z.string(), state: sessionStateSchema, queued: z.number().int() })),
+      peers: z.array(z.object({ name: z.string(), agent: z.string(), state: sessionStateSchema, queued: z.number().int(), unloaded: z.boolean().optional() })),
       portals: z.array(browserNodeSchema).optional(),
     }),
   },
@@ -82,6 +82,14 @@ export const methodSchemas = {
     result: empty,
   },
   'regent.restart': {
+    params: z.object({ name: z.string().min(1) }),
+    result: z.object({ name: z.string(), state: sessionStateSchema }),
+  },
+  'regent.unload': {
+    params: z.object({ name: z.string().min(1) }),
+    result: z.object({ name: z.string() }),
+  },
+  'regent.load': {
     params: z.object({ name: z.string().min(1) }),
     result: z.object({ name: z.string(), state: sessionStateSchema }),
   },

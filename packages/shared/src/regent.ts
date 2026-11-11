@@ -15,6 +15,8 @@ export const REGENT_COMMANDS: Array<{ usage: string; description: string }> = [
   { usage: 'orq new <nome> --agent claude|agy|codex|shell [--persona <f>] [--args "<texto>"] [--cwd <pasta>] [--no-resume]', description: 'cria um terminal ao seu lado, já conectado a você' },
   { usage: 'orq remove <nome>', description: 'remove um terminal ou nota (não você mesmo)' },
   { usage: 'orq restart <terminal>', description: 'reinicia um terminal travado ou sem resposta (falha os pedidos da fila dele)' },
+  { usage: 'orq unload <terminal>', description: 'descarrega um terminal ocioso para liberar memória (conexões e configuração ficam)' },
+  { usage: 'orq load <terminal>', description: 'recarrega um terminal descarregado' },
   { usage: 'orq link <a> <b>', description: 'conecta dois nós' },
   { usage: 'orq unlink <a> <b>', description: 'desconecta dois nós' },
   { usage: 'orq brief <terminal> <persona>', description: 'entrega o texto de uma função ao terminal' },
@@ -30,6 +32,7 @@ export function regentGuide(): string {
     ...REGENT_COMMANDS.map((command) => `  ${command.usage}  ${command.description}`),
     'Use orq prompt <terminal> "<tarefa>" para passar tarefas e orq read <terminal> para acompanhar.',
     'Se um terminal não responder ou a fila dele travar (orq read mostra que nada anda), reinicie com orq restart <terminal> e reenvie a tarefa.',
+    'Descarregue com orq unload <terminal> os agentes ociosos que não vai usar por um tempo e recarregue com orq load <terminal> antes de mandar nova tarefa; orq peers mostra quem está descarregado.',
   ].join('\n');
 }
 

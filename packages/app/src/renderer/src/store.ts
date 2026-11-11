@@ -227,7 +227,7 @@ export function createAppStore() {
         };
         set({ terminals: { ...get().terminals, [event.info.name]: view } });
         if (event.connectedTo) get().addEdge({ a: event.connectedTo, b: event.info.name });
-      } else if (event.type === 'terminal.restarted') {
+      } else if (event.type === 'terminal.replaced') {
         get().replaceTerminal(event.info.name, event.info);
       } else if (event.type === 'edge.added') {
         get().addEdge({ a: event.a, b: event.b });

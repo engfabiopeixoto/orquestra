@@ -107,9 +107,9 @@ describe('orq', () => {
 
   it('peers lista nome, tipo, estado e fila', async () => {
     const result = await cli(['peers'], async () => ({
-      peers: [{ name: 'B', agent: 'agy', state: 'busy', queued: 2 }],
+      peers: [{ name: 'B', agent: 'agy', state: 'busy', queued: 2 }, { name: 'C', agent: 'codex', state: 'exited', queued: 0, unloaded: true }],
     }));
-    expect(result.stdout).toBe('B\tagy\tbusy\t2 na fila\n');
+    expect(result.stdout).toBe('B\tagy\tbusy\t2 na fila\nC\tcodex\tdescarregado\n');
   });
 
   it('--json imprime o resultado estruturado', async () => {
@@ -269,6 +269,25 @@ describe('orq', () => {
     expect(received).toEqual({ name: 'B' });
   });
 
+  it('unload e load chamam os métodos do pipe e imprimem seus resultados', async () => {
+    let method = '';
+    const unloaded = await cli(['unload', 'B'], async (called, params) => {
+      method = called;
+      expect(params).toEqual({ name: 'B' });
+      return { name: 'B' };
+    });
+    expect(method).toBe('regent.unload');
+    expect(unloaded.stdout).toBe('B descarregado.\n');
+
+    const loaded = await cli(['load', 'B'], async (called, params) => {
+      method = called;
+      expect(params).toEqual({ name: 'B' });
+      return { name: 'B', state: 'starting' };
+    });
+    expect(method).toBe('regent.load');
+    expect(loaded.stdout).toBe('B recarregado (estado: starting).\n');
+  });
+
   it('persona show e persona remove', async () => {
     const resShow = await cli(['persona', 'show', 'p'], async (m, params) => {
       expect(m).toBe('persona.show');
@@ -300,6 +319,8 @@ describe('orq', () => {
     expect(result.stderr).toContain('orq new');
     expect(result.stderr).toContain('orq remove');
     expect(result.stderr).toContain('orq restart');
+    expect(result.stderr).toContain('orq unload');
+    expect(result.stderr).toContain('orq load');
     expect(result.stderr).toContain('orq link');
     expect(result.stderr).toContain('orq unlink');
     expect(result.stderr).toContain('orq brief');

@@ -10,6 +10,8 @@ const REGENT_METHODS = [
   'regent.new',
   'regent.remove',
   'regent.restart',
+  'regent.unload',
+  'regent.load',
   'regent.link',
   'regent.unlink',
   'regent.brief',
@@ -28,6 +30,7 @@ export type HandlerDeps = {
   session: (name: string) => Session | undefined;
   onNoteChanged: (note: Note, createdBy: string | null) => void;
   isRegent: (name: string) => boolean;
+  isUnloaded?: (name: string) => boolean;
   regent?: RegentHandler;
   browser?: BrowserHandler;
   browserNodes?: () => BrowserNode[];
@@ -103,7 +106,7 @@ export function createHandlers(deps: HandlerDeps): Dispatch {
     peers: async (_params, caller) => ({
       peers: deps.topology.neighbors(caller.session, 'terminal').map((name) => {
         const session = requireSession(name);
-        return { name, agent: session.adapter.kind, state: session.state, queued: deps.broker.queued(name) };
+        return { name, agent: session.adapter.kind, state: session.state, queued: deps.broker.queued(name), ...(deps.isUnloaded?.(name) ? { unloaded: true } : {}) };
       }),
       ...(deps.topology.neighbors(caller.session, 'portal').length ? { portals: (deps.browserNodes?.() ?? []).filter((portal) => deps.topology.isConnected(caller.session, portal.id)) } : {}),
     }),
@@ -112,7 +115,11 @@ export function createHandlers(deps: HandlerDeps): Dispatch {
         throw new OrqError('USAGE', 'Não dá para enviar um prompt para você mesmo. Escolha outro destino.');
       }
       requireConnected(caller.session, params.target, 'terminal');
-      if (!requireSession(params.target).adapter.acceptsPrompts) {
+      const target = requireSession(params.target);
+      if (deps.isUnloaded?.(params.target)) {
+        throw new OrqError('USAGE', `${params.target} está descarregado. Recarregue com orq load ${params.target} antes de enviar a tarefa.`);
+      }
+      if (!target.adapter.acceptsPrompts) {
         throw new OrqError('UNSUPPORTED', `${params.target} é um shell e não recebe prompts. Use orq read para ler a tela.`);
       }
       return deps.broker.submit({ asker: caller.session, target: params.target, text: params.text, timeoutMs: params.timeoutMs, signal });
@@ -161,6 +168,8 @@ export function createHandlers(deps: HandlerDeps): Dispatch {
     'regent.new': regentCommand('regent.new'),
     'regent.remove': regentCommand('regent.remove'),
     'regent.restart': regentCommand('regent.restart'),
+    'regent.unload': regentCommand('regent.unload'),
+    'regent.load': regentCommand('regent.load'),
     'regent.link': regentCommand('regent.link'),
     'regent.unlink': regentCommand('regent.unlink'),
     'regent.brief': regentCommand('regent.brief'),
