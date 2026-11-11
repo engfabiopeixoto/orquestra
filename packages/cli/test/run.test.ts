@@ -258,6 +258,17 @@ describe('orq', () => {
     expect(briefParams).toEqual({ target: 'B', persona: 'revisor' });
   });
 
+  it('restart chama o método do pipe e imprime o estado reiniciado', async () => {
+    let received: unknown;
+    const result = await cli(['restart', 'B'], async (method, params) => {
+      expect(method).toBe('regent.restart');
+      received = params;
+      return { name: 'B', state: 'starting' };
+    });
+    expect(result).toMatchObject({ code: 0, stdout: 'B reiniciado (estado: starting).\n' });
+    expect(received).toEqual({ name: 'B' });
+  });
+
   it('persona show e persona remove', async () => {
     const resShow = await cli(['persona', 'show', 'p'], async (m, params) => {
       expect(m).toBe('persona.show');
@@ -288,6 +299,7 @@ describe('orq', () => {
     expect(result.stderr).toContain('Regente:');
     expect(result.stderr).toContain('orq new');
     expect(result.stderr).toContain('orq remove');
+    expect(result.stderr).toContain('orq restart');
     expect(result.stderr).toContain('orq link');
     expect(result.stderr).toContain('orq unlink');
     expect(result.stderr).toContain('orq brief');

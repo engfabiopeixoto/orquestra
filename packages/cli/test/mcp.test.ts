@@ -33,7 +33,7 @@ it('expõe ferramentas nativas e entrega prompt pelo pipe autenticado', async ()
   };
   expect((await request(1, 'initialize', { protocolVersion: '2025-06-18' })).result.serverInfo.name).toBe('orquestra');
   const tools = (await request(2, 'tools/list')).result.tools;
-  expect(tools.map((tool: { name: string }) => tool.name)).toEqual(expect.arrayContaining(['whoami', 'peers', 'prompt', 'read', 'regent_link', 'portal_list', 'portal_check', 'portal_navigate', 'portal_click', 'portal_type', 'portal_screenshot', 'usage']));
+  expect(tools.map((tool: { name: string }) => tool.name)).toEqual(expect.arrayContaining(['whoami', 'peers', 'prompt', 'read', 'regent_link', 'regent_restart', 'portal_list', 'portal_check', 'portal_navigate', 'portal_click', 'portal_type', 'portal_screenshot', 'usage']));
   expect(JSON.parse((await request(3, 'tools/call', { name: 'whoami', arguments: {} })).result.content[0].text)).toEqual({ name: 'codex-1', agent: 'codex' });
   const answer = await request(4, 'tools/call', { name: 'prompt', arguments: { target: 'agy-1', text: 'PING' } });
   expect(JSON.parse(answer.result.content[0].text).answer).toBe('PONG');

@@ -339,6 +339,22 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
       opts.send({ kind: 'event', event: { type: 'notice', level: 'info', message: `${caller} removeu ${params.name}.` } });
       return {};
     },
+    'regent.restart': async (params, caller) => {
+      if (caller === params.name) {
+        throw new OrqError('USAGE', 'Um regente não pode reiniciar a si mesmo. Peça ao usuário ou use a interface.');
+      }
+      const kind = orquestra.topology.kindOf(params.name);
+      if (!kind) throw new OrqError('NOT_FOUND', `Terminal ${params.name} não existe.`);
+      if (kind !== 'terminal') throw new OrqError('USAGE', 'Só terminais podem ser reiniciados.');
+
+      const session = await orquestra.restartTerminal(params.name, { reason: `${params.name} foi reiniciado por ${caller}` });
+      const terminalInfo = info(session);
+      opts.send({ kind: 'event', event: { type: 'terminal.restarted', info: terminalInfo } });
+      opts.send({ kind: 'event', event: { type: 'notice', level: 'info', message: `${caller} reiniciou ${params.name}.` } });
+      recordPids();
+      changed();
+      return { name: session.name, state: session.state };
+    },
     'regent.link': async (params) => {
       orquestra.connect(params.a, params.b);
       changed();

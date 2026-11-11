@@ -61,6 +61,14 @@ describe('mensagens', () => {
     expect(hostEventSchema.parse(edgeRemoved)).toEqual(edgeRemoved);
   });
 
+  it('valida evento de reinício do terminal com o retrato atualizado', () => {
+    const event = {
+      type: 'terminal.restarted',
+      info: { name: 'A', agent: 'shell', state: 'starting', queued: 0, cwd: 'C:/proj', resume: true, args: [], regente: false, monitor: false },
+    };
+    expect(hostEventSchema.parse(event)).toEqual(event);
+  });
+
   it('evento terminal.turn aceita donos válidos e recusa desconhecido', () => {
     const event = { type: 'terminal.turn', name: 'A', owner: 'user', outcome: 'ended' };
     expect(hostEventSchema.parse(event)).toEqual(event);

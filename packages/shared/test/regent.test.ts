@@ -14,8 +14,9 @@ describe('funções e guia do regente', () => {
     expect(guide).toContain('Antes de delegar, consulte orq usage para ver o crédito restante de cada assinatura (claude, codex, agy) e prefira agentes com folga.');
     for (const command of REGENT_COMMANDS) expect(guide).toContain(command.usage);
     expect(REGENT_COMMANDS.map((command) => command.usage.split(' ').slice(0, 2).join(' '))).toEqual(
-      expect.arrayContaining(['orq new', 'orq remove', 'orq link', 'orq unlink', 'orq brief']),
+      expect.arrayContaining(['orq new', 'orq remove', 'orq restart', 'orq link', 'orq unlink', 'orq brief']),
     );
+    expect(guide).toContain('orq restart');
   });
 
   it('orquestraGuide orienta a consultar orq usage antes de delegar', () => {

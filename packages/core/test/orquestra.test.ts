@@ -159,6 +159,28 @@ describe('Orquestra (PTY falso)', () => {
     expect(orq.topology.isConnected('A', 'B')).toBe(true);
   });
 
+  it('reiniciar com motivo falha os pedidos em curso e na fila com esse motivo', async () => {
+    const { orq } = await setupOrquestra();
+    orq.createTerminal({ name: 'A', agent: 'fake', cwd: tmpdir() });
+    const running = orq.broker.submit({ asker: 'R', target: 'A', text: 'em curso', timeoutMs: 60_000 });
+    const queued = orq.broker.submit({ asker: 'S', target: 'A', text: 'na fila', timeoutMs: 60_000 });
+    await waitFor(() => orq.broker.queued('A') === 2);
+    const runningFailure = expect(running).rejects.toMatchObject({ code: 'PROMPT_FAILED', message: expect.stringContaining('A foi reiniciado por R') });
+    const queuedFailure = expect(queued).rejects.toMatchObject({ code: 'PROMPT_FAILED', message: expect.stringContaining('A foi reiniciado por R') });
+    await orq.restartTerminal('A', { reason: 'A foi reiniciado por R' });
+    await Promise.all([runningFailure, queuedFailure]);
+  });
+
+  it('reiniciar sem motivo mantém a mensagem padrão de remoção dos pedidos', async () => {
+    const { orq } = await setupOrquestra();
+    orq.createTerminal({ name: 'A', agent: 'fake', cwd: tmpdir() });
+    const pending = orq.broker.submit({ asker: 'R', target: 'A', text: 'em curso', timeoutMs: 60_000 });
+    await waitFor(() => orq.broker.queued('A') === 1);
+    const failure = expect(pending).rejects.toMatchObject({ code: 'PROMPT_FAILED', message: expect.stringContaining('A foi removido') });
+    await orq.restartTerminal('A');
+    await failure;
+  });
+
   it('emite saída, estado e remoção pelo onEvent', async () => {
     const { orq, host, events } = await setupOrquestra();
     orq.createTerminal({ name: 'A', agent: 'fake', cwd: tmpdir() });

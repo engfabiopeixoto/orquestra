@@ -91,7 +91,7 @@ export type Orquestra = {
   /** Troca o nome mantendo conexões e o token; recusa se houver pedidos na fila do terminal. */
   renameTerminal(name: string, newName: string): Session;
   /** Encerra e lança de novo o mesmo agente na mesma pasta, com o mesmo nome e as mesmas conexões. */
-  restartTerminal(name: string): Promise<Session>;
+  restartTerminal(name: string, opts?: { reason?: string; keepUnloaded?: boolean }): Promise<Session>;
   unloadTerminal(name: string): Promise<Session>;
   /** Edita nome, pasta, argumentos e retomada de um terminal, relançando quando preciso. */
   updateTerminal(name: string, changes: TerminalChanges): Promise<Session>;
@@ -491,14 +491,14 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
     return entry.session;
   }
 
-  async function restartTerminal(name: string, keepUnloaded = false): Promise<Session> {
+  async function restartTerminal(name: string, restartOpts: { reason?: string; keepUnloaded?: boolean } = {}): Promise<Session> {
     const config = configs.get(name);
     if (!config) throw new OrqError('NOT_FOUND', `Terminal ${name} não existe.`);
     const neighbors = topology.neighbors(name);
-    await removeTerminal(name, { announce: false });
+    await removeTerminal(name, { announce: false, reason: restartOpts.reason });
     let session: Session;
     try {
-      session = createTerminal({ name, agent: config.agent, cwd: config.cwd, id: config.id, args: config.args, resume: config.resume, agentSessionId: config.agentSessionId, regente: config.regente, persona: config.persona, monitor: config.monitor, model: config.model, sessionDirs: config.sessionDirs, unloaded: keepUnloaded });
+      session = createTerminal({ name, agent: config.agent, cwd: config.cwd, id: config.id, args: config.args, resume: config.resume, agentSessionId: config.agentSessionId, regente: config.regente, persona: config.persona, monitor: config.monitor, model: config.model, sessionDirs: config.sessionDirs, unloaded: restartOpts.keepUnloaded ?? false });
     } catch (error) {
       // O terminal antigo já saiu: sem este aviso a interface ficaria com um nó que não existe mais.
       emit({ type: 'removed', name });
@@ -550,7 +550,7 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
     if (relaunch) {
       config.cwd = cwd;
       config.args = args;
-      session = await restartTerminal(newName, Boolean(config.unloaded));
+      session = await restartTerminal(newName, { keepUnloaded: Boolean(config.unloaded) });
     }
     opts.log.info({ session: newName, changed, relaunched: relaunch }, 'terminal atualizado');
     return session;

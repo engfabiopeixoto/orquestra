@@ -547,6 +547,42 @@ describe('regente na ponte', () => {
     expect(sent).toContainEqual({ kind: 'event', event: { type: 'notice', level: 'info', message: 'R removeu S.' } });
   });
 
+  it('regent.restart valida regente, alvo e emite a troca do terminal e aviso', async () => {
+    const { sent, command, ptyHost } = await withRegent();
+    await command('4', 'terminal.create', { name: 'S', agent: 'shell' });
+    await expect(bridge!.dispatchForTest('regent.restart', { name: 'S' }, { session: 'S' })).rejects.toMatchObject({ code: 'NOT_REGENT' });
+    await expect(bridge!.dispatchForTest('regent.restart', { name: 'R' }, { session: 'R' })).rejects.toMatchObject({ code: 'USAGE', message: expect.stringMatching(/não pode reiniciar a si mesmo/) });
+    await expect(bridge!.dispatchForTest('regent.restart', { name: 'ausente' }, { session: 'R' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await command('5', 'note.create', { name: 'anotacao', content: 'texto' });
+    await expect(bridge!.dispatchForTest('regent.restart', { name: 'anotacao' }, { session: 'R' })).rejects.toMatchObject({ code: 'USAGE', message: 'Só terminais podem ser reiniciados.' });
+
+    await command('6', 'terminal.unload', { name: 'S' });
+    const before = ptyHost.spawned.length;
+    const result = await bridge!.dispatchForTest('regent.restart', { name: 'S' }, { session: 'R' });
+    expect(result).toMatchObject({ name: 'S', state: expect.any(String) });
+    expect(ptyHost.spawned).toHaveLength(before + 1);
+    expect(sent).toContainEqual({ kind: 'event', event: { type: 'terminal.restarted', info: expect.objectContaining({ name: 'S' }) } });
+    expect(sent).toContainEqual({ kind: 'event', event: { type: 'notice', level: 'info', message: 'R reiniciou S.' } });
+    ptyHost.last().emitData('saída após reinício');
+    await waitFor(() => sent.some((message) => message.kind === 'event' && message.event.type === 'terminal.output' && message.event.name === 'S' && message.event.data.includes('saída após reinício')));
+    const restartedIndex = sent.findIndex((message) => message.kind === 'event' && message.event.type === 'terminal.restarted' && message.event.info.name === 'S');
+    const outputIndex = sent.findIndex((message) => message.kind === 'event' && message.event.type === 'terminal.output' && message.event.name === 'S' && message.event.data.includes('saída após reinício'));
+    expect(restartedIndex).toBeLessThan(outputIndex);
+  });
+
+  it('regent.restart falha os pedidos do alvo com o nome do regente no motivo', async () => {
+    const { sent, command } = await withRegent();
+    await command('4', 'terminal.create', { name: 'T', agent: 'claude' });
+    await command('5', 'edge.connect', { a: 'R', b: 'T' });
+    await waitFor(() => sent.some((message) => message.kind === 'event' && message.event.type === 'terminal.state' && message.event.name === 'T' && message.event.state === 'idle'));
+
+    const prompt = bridge!.dispatchForTest('prompt', { target: 'T', text: 'trabalho', timeoutMs: 60_000 }, { session: 'R' });
+    await waitFor(() => sent.some((message) => message.kind === 'event' && message.event.type === 'terminal.queue' && message.event.name === 'T' && message.event.entries.some((entry) => entry.status === 'running')));
+    const failure = expect(prompt).rejects.toMatchObject({ code: 'PROMPT_FAILED', message: expect.stringContaining('T foi reiniciado por R') });
+    await bridge!.dispatchForTest('regent.restart', { name: 'T' }, { session: 'R' });
+    await failure;
+  });
+
   it('link e unlink emitem os eventos de conexão', async () => {
     const { sent, command } = await withRegent();
     await command('4', 'terminal.create', { name: 'S', agent: 'shell' });

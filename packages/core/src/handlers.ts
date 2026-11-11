@@ -9,6 +9,7 @@ import type { BrowserHandler, BrowserNode, BrowserMethod } from '@orquestra/shar
 const REGENT_METHODS = [
   'regent.new',
   'regent.remove',
+  'regent.restart',
   'regent.link',
   'regent.unlink',
   'regent.brief',
@@ -159,6 +160,7 @@ export function createHandlers(deps: HandlerDeps): Dispatch {
     },
     'regent.new': regentCommand('regent.new'),
     'regent.remove': regentCommand('regent.remove'),
+    'regent.restart': regentCommand('regent.restart'),
     'regent.link': regentCommand('regent.link'),
     'regent.unlink': regentCommand('regent.unlink'),
     'regent.brief': regentCommand('regent.brief'),

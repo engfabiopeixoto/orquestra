@@ -81,6 +81,10 @@ export const methodSchemas = {
     params: z.object({ name: z.string().min(1) }),
     result: empty,
   },
+  'regent.restart': {
+    params: z.object({ name: z.string().min(1) }),
+    result: z.object({ name: z.string(), state: sessionStateSchema }),
+  },
   'regent.link': {
     params: z.object({ a: z.string().min(1), b: z.string().min(1) }),
     result: empty,

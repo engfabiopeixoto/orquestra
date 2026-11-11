@@ -172,6 +172,11 @@ async function execute(
       await call(client, 'regent.remove', { name });
       return { text: `${name} removido`, json: { name } };
     }
+    case 'restart': {
+      const name = required(args[0], 'o nome do terminal');
+      const result = await call(client, 'regent.restart', { name });
+      return { text: `${result.name} reiniciado (estado: ${result.state}).`, json: result };
+    }
     case 'link':
     case 'unlink': {
       const a = required(args[0], 'o primeiro nó');

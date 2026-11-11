@@ -14,6 +14,7 @@ export type PersonaScope = z.infer<typeof personaScopeSchema>;
 export const REGENT_COMMANDS: Array<{ usage: string; description: string }> = [
   { usage: 'orq new <nome> --agent claude|agy|codex|shell [--persona <f>] [--args "<texto>"] [--cwd <pasta>] [--no-resume]', description: 'cria um terminal ao seu lado, já conectado a você' },
   { usage: 'orq remove <nome>', description: 'remove um terminal ou nota (não você mesmo)' },
+  { usage: 'orq restart <terminal>', description: 'reinicia um terminal travado ou sem resposta (falha os pedidos da fila dele)' },
   { usage: 'orq link <a> <b>', description: 'conecta dois nós' },
   { usage: 'orq unlink <a> <b>', description: 'desconecta dois nós' },
   { usage: 'orq brief <terminal> <persona>', description: 'entrega o texto de uma função ao terminal' },
@@ -28,6 +29,7 @@ export function regentGuide(): string {
     'Antes de delegar, consulte orq usage para ver o crédito restante de cada assinatura (claude, codex, agy) e prefira agentes com folga.',
     ...REGENT_COMMANDS.map((command) => `  ${command.usage}  ${command.description}`),
     'Use orq prompt <terminal> "<tarefa>" para passar tarefas e orq read <terminal> para acompanhar.',
+    'Se um terminal não responder ou a fila dele travar (orq read mostra que nada anda), reinicie com orq restart <terminal> e reenvie a tarefa.',
   ].join('\n');
 }
 
