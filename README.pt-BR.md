@@ -12,14 +12,15 @@ Rodar vários agentes ao mesmo tempo significa alternar entre janelas de termina
 
 - **Terminais de agentes.** Execute os agentes de CLI `claude`, `agy` e `codex`, ou um shell PowerShell, como nós no canvas.
 - **Conexões.** Ligue terminais e notas. Terminais ligados podem enviar prompts e ler uns aos outros. Remova uma ligação selecionando-a e apertando Delete, pelo menu de contexto ou pelo botão × na linha.
-- **Regente.** Marque um terminal como regente. Ele recebe um guia e pode criar, ligar, remover e instruir outros terminais com `orq`.
+- **Regente.** Marque um terminal como regente. Ele recebe um guia e pode criar, ligar, remover e instruir outros terminais com `orq`. Também pode reiniciar um terminal que parou de responder ou ficou com a fila travada, e descarregar terminais ociosos para liberar memória e recarregá-los quando precisar.
+- **Tag de modelo.** Cada terminal de agente mostra o modelo no cabeçalho. Clique na tag para escolher outro modelo da lista daquele agente. A tag fica vermelha quando o agente está rodando um modelo diferente do escolhido.
 - **Funções (personas).** Salve instruções reutilizáveis por projeto ou globalmente e entregue uma a qualquer terminal.
 - **Notas.** Notas em Markdown no canvas que os agentes conectados podem ler e escrever.
 - **Grupos.** Agrupe terminais, notas e nós de fluxo em uma moldura e mova todos juntos.
 - **Workspaces.** Mantenha até três projetos abertos ao mesmo tempo, cada um com seu canvas.
 - **Portais de navegador.** Conecte um navegador a um agente para ele navegar, clicar, digitar, rolar a página e capturar telas.
 - **Monitoramento de atividade.** Ative o monitoramento por terminal para receber uma notificação do Windows quando ele terminar um turno ou esperar por você com o app fora de foco.
-- **Uso das assinaturas.** Veja as janelas de uso e os horários de renovação do Claude, do Codex e do agy.
+- **Uso das assinaturas.** Veja as janelas de uso e os horários de renovação do Claude, do Codex e do agy. Os agentes consultam esses dados com `orq usage`, e o regente pode delegar sem estourar os limites.
 - **Fluxo visual de dados.** Monte um grafo de processamento no mesmo canvas com nós de entrada, arquivo, algoritmo (JavaScript ou Python), validação, teste, visualização e saída. Veja [docs/fluxo-visual.md](docs/fluxo-visual.md).
 
 ## Requisitos
@@ -66,6 +67,7 @@ echo "texto longo da tarefa" | orq prompt revisor -
 orq read revisor --lines 40             # tela atual de um terminal conectado
 orq result <id>                         # resposta de um prompt pendente
 orq note write plano "Passo 1: ..."     # também: note list | show | append
+orq usage                               # crédito restante das assinaturas (também: usage claude|codex|agy)
 orq portal list                         # navegadores conectados a você
 orq portal navigate <id> https://example.com
 ```
@@ -80,9 +82,12 @@ orq brief testador qa                                     # entrega uma função
 orq persona write qa "Você é uma pessoa de QA..." --global
 orq persona list | show <função> | remove <função> [--global]
 orq remove testador
+orq restart testador                                      # relança um terminal travado; os pedidos pendentes falham
+orq unload testador                                       # descarrega um terminal ocioso; conexões e configuração ficam
+orq load testador                                         # recarrega antes de mandar nova tarefa
 ```
 
-O `orq mcp` executa um servidor MCP por stdio que expõe as mesmas operações como ferramentas (`whoami`, `peers`, `prompt`, `read`, `note_*`, `portal_*`, `regent_*`, `persona_*`). O Orquestra o registra automaticamente nos terminais Codex.
+O `orq mcp` executa um servidor MCP por stdio que expõe as mesmas operações como ferramentas (`whoami`, `peers`, `usage`, `prompt`, `read`, `note_*`, `portal_*`, `regent_*`, `persona_*`). O Orquestra o registra automaticamente nos terminais Codex.
 
 ## Arquitetura
 

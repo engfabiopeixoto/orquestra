@@ -12,14 +12,15 @@ Running several agents at once means juggling terminal windows, copying prompts 
 
 - **Agent terminals.** Run `claude`, `agy` and `codex` CLI agents, or a PowerShell shell, as nodes on the canvas.
 - **Connections.** Link terminals and notes. Linked terminals can prompt and read each other. Remove a link by selecting it and pressing Delete, from its context menu, or with the × button on the line.
-- **Regent.** Mark a terminal as regent. It receives a guide and can create, link, remove and brief other terminals with `orq`.
+- **Regent.** Mark a terminal as regent. It receives a guide and can create, link, remove and brief other terminals with `orq`. It can also restart a terminal that stopped responding or has a stuck queue, and unload idle terminals to free memory and load them back when needed.
+- **Model tag.** Each agent terminal shows its model in the header. Click the tag to pick another model from the agent's list. The tag turns red when the agent is running a different model than the one chosen.
 - **Roles (personas).** Save reusable instructions per project or globally, and hand one to any terminal.
 - **Notes.** Markdown notes on the canvas that connected agents can read and write.
 - **Groups.** Frame related terminals, notes and flow nodes, and move them together.
 - **Workspaces.** Keep up to three projects open at once, each with its own canvas.
 - **Browser portals.** Connect a browser node to an agent so it can navigate, click, type, scroll and take screenshots.
 - **Activity monitoring.** Turn on monitoring per terminal to get a Windows notification when it finishes a turn or waits for you while the app is unfocused.
-- **Subscription usage.** See the usage windows and reset times for Claude, Codex and agy.
+- **Subscription usage.** See the usage windows and reset times for Claude, Codex and agy. Agents can check them with `orq usage`, so the regent can delegate without hitting the limits.
 - **Visual data flow.** Build a processing graph on the same canvas with input, file, algorithm (JavaScript or Python), validation, test, view and output nodes. See [docs/fluxo-visual.md](docs/fluxo-visual.md) (in Portuguese).
 
 ## Requirements
@@ -66,6 +67,7 @@ echo "long task text" | orq prompt reviewer -
 orq read reviewer --lines 40            # current screen of a connected terminal
 orq result <id>                         # answer of a pending prompt
 orq note write plan "Step 1: ..."       # also: note list | show | append
+orq usage                               # remaining subscription credit (also: usage claude|codex|agy)
 orq portal list                         # browsers connected to you
 orq portal navigate <id> https://example.com
 ```
@@ -80,9 +82,12 @@ orq brief tester qa                                     # hand a role to a termi
 orq persona write qa "You are a QA engineer..." --global
 orq persona list | show <role> | remove <role> [--global]
 orq remove tester
+orq restart tester                                      # relaunch a stuck terminal; its pending prompts fail
+orq unload tester                                       # unload an idle terminal; links and settings stay
+orq load tester                                         # load it back before sending a new task
 ```
 
-`orq mcp` runs an MCP server over stdio that exposes the same operations as tools (`whoami`, `peers`, `prompt`, `read`, `note_*`, `portal_*`, `regent_*`, `persona_*`). Orquestra registers it automatically for Codex terminals.
+`orq mcp` runs an MCP server over stdio that exposes the same operations as tools (`whoami`, `peers`, `usage`, `prompt`, `read`, `note_*`, `portal_*`, `regent_*`, `persona_*`). Orquestra registers it automatically for Codex terminals.
 
 ## Architecture
 
