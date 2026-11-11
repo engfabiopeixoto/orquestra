@@ -70,6 +70,20 @@ describe('Orquestra (PTY falso)', () => {
     expect(result).toMatchObject({ answer: 'resposta' });
     expect(events).toContainEqual({ type: 'answered', askId: result.askId, asker: 'A', target: 'B' });
   });
+
+  it('peers sinaliza terminal descarregado e prompt explica como recarregá-lo', async () => {
+    const { orq } = await setupOrquestra();
+    orq.createTerminal({ name: 'A', agent: 'fake', cwd: tmpdir() });
+    orq.createTerminal({ name: 'B', agent: 'fake', cwd: tmpdir() });
+    orq.connect('A', 'B');
+    await orq.unloadTerminal('B');
+
+    await expect(orq.dispatchForTest('peers', {}, { session: 'A' }, new AbortController().signal)).resolves.toMatchObject({
+      peers: [{ name: 'B', state: 'exited', unloaded: true }],
+    });
+    await expect(orq.dispatchForTest('prompt', { target: 'B', text: 'trabalho', timeoutMs: 1000 }, { session: 'A' }, new AbortController().signal))
+      .rejects.toMatchObject({ code: 'USAGE', message: 'B está descarregado. Recarregue com orq load B antes de enviar a tarefa.' });
+  });
   it('descarregar mantém o nó, invalida a credencial antiga e recarrega com as conexões', async () => {
     const { orq, host } = await setupOrquestra();
     const a = orq.createTerminal({ name: 'A', agent: 'fake', cwd: tmpdir(), agentSessionId: 'history-A' });
@@ -157,6 +171,28 @@ describe('Orquestra (PTY falso)', () => {
     expect(host.spawned.length).toBe(before + 1);
     expect(restarted.name).toBe('A');
     expect(orq.topology.isConnected('A', 'B')).toBe(true);
+  });
+
+  it('reiniciar com motivo falha os pedidos em curso e na fila com esse motivo', async () => {
+    const { orq } = await setupOrquestra();
+    orq.createTerminal({ name: 'A', agent: 'fake', cwd: tmpdir() });
+    const running = orq.broker.submit({ asker: 'R', target: 'A', text: 'em curso', timeoutMs: 60_000 });
+    const queued = orq.broker.submit({ asker: 'S', target: 'A', text: 'na fila', timeoutMs: 60_000 });
+    await waitFor(() => orq.broker.queued('A') === 2);
+    const runningFailure = expect(running).rejects.toMatchObject({ code: 'PROMPT_FAILED', message: expect.stringContaining('A foi reiniciado por R') });
+    const queuedFailure = expect(queued).rejects.toMatchObject({ code: 'PROMPT_FAILED', message: expect.stringContaining('A foi reiniciado por R') });
+    await orq.restartTerminal('A', { reason: 'A foi reiniciado por R' });
+    await Promise.all([runningFailure, queuedFailure]);
+  });
+
+  it('reiniciar sem motivo mantém a mensagem padrão de remoção dos pedidos', async () => {
+    const { orq } = await setupOrquestra();
+    orq.createTerminal({ name: 'A', agent: 'fake', cwd: tmpdir() });
+    const pending = orq.broker.submit({ asker: 'R', target: 'A', text: 'em curso', timeoutMs: 60_000 });
+    await waitFor(() => orq.broker.queued('A') === 1);
+    const failure = expect(pending).rejects.toMatchObject({ code: 'PROMPT_FAILED', message: expect.stringContaining('A foi removido') });
+    await orq.restartTerminal('A');
+    await failure;
   });
 
   it('emite saída, estado e remoção pelo onEvent', async () => {

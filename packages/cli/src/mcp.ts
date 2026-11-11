@@ -6,7 +6,7 @@ const text = { type: 'string' };
 const positive = { type: 'integer', minimum: 1 };
 type Tool = { name: string; method: MethodName; description: string; inputSchema: object; annotations: object };
 function tool(method: MethodName, description: string, properties: Record<string, object> = {}, required: string[] = [], readOnly = false): Tool {
-  return { name: method.replaceAll('.', '_'), method, description, inputSchema: { type: 'object', properties, required, additionalProperties: false }, annotations: { readOnlyHint: readOnly, destructiveHint: method.endsWith('remove'), openWorldHint: method.startsWith('portal.') && method !== 'portal.list' } };
+  return { name: method.replaceAll('.', '_'), method, description, inputSchema: { type: 'object', properties, required, additionalProperties: false }, annotations: { readOnlyHint: readOnly, destructiveHint: method.endsWith('remove') || ['regent.restart', 'regent.unload', 'regent.load'].includes(method), openWorldHint: method.startsWith('portal.') && method !== 'portal.list' } };
 }
 export const ORQUESTRA_TOOLS = [
   tool('portal.list', 'Lista os navegadores conectados a este agente. Use os IDs retornados nos comandos portal.', {}, [], true),
@@ -30,6 +30,9 @@ export const ORQUESTRA_TOOLS = [
   tool('regent.unlink', 'Regente: remove uma conexão do canvas.', { a: text, b: text }, ['a', 'b']),
   tool('regent.new', 'Regente: cria um terminal ao seu lado, já conectado a você.', { name: text, agent: { type: 'string', enum: ['claude', 'agy', 'codex', 'shell'] }, cwd: text, args: { type: 'array', items: text }, resume: { type: 'boolean' }, persona: text }, ['name', 'agent']),
   tool('regent.remove', 'Regente: remove um terminal ou nota do canvas.', { name: text }, ['name']),
+  tool('regent.restart', 'Regente: reinicia um terminal que parou de responder ou está com a fila travada. Os pedidos pendentes para ele falham e precisam ser reenviados.', { name: text }, ['name']),
+  tool('regent.unload', 'Regente: descarrega um terminal ocioso para liberar memória; conexões e configuração ficam. Recarregue com regent_load antes de mandar tarefas.', { name: text }, ['name']),
+  tool('regent.load', 'Regente: recarrega um terminal descarregado.', { name: text }, ['name']),
   tool('regent.brief', 'Regente: entrega uma função existente a outro terminal.', { target: text, persona: text }, ['target', 'persona']),
   tool('persona.list', 'Lista as funções disponíveis no Orquestra.', {}, [], true),
   tool('persona.show', 'Lê o texto de uma função existente.', { name: text }, ['name'], true),

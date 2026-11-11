@@ -339,6 +339,68 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
       opts.send({ kind: 'event', event: { type: 'notice', level: 'info', message: `${caller} removeu ${params.name}.` } });
       return {};
     },
+    'regent.restart': async (params, caller) => {
+      if (caller === params.name) {
+        throw new OrqError('USAGE', 'Um regente não pode reiniciar a si mesmo. Peça ao usuário ou use a interface.');
+      }
+      const kind = orquestra.topology.kindOf(params.name);
+      if (!kind) throw new OrqError('NOT_FOUND', `Terminal ${params.name} não existe.`);
+      if (kind !== 'terminal') throw new OrqError('USAGE', 'Só terminais podem ser reiniciados.');
+
+      const session = await orquestra.restartTerminal(params.name, { reason: `${params.name} foi reiniciado por ${caller}` });
+      const terminalInfo = info(session);
+      opts.send({ kind: 'event', event: { type: 'terminal.replaced', info: terminalInfo } });
+      opts.send({ kind: 'event', event: { type: 'notice', level: 'info', message: `${caller} reiniciou ${params.name}.` } });
+      recordPids();
+      changed();
+      return { name: session.name, state: session.state };
+    },
+    'regent.unload': async (params, caller) => {
+      if (caller === params.name) {
+        throw new OrqError('USAGE', 'Um regente não pode descarregar a si mesmo. Peça ao usuário ou use a interface.');
+      }
+      const kind = orquestra.topology.kindOf(params.name);
+      if (!kind) throw new OrqError('NOT_FOUND', `Terminal ${params.name} não existe.`);
+      if (kind !== 'terminal') throw new OrqError('USAGE', 'Só terminais podem ser descarregados.');
+
+      const session = orquestra.session(params.name);
+      if (!session) throw new OrqError('NOT_FOUND', `Terminal ${params.name} não existe.`);
+      const descriptor = orquestra.describeTerminals().find((terminal) => terminal.name === params.name);
+      if (descriptor?.unloaded) return { name: params.name };
+
+      const queued = orquestra.broker.queued(params.name);
+      if (session.state !== 'idle' || queued > 0) {
+        const stateLabel = ({ starting: 'iniciando', idle: 'ocioso', busy: 'ocupado', waiting: 'aguardando', exited: 'encerrado' } as const)[session.state];
+        throw new OrqError('USAGE', `Não é possível descarregar ${params.name}: estado ${stateLabel}, ${queued} pedido(s) na fila. Espere ficar ocioso e a fila esvaziar; se estiver travado, use orq restart ${params.name}.`);
+      }
+
+      const unloaded = await orquestra.unloadTerminal(params.name);
+      opts.send({ kind: 'event', event: { type: 'terminal.replaced', info: info(unloaded) } });
+      opts.send({ kind: 'event', event: { type: 'notice', level: 'info', message: `${caller} descarregou ${params.name}.` } });
+      recordPids();
+      changed();
+      return { name: params.name };
+    },
+    'regent.load': async (params, caller) => {
+      if (caller === params.name) {
+        throw new OrqError('USAGE', 'Um regente não pode recarregar a si mesmo. Peça ao usuário ou use a interface.');
+      }
+      const kind = orquestra.topology.kindOf(params.name);
+      if (!kind) throw new OrqError('NOT_FOUND', `Terminal ${params.name} não existe.`);
+      if (kind !== 'terminal') throw new OrqError('USAGE', 'Só terminais podem ser recarregados.');
+
+      const session = orquestra.session(params.name);
+      if (!session) throw new OrqError('NOT_FOUND', `Terminal ${params.name} não existe.`);
+      const descriptor = orquestra.describeTerminals().find((terminal) => terminal.name === params.name);
+      if (!descriptor?.unloaded) return { name: params.name, state: session.state };
+
+      const loaded = await orquestra.restartTerminal(params.name);
+      opts.send({ kind: 'event', event: { type: 'terminal.replaced', info: info(loaded) } });
+      opts.send({ kind: 'event', event: { type: 'notice', level: 'info', message: `${caller} recarregou ${params.name}.` } });
+      recordPids();
+      changed();
+      return { name: loaded.name, state: loaded.state };
+    },
     'regent.link': async (params) => {
       orquestra.connect(params.a, params.b);
       changed();

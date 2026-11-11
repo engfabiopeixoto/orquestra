@@ -61,6 +61,14 @@ describe('mensagens', () => {
     expect(hostEventSchema.parse(edgeRemoved)).toEqual(edgeRemoved);
   });
 
+  it('valida evento de substituição do terminal com o retrato atualizado', () => {
+    const event = {
+      type: 'terminal.replaced',
+      info: { name: 'A', agent: 'shell', state: 'exited', queued: 0, cwd: 'C:/proj', resume: true, args: [], regente: false, monitor: false, unloaded: true },
+    };
+    expect(hostEventSchema.parse(event)).toEqual(event);
+  });
+
   it('evento terminal.turn aceita donos válidos e recusa desconhecido', () => {
     const event = { type: 'terminal.turn', name: 'A', owner: 'user', outcome: 'ended' };
     expect(hostEventSchema.parse(event)).toEqual(event);

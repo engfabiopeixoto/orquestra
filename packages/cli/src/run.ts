@@ -104,7 +104,7 @@ async function execute(
     }
     case 'peers': {
       const result = await call(client, 'peers', {});
-      const lines = result.peers.map((peer) => `${peer.name}\t${peer.agent}\t${peer.state}${peer.queued > 0 ? `\t${peer.queued} na fila` : ''}`);
+      const lines = result.peers.map((peer) => `${peer.name}\t${peer.agent}\t${peer.unloaded ? 'descarregado' : peer.state}${peer.queued > 0 ? `\t${peer.queued} na fila` : ''}`);
       lines.push(...(result.portals ?? []).map((portal) => `${portal.id}\tnavegador\t${portal.title} (orq portal check ${portal.id})`));
       return { text: lines.length > 0 ? lines.join('\n') : 'Nenhum terminal conectado a você.', json: result };
     }
@@ -171,6 +171,21 @@ async function execute(
       const name = required(args[0], 'o nome do nó');
       await call(client, 'regent.remove', { name });
       return { text: `${name} removido`, json: { name } };
+    }
+    case 'restart': {
+      const name = required(args[0], 'o nome do terminal');
+      const result = await call(client, 'regent.restart', { name });
+      return { text: `${result.name} reiniciado (estado: ${result.state}).`, json: result };
+    }
+    case 'unload': {
+      const name = required(args[0], 'o nome do terminal');
+      const result = await call(client, 'regent.unload', { name });
+      return { text: `${result.name} descarregado.`, json: result };
+    }
+    case 'load': {
+      const name = required(args[0], 'o nome do terminal');
+      const result = await call(client, 'regent.load', { name });
+      return { text: `${result.name} recarregado (estado: ${result.state}).`, json: result };
     }
     case 'link':
     case 'unlink': {

@@ -13,6 +13,16 @@ describe('estado da interface', () => {
     expect(store.getState().queues.A).toHaveLength(1);
   });
 
+  it('terminal.replaced desmonta e remonta o xterm ao descarregar e recarregar', () => {
+    const store = createAppStore();
+    store.getState().addTerminal(info('A'));
+    store.getState().moveNode('A', { x: 240, y: 180 });
+    store.getState().applyEvent({ type: 'terminal.replaced', info: { ...info('A'), state: 'exited', unloaded: true } });
+    expect(store.getState().terminals.A).toMatchObject({ epoch: 1, unloaded: true, position: { x: 240, y: 180 } });
+    store.getState().applyEvent({ type: 'terminal.replaced', info: { ...info('A'), state: 'starting', id: 'id-novo' } });
+    expect(store.getState().terminals.A).toMatchObject({ id: 'id-novo', epoch: 2, unloaded: false, position: { x: 240, y: 180 } });
+  });
+
   it('guarda as 20 respostas mais recentes e limpa ao trocar ou carregar projeto', () => {
     const store = createAppStore();
     for (let index = 0; index < 21; index++) {

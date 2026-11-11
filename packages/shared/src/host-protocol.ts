@@ -262,6 +262,7 @@ export const hostEventSchema = z.discriminatedUnion('type', [
   // connectedTo e rect vêm preenchidos quando a nota nasceu de um agente.
   z.object({ type: z.literal('note.changed'), note: noteInfoSchema, connectedTo: z.string().nullable(), rect: rectSchema.nullable(), renamedFrom: z.string().optional() }),
   z.object({ type: z.literal('terminal.added'), info: terminalInfoSchema, rect: rectSchema, connectedTo: z.string().nullable() }),
+  z.object({ type: z.literal('terminal.replaced'), info: terminalInfoSchema }),
   z.object({ type: z.literal('edge.added'), a: z.string(), b: z.string() }),
   z.object({ type: z.literal('edge.removed'), a: z.string(), b: z.string() }),
   z.object({ type: z.literal('note.removed'), name: z.string() }),
