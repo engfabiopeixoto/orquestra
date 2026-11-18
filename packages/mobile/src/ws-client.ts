@@ -1,7 +1,7 @@
 import { OrqError } from '@orquestra/shared/errors';
 import { parseHostResult, remoteServerMessageSchema, type HostEvent, type HostMethod, type HostParams, type HostResult } from '@orquestra/shared/host-protocol';
-import { remoteResultOverrides, type RemoteSnapshot } from '@orquestra/shared/remote-snapshot';
-import type { ZodTypeAny } from 'zod';
+import { remoteResultOverrides } from '@orquestra/shared/remote-snapshot';
+import type { ZodTypeAny, z } from 'zod';
 import type { RemoteDevice } from '@orquestra/shared/remote';
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'revoked' | 'closed';
@@ -28,8 +28,10 @@ export type RemoteWsClientOptions = {
   onOutputOverflow?: (overflow: { name: string; workspaceId?: string }) => void;
 };
 
-/** Resultado de um comando como o celular o recebe (o snapshot do workspace é reduzido pelo gateway). */
-export type RemoteResult<M extends HostMethod> = M extends keyof typeof remoteResultOverrides ? RemoteSnapshot : HostResult<M>;
+/** Resultado de um comando como o celular o recebe (workspace.activate e workspace.list são reduzidos pelo gateway). */
+export type RemoteResult<M extends HostMethod> = M extends keyof typeof remoteResultOverrides
+  ? z.infer<(typeof remoteResultOverrides)[M]>
+  : HostResult<M>;
 
 function parseRemoteResult<M extends HostMethod>(method: M, value: unknown): RemoteResult<M> {
   const override = (remoteResultOverrides as Record<string, ZodTypeAny>)[method];

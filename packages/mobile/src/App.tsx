@@ -5,11 +5,10 @@ import type {
   HostResult,
   QueueEntry,
   TerminalInfo,
-  WorkspaceInfo,
 } from '@orquestra/shared/host-protocol';
 import { formatResetTime, formatWindowLabel } from '@orquestra/shared/usage-format';
 import { remotePairResponseSchema } from '@orquestra/shared/remote';
-import type { RemoteSnapshot } from '@orquestra/shared/remote-snapshot';
+import type { RemoteSnapshot, RemoteWorkspaceInfo } from '@orquestra/shared/remote-snapshot';
 import { applyEventToSnapshot, replayEvents } from './snapshot';
 import {
   isOpenTerminalMessage,
@@ -38,7 +37,7 @@ function wsUrlForCurrentOrigin(): string {
   return `${proto}//${window.location.host}/ws`;
 }
 
-function workspaceStatusLabel(status: WorkspaceInfo['status']): string {
+function workspaceStatusLabel(status: RemoteWorkspaceInfo['status']): string {
   switch (status) {
     case 'open':
       return 'Aberto';
@@ -119,7 +118,7 @@ export function PairScreen({
                 data-testid="pair-device-name"
                 value={deviceName}
                 onChange={(e) => setDeviceName(e.target.value)}
-                placeholder="Ex.: Pixel do Fábio"
+                placeholder="Ex.: Meu celular"
                 maxLength={60}
               />
             </div>
@@ -150,7 +149,14 @@ export function PairScreen({
   );
 }
 
+function providerUsageSummary(data?: Usage): string {
+  if (!data || data.windows.length === 0) return '—';
+  const max = Math.max(...data.windows.map((w) => w.usedPercent));
+  return `${Math.round(max)}%`;
+}
+
 export function UsageSection({ client }: { client: RemoteWsClient }) {
+  const [open, setOpen] = useState(false);
   const [usage, setUsage] = useState<Partial<Record<UsageProvider, Usage>>>({});
   const [loading, setLoading] = useState<Partial<Record<UsageProvider, boolean>>>({});
   const [errors, setErrors] = useState<Partial<Record<UsageProvider, string>>>({});
@@ -179,57 +185,77 @@ export function UsageSection({ client }: { client: RemoteWsClient }) {
     { id: 'agy', label: 'Antigravity', manual: true },
   ];
 
+  const summary = `Claude ${providerUsageSummary(usage.claude)} · Antigravity ${providerUsageSummary(usage.agy)} · Codex ${providerUsageSummary(usage.codex)}`;
+
   return (
     <section className="usage-panel" aria-label="Uso das assinaturas">
-      <h2 className="section-title">Uso das assinaturas</h2>
-      <div className="page-content">
-        {providers.map(({ id, label, manual }) => {
-          const data = usage[id];
-          const err = errors[id];
-          const busy = Boolean(loading[id]);
-          return (
-            <div className="card" key={id}>
-              <div className="usage-row">
-                <strong>{label}</strong>
-                <button type="button" onClick={() => void loadProvider(id)} disabled={busy}>
-                  {busy ? 'Consultando…' : manual && !data ? 'Consultar' : 'Atualizar'}
-                </button>
+      <button
+        type="button"
+        className="card usage-toggle"
+        data-testid="usage-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((prev) => !prev)}
+      >
+        <div className="usage-toggle-hd">
+          <span className="usage-toggle-title">Uso das assinaturas</span>
+          <span className="usage-chevron" aria-hidden="true">
+            {open ? '▾' : '▸'}
+          </span>
+        </div>
+        <span className="usage-summary" data-testid="usage-summary">
+          {summary}
+        </span>
+      </button>
+      {open ? (
+        <div className="usage-cards">
+          {providers.map(({ id, label, manual }) => {
+            const data = usage[id];
+            const err = errors[id];
+            const busy = Boolean(loading[id]);
+            return (
+              <div className="card" key={id}>
+                <div className="usage-row">
+                  <strong>{label}</strong>
+                  <button type="button" onClick={() => void loadProvider(id)} disabled={busy}>
+                    {busy ? 'Consultando…' : manual && !data ? 'Consultar' : 'Atualizar'}
+                  </button>
+                </div>
+                {err ? <div className="error-box">{err}</div> : null}
+                {data?.windows.map((win, idx) => (
+                  <div key={idx}>
+                    <div className="usage-row">
+                      <span>{formatWindowLabel(win.label)}</span>
+                      <span>
+                        {win.usedPercent}% usado
+                        {win.resetsAt && formatResetTime(win.resetsAt) ? ` · renova ${formatResetTime(win.resetsAt)}` : ''}
+                      </span>
+                    </div>
+                    <div className="usage-bar" aria-hidden="true">
+                      <div
+                        className={`usage-bar-fill${win.usedPercent >= 90 ? ' high' : ''}`}
+                        style={{ width: `${Math.min(100, Math.max(0, win.usedPercent))}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+                {data?.credits ? (
+                  <div className="usage-row" data-testid={`usage-credits-${id}`}>
+                    <span>Créditos</span>
+                    <span>{data.credits}</span>
+                  </div>
+                ) : null}
+                {data?.details.map((detail, idx) => (
+                  <div className="usage-row" key={`d${idx}`}>
+                    <span>{detail.label}</span>
+                    <span>{detail.value}</span>
+                  </div>
+                ))}
+                {data && data.windows.length === 0 && !data.credits ? <span className="muted">Sem janelas de limite reportadas.</span> : null}
               </div>
-              {err ? <div className="error-box">{err}</div> : null}
-              {data?.windows.map((win, idx) => (
-                <div key={idx}>
-                  <div className="usage-row">
-                    <span>{formatWindowLabel(win.label)}</span>
-                    <span>
-                      {win.usedPercent}% usado
-                      {win.resetsAt && formatResetTime(win.resetsAt) ? ` · renova ${formatResetTime(win.resetsAt)}` : ''}
-                    </span>
-                  </div>
-                  <div className="usage-bar" aria-hidden="true">
-                    <div
-                      className={`usage-bar-fill${win.usedPercent >= 90 ? ' high' : ''}`}
-                      style={{ width: `${Math.min(100, Math.max(0, win.usedPercent))}%` }}
-                    />
-                  </div>
-                </div>
-              ))}
-              {data?.credits ? (
-                <div className="usage-row" data-testid={`usage-credits-${id}`}>
-                  <span>Créditos</span>
-                  <span>{data.credits}</span>
-                </div>
-              ) : null}
-              {data?.details.map((detail, idx) => (
-                <div className="usage-row" key={`d${idx}`}>
-                  <span>{detail.label}</span>
-                  <span>{detail.value}</span>
-                </div>
-              ))}
-              {data && data.windows.length === 0 && !data.credits ? <span className="muted">Sem janelas de limite reportadas.</span> : null}
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -268,13 +294,15 @@ export function App() {
   );
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
   const [statusReason, setStatusReason] = useState<string | null>(null);
-  const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
+  const [workspaces, setWorkspaces] = useState<RemoteWorkspaceInfo[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [activeSnapshot, setActiveSnapshot] = useState<RemoteSnapshot | null>(null);
   const [notices, setNotices] = useState<Record<string, string>>({});
   const [loadingList, setLoadingList] = useState(false);
   const [activatingId, setActivatingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [confirmUnpair, setConfirmUnpair] = useState(false);
 
   const activeWorkspaceIdRef = useRef<string | null>(null);
   activeWorkspaceIdRef.current = activeSnapshot?.workspaceId ?? null;
@@ -322,6 +350,7 @@ export function App() {
           return;
         }
         if (event.type === 'workspace.activated') {
+          setSelectedId(event.workspaceId);
           const viewing = activeWorkspaceIdRef.current;
           const activating = activatingRef.current;
           if (activating === event.workspaceId || viewing === event.workspaceId) return;
@@ -451,6 +480,7 @@ export function App() {
 
   const openWorkspace = async (id: string, targetTerminal?: string) => {
     if (!client) return;
+    setMenuOpen(false);
     activatingRef.current = id;
     bufferedEventsRef.current = [];
     setActivatingId(id);
@@ -562,6 +592,7 @@ export function App() {
               className="ghost"
               data-testid="mobile-back-workspaces"
               onClick={() => {
+                setMenuOpen(false);
                 setActiveSnapshot(null);
                 setOpenTerminal(null);
                 void refreshWorkspaces();
@@ -574,6 +605,15 @@ export function App() {
           )}
         </div>
         <div className="topbar-actions">
+          <span
+            className="conn-indicator"
+            data-testid="mobile-conn-status"
+            title={status === 'connected' ? `Conectado · ${auth.device.name}` : connectionLabel}
+            aria-label={status === 'connected' ? `Conectado (${auth.device.name})` : connectionLabel}
+          >
+            <span className={`conn-dot ${dotClass}`} />
+            {status !== 'connected' ? <span className="conn-text">{connectionLabel}</span> : null}
+          </span>
           <button
             type="button"
             className="ghost"
@@ -583,21 +623,65 @@ export function App() {
           >
             Atualizar
           </button>
-          {!activeSnapshot ? (
-            <button type="button" className="ghost danger" data-testid="mobile-unpair" onClick={unpair}>
-              Desparear
-            </button>
-          ) : null}
+          <button
+            type="button"
+            className="ghost"
+            aria-label="Mais opções"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            data-testid="mobile-menu"
+            onClick={() => setMenuOpen((open) => !open)}
+          >
+            ⋮
+          </button>
         </div>
       </header>
 
-      <div className="conn-banner" data-testid="mobile-conn-status">
-        <span className="conn-pill">
-          <span className={`conn-dot ${dotClass}`} />
-          {connectionLabel}
-        </span>
-        <span className="muted">{auth.device.name}</span>
-      </div>
+      {menuOpen ? (
+        <div className="menu-sheet" role="menu" data-testid="mobile-menu-sheet">
+          {notifPermission === 'granted' && notifOptIn ? (
+            <button
+              type="button"
+              role="menuitem"
+              data-testid="mobile-notifications-status"
+              onClick={() => {
+                setMenuOpen(false);
+                disableNotifications();
+              }}
+            >
+              Notificações ativas
+            </button>
+          ) : notifPermission === 'denied' ? (
+            <button type="button" role="menuitem" disabled data-testid="mobile-notifications-status">
+              Notificações bloqueadas
+            </button>
+          ) : notifPermission !== 'unsupported' ? (
+            <button
+              type="button"
+              role="menuitem"
+              data-testid="mobile-enable-notifications"
+              onClick={() => {
+                setMenuOpen(false);
+                void enableNotifications();
+              }}
+            >
+              Ativar notificações
+            </button>
+          ) : null}
+          <button
+            type="button"
+            role="menuitem"
+            className="danger"
+            data-testid="mobile-unpair"
+            onClick={() => {
+              setMenuOpen(false);
+              setConfirmUnpair(true);
+            }}
+          >
+            Desparear este aparelho
+          </button>
+        </div>
+      ) : null}
 
       <main className="page-content">
         {error ? (
@@ -608,62 +692,54 @@ export function App() {
 
         {!activeSnapshot ? (
           <>
-            <div className="section-header-row">
-              <h2 className="section-title">Workspaces</h2>
-              {notifPermission === 'granted' && notifOptIn ? (
-                <button
-                  type="button"
-                  className="ghost"
-                  data-testid="mobile-notifications-status"
-                  onClick={disableNotifications}
-                >
-                  Notificações ativas
-                </button>
-              ) : notifPermission === 'denied' ? (
-                <span className="badge" data-testid="mobile-notifications-status">
-                  Notificações bloqueadas
-                </span>
-              ) : notifPermission !== 'unsupported' ? (
-                <button
-                  type="button"
-                  className="ghost"
-                  data-testid="mobile-enable-notifications"
-                  onClick={() => void enableNotifications()}
-                >
-                  Ativar notificações
-                </button>
-              ) : null}
-            </div>
+            <h2 className="section-title">Workspaces</h2>
             {workspaces.length === 0 ? (
               <div className="card empty-state" data-testid="workspaces-empty">
                 {loadingList ? 'Carregando workspaces…' : 'Nenhum workspace aberto no computador.'}
               </div>
             ) : (
-              workspaces.map((ws) => (
-                <button
-                  key={ws.id}
-                  type="button"
-                  className={`card workspace-card${ws.id === selectedId ? ' is-selected' : ''}`}
-                  data-testid={`workspace-card-${ws.id}`}
-                  disabled={activatingId === ws.id || status !== 'connected'}
-                  onClick={() => void openWorkspace(ws.id)}
-                >
-                  <div className="workspace-card-hd">
-                    <span className="workspace-name">{ws.name}</span>
-                    <span className="badge">{activatingId === ws.id ? 'Abrindo…' : workspaceStatusLabel(ws.status)}</span>
-                  </div>
-                  <span className="workspace-dir">{ws.dir}</span>
-                  <div className="workspace-stats">
-                    {ws.waiting > 0 ? (
-                      <span className="badge state-waiting">{ws.waiting} esperando você</span>
-                    ) : null}
-                    {ws.busy > 0 ? <span className="badge state-busy">{ws.busy} ocupados</span> : null}
-                    <span className="badge">
-                      {ws.terminalCount} {ws.terminalCount === 1 ? 'terminal' : 'terminais'}
-                    </span>
-                  </div>
-                </button>
-              ))
+              workspaces.map((ws) => {
+                const isSelected = ws.id === selectedId;
+                const statusBadge =
+                  activatingId === ws.id
+                    ? { label: 'Abrindo…', active: false }
+                    : isSelected
+                      ? { label: 'Ativo no PC', active: true }
+                      : ws.status !== 'open'
+                        ? { label: workspaceStatusLabel(ws.status), active: false }
+                        : null;
+                return (
+                  <button
+                    key={ws.id}
+                    type="button"
+                    className={`card workspace-card${isSelected ? ' is-selected' : ''}`}
+                    data-testid={`workspace-card-${ws.id}`}
+                    disabled={activatingId === ws.id || status !== 'connected'}
+                    onClick={() => void openWorkspace(ws.id)}
+                  >
+                    <div className="workspace-card-hd">
+                      <span className="workspace-name">{ws.name}</span>
+                      {statusBadge ? (
+                        <span
+                          className={`badge${statusBadge.active ? ' is-active' : ''}`}
+                          data-testid={statusBadge.active ? `workspace-active-badge-${ws.id}` : undefined}
+                        >
+                          {statusBadge.label}
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="workspace-stats">
+                      {ws.waiting > 0 ? (
+                        <span className="badge state-waiting">{ws.waiting} esperando você</span>
+                      ) : null}
+                      {ws.busy > 0 ? <span className="badge state-busy">{ws.busy} ocupados</span> : null}
+                      <span className="badge">
+                        {ws.terminalCount} {ws.terminalCount === 1 ? 'terminal' : 'terminais'}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })
             )}
           </>
         ) : (
@@ -681,16 +757,15 @@ export function App() {
                 const queueEntries: QueueEntry[] = activeSnapshot.queues?.[terminal.name] ?? [];
                 const notice = notices[terminal.name];
                 return (
-                  <article
+                  <button
                     key={terminal.name}
+                    type="button"
                     className={`card agent-card state-${stateKind}`}
                     data-testid={`agent-card-${terminal.name}`}
-                    role="button"
-                    tabIndex={0}
                     aria-label={`Abrir terminal ${terminal.name}`}
-                    onClick={() => setOpenTerminal(terminal.name)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === ' ') setOpenTerminal(terminal.name);
+                    onClick={() => {
+                      setMenuOpen(false);
+                      setOpenTerminal(terminal.name);
                     }}
                   >
                     <div className="agent-hd">
@@ -735,7 +810,7 @@ export function App() {
                     ) : null}
 
                     {notice ? <div className="notice-box">{notice}</div> : null}
-                  </article>
+                  </button>
                 );
               })
             )}
@@ -743,6 +818,30 @@ export function App() {
           </>
         )}
       </main>
+
+      {confirmUnpair ? (
+        <div className="dialog-backdrop">
+          <div className="dialog" role="dialog" aria-label="Desparear aparelho" data-testid="unpair-confirm-dialog">
+            <p>Desparear este aparelho? Será preciso ler um novo QR code no computador para conectar novamente.</p>
+            <div className="dialog-actions">
+              <button type="button" onClick={() => setConfirmUnpair(false)}>
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="danger"
+                data-testid="confirm-unpair-yes"
+                onClick={() => {
+                  setConfirmUnpair(false);
+                  unpair();
+                }}
+              >
+                Desparear
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

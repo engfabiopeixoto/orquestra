@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { queueEntrySchema, terminalInfoSchema, type ProjectSnapshot } from './host-protocol.js';
+import { queueEntrySchema, terminalInfoSchema, workspaceInfoSchema, type ProjectSnapshot, type WorkspaceInfo } from './host-protocol.js';
 
 /**
  * O que o celular recebe de um workspace: só os agentes e as filas. Notas, fluxo, grupos, layout do canvas
@@ -24,5 +24,35 @@ export function toRemoteSnapshot(snapshot: Pick<ProjectSnapshot, 'workspaceId' |
   });
 }
 
+/** No celular a lista de workspaces omite o caminho da pasta (`dir`) no computador. */
+export const remoteWorkspaceInfoSchema = workspaceInfoSchema.omit({ dir: true });
+export type RemoteWorkspaceInfo = z.infer<typeof remoteWorkspaceInfoSchema>;
+
+export const remoteWorkspaceListSchema = z.object({
+  workspaces: z.array(remoteWorkspaceInfoSchema).max(3),
+  selectedId: z.string().nullable(),
+});
+export type RemoteWorkspaceList = z.infer<typeof remoteWorkspaceListSchema>;
+
+export function toRemoteWorkspaceList(result: {
+  workspaces: Array<Pick<WorkspaceInfo, 'id' | 'name' | 'status' | 'terminalCount' | 'busy' | 'waiting'>>;
+  selectedId: string | null;
+}): RemoteWorkspaceList {
+  return remoteWorkspaceListSchema.parse({
+    workspaces: result.workspaces.map(({ id, name, status, terminalCount, busy, waiting }) => ({
+      id,
+      name,
+      status,
+      terminalCount,
+      busy,
+      waiting,
+    })),
+    selectedId: result.selectedId,
+  });
+}
+
 /** Resultados que o celular recebe de forma diferente do desktop. */
-export const remoteResultOverrides = { 'workspace.activate': remoteSnapshotSchema } as const;
+export const remoteResultOverrides = {
+  'workspace.activate': remoteSnapshotSchema,
+  'workspace.list': remoteWorkspaceListSchema,
+} as const;

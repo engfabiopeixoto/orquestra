@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { HostEvent, ModelCatalogShape, TerminalInfo, TerminalKey } from './types';
 import { TERMINAL_SEND_MAX_CHARS } from '@orquestra/shared/host-protocol';
+import { sameModel, type ModelAgent } from '@orquestra/shared/models';
 import { createXtermView, fontSizeForWidth, type TerminalView } from './terminal-view';
 import { effectiveTerminalState, modelLabelOf, terminalStateLabel } from './terminals';
 import type { ConnectionStatus, RemoteWsClient } from './ws-client';
@@ -8,13 +9,33 @@ import type { ConnectionStatus, RemoteWsClient } from './ws-client';
 export type OutputSignal = { kind: 'output'; event: Extract<HostEvent, { type: 'terminal.output' }> } | { kind: 'overflow'; name: string };
 export type OutputBus = { subscribe(listener: (signal: OutputSignal) => void): () => void };
 
+const TERMINAL_MODE_KEY = 'orquestra.mobile.terminalMode';
+const READING_THROTTLE_MS = 100;
+const TEXTAREA_MAX_HEIGHT_PX = 112;
+
+export type TerminalViewMode = 'reading' | 'terminal';
+
+function loadTerminalMode(): TerminalViewMode {
+  try {
+    return localStorage.getItem(TERMINAL_MODE_KEY) === 'terminal' ? 'terminal' : 'reading';
+  } catch {
+    return 'reading';
+  }
+}
+
+function saveTerminalMode(mode: TerminalViewMode): void {
+  try {
+    localStorage.setItem(TERMINAL_MODE_KEY, mode);
+  } catch {}
+}
+
 const KEYS: Array<{ key: TerminalKey; label: string; aria: string }> = [
-  { key: 'Enter', label: 'Enter', aria: 'Enter' },
+  { key: 'Enter', label: '↵', aria: 'Enter' },
   { key: 'Escape', label: 'Esc', aria: 'Esc' },
   { key: 'Tab', label: 'Tab', aria: 'Tab' },
   { key: 'ArrowUp', label: '↑', aria: 'Seta para cima' },
   { key: 'ArrowDown', label: '↓', aria: 'Seta para baixo' },
-  { key: 'CtrlC', label: 'Ctrl+C', aria: 'Ctrl+C' },
+  { key: 'CtrlC', label: '^C', aria: 'Ctrl+C' },
   { key: 'Digit1', label: '1', aria: 'Tecla 1' },
   { key: 'Digit2', label: '2', aria: 'Tecla 2' },
   { key: 'Digit3', label: '3', aria: 'Tecla 3' },
@@ -57,10 +78,23 @@ export function TerminalScreen({
   createView?: (container: HTMLElement) => TerminalView;
 }) {
   const name = terminal.name;
+  const stageRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const readingRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const viewRef = useRef<TerminalView | null>(null);
   const readyRef = useRef(false);
   const loadSeq = useRef(0);
+  const autoFollowRef = useRef(true);
+  const throttleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastSyncAtRef = useRef(0);
+
+  const [mode, setMode] = useState<TerminalViewMode>(loadTerminalMode);
+  const modeRef = useRef<TerminalViewMode>(mode);
+  modeRef.current = mode;
+  const activeModelBtnRef = useRef<HTMLButtonElement | null>(null);
+  const [readingText, setReadingText] = useState('');
+  const [showScrollBottom, setShowScrollBottom] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [scrolls, setScrolls] = useState(false);
@@ -74,6 +108,34 @@ export function TerminalScreen({
   const stateKind = effectiveTerminalState(terminal);
   const inactive = Boolean(terminal.unloaded) || terminal.state === 'exited';
 
+  const syncReadingText = useCallback((immediate = false) => {
+    const flush = () => {
+      lastSyncAtRef.current = Date.now();
+      setReadingText(viewRef.current?.readText?.() ?? '');
+    };
+    if (immediate) {
+      if (throttleTimerRef.current) {
+        clearTimeout(throttleTimerRef.current);
+        throttleTimerRef.current = null;
+      }
+      flush();
+      return;
+    }
+    const elapsed = Date.now() - lastSyncAtRef.current;
+    if (elapsed >= READING_THROTTLE_MS) {
+      if (throttleTimerRef.current) {
+        clearTimeout(throttleTimerRef.current);
+        throttleTimerRef.current = null;
+      }
+      flush();
+    } else if (!throttleTimerRef.current) {
+      throttleTimerRef.current = setTimeout(() => {
+        throttleTimerRef.current = null;
+        flush();
+      }, READING_THROTTLE_MS - elapsed);
+    }
+  }, []);
+
   const load = useCallback(async () => {
     const view = viewRef.current;
     if (!view) return;
@@ -83,7 +145,7 @@ export function TerminalScreen({
       client.subscribe(workspaceId, name);
       const snap = await client.command('terminal.snapshot', { name }, workspaceId);
       if (seq !== loadSeq.current) return;
-      const width = containerRef.current?.clientWidth ?? 0;
+      const width = containerRef.current?.clientWidth || stageRef.current?.clientWidth || 0;
       view.load(snap.data, snap.cols, snap.rows, width);
       setScrolls(fontSizeForWidth(width, snap.cols).scrollsHorizontally);
       readyRef.current = true;
@@ -98,14 +160,24 @@ export function TerminalScreen({
     if (!containerRef.current) return;
     const view = createView(containerRef.current);
     viewRef.current = view;
+    const unsubUpdate = view.onUpdate?.((immediate) => {
+      if (modeRef.current === 'reading') {
+        syncReadingText(Boolean(immediate));
+      }
+    });
     return () => {
       loadSeq.current++;
       readyRef.current = false;
+      if (throttleTimerRef.current) {
+        clearTimeout(throttleTimerRef.current);
+        throttleTimerRef.current = null;
+      }
+      unsubUpdate?.();
       view.dispose();
       viewRef.current = null;
       client.unsubscribe(workspaceId, name);
     };
-  }, [client, workspaceId, name, createView]);
+  }, [client, workspaceId, name, createView, syncReadingText]);
 
   // Abre, reconecta ou troca a sessão do terminal (reinício, recarga): busca o retrato de novo.
   useEffect(() => {
@@ -121,10 +193,61 @@ export function TerminalScreen({
           void load();
           return;
         }
-        if (signal.event.name === name && readyRef.current) viewRef.current?.write(signal.event.data);
+        if (signal.event.name === name && readyRef.current) {
+          viewRef.current?.write(signal.event.data);
+        }
       }),
     [bus, name, load],
   );
+
+  useEffect(() => {
+    if (mode === 'reading' && autoFollowRef.current && readingRef.current) {
+      readingRef.current.scrollTop = readingRef.current.scrollHeight;
+    }
+  }, [readingText, mode]);
+
+  useEffect(() => {
+    if (mode === 'terminal' && readyRef.current) {
+      const width = containerRef.current?.clientWidth || stageRef.current?.clientWidth || 0;
+      const nextScrolls = viewRef.current?.fitWidth?.(width);
+      if (typeof nextScrolls === 'boolean') setScrolls(nextScrolls);
+    }
+  }, [mode]);
+
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, TEXTAREA_MAX_HEIGHT_PX)}px`;
+    el.style.overflowY = el.scrollHeight > TEXTAREA_MAX_HEIGHT_PX ? 'auto' : 'hidden';
+  }, [text]);
+
+  const handleReadingScroll = () => {
+    const el = readingRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= 24;
+    autoFollowRef.current = atBottom;
+    setShowScrollBottom(!atBottom);
+  };
+
+  const scrollToBottom = () => {
+    autoFollowRef.current = true;
+    setShowScrollBottom(false);
+    if (readingRef.current) {
+      readingRef.current.scrollTop = readingRef.current.scrollHeight;
+    }
+  };
+
+  const toggleMode = () => {
+    const next: TerminalViewMode = mode === 'reading' ? 'terminal' : 'reading';
+    setMode(next);
+    saveTerminalMode(next);
+    if (next === 'reading') {
+      autoFollowRef.current = true;
+      setShowScrollBottom(false);
+      syncReadingText(true);
+    }
+  };
 
   const run = async (action: () => Promise<unknown>, afterOk?: () => void) => {
     setBusy(true);
@@ -187,22 +310,69 @@ export function TerminalScreen({
   const ctrlDisabled = inactive || status !== 'connected';
   const label = useMemo(() => terminalStateLabel(terminal), [terminal]);
 
+  const activeModelOptionId = useMemo(() => {
+    if (!modelList || !modelAgent) return null;
+    const candidates = [terminal.model?.chosen, terminal.model?.effective].filter(
+      (v): v is string => typeof v === 'string' && v.trim().length > 0,
+    );
+    if (candidates.length === 0) return null;
+    for (const candidate of candidates) {
+      const norm = candidate.trim().toLowerCase();
+      const exact = modelList.find((opt) => opt.id.toLowerCase() === norm || opt.label.toLowerCase() === norm);
+      if (exact) return exact.id;
+    }
+    const agent = terminal.agent as ModelAgent;
+    for (const candidate of candidates) {
+      const matched = modelList.find((opt) => sameModel(agent, opt.id, candidate, modelList));
+      if (matched) return matched.id;
+    }
+    return null;
+  }, [modelList, modelAgent, terminal.agent, terminal.model?.chosen, terminal.model?.effective]);
+
+  useEffect(() => {
+    if (modelList) {
+      activeModelBtnRef.current?.scrollIntoView?.({ block: 'center' });
+    }
+  }, [modelList]);
+
   return (
     <div className="terminal-screen" data-testid="terminal-screen">
       <header className="topbar terminal-topbar">
-        <button type="button" className="ghost" data-testid="terminal-back" onClick={onBack}>
-          ← Agentes
-        </button>
-        <div className="terminal-title">
-          <strong>{name}</strong>
-          <span className={`badge state-${stateKind}`} data-testid="terminal-state">
+        <div className="terminal-topbar-row">
+          <button
+            type="button"
+            className="ghost terminal-back-btn"
+            data-testid="terminal-back"
+            aria-label="Voltar aos agentes"
+            onClick={onBack}
+          >
+            ←
+          </button>
+          <strong className="terminal-name" title={name}>
+            {name}
+          </strong>
+          <div className="topbar-actions">
+            <button
+              type="button"
+              className="ghost mode-toggle"
+              data-testid="terminal-mode-toggle"
+              aria-pressed={mode === 'terminal'}
+              aria-label={mode === 'reading' ? 'Modo Leitura, tocar para alternar para Terminal' : 'Modo Terminal, tocar para alternar para Leitura'}
+              onClick={toggleMode}
+            >
+              {mode === 'reading' ? 'Leitura' : 'Terminal'}
+            </button>
+            <button type="button" className="ghost" aria-label="Mais ações" aria-haspopup="menu" aria-expanded={menuOpen} data-testid="terminal-menu" onClick={() => setMenuOpen((open) => !open)}>
+              ⋮
+            </button>
+          </div>
+        </div>
+        <div className="terminal-topbar-meta">
+          <span className={`badge compact state-${stateKind}`} data-testid="terminal-state">
             {label}
           </span>
-          {model ? <span className="badge">{model}</span> : null}
+          {model ? <span className="badge compact">{model}</span> : null}
         </div>
-        <button type="button" className="ghost" aria-label="Mais ações" aria-haspopup="menu" aria-expanded={menuOpen} data-testid="terminal-menu" onClick={() => setMenuOpen((open) => !open)}>
-          ⋮
-        </button>
       </header>
 
       {menuOpen ? (
@@ -234,13 +404,37 @@ export function TerminalScreen({
       {status !== 'connected' ? <div className="notice-box">Sem conexão com o computador. Reconectando…</div> : null}
       {terminal.unloaded ? <div className="notice-box">Este terminal está descarregado. Use ⋮ → Recarregar.</div> : null}
 
-      <div className={`terminal-host${scrolls ? ' scrolls' : ''}`} data-testid="terminal-host">
-        <div ref={containerRef} className="terminal-canvas" />
+      <div ref={stageRef} className="terminal-stage">
+        {mode === 'reading' ? (
+          <>
+            <div
+              ref={readingRef}
+              className="terminal-reading"
+              data-testid="terminal-reading"
+              onScroll={handleReadingScroll}
+            >
+              <pre className="terminal-reading-text">{readingText}</pre>
+            </div>
+            {showScrollBottom ? (
+              <button
+                type="button"
+                className="scroll-bottom-btn"
+                data-testid="terminal-scroll-bottom"
+                onClick={scrollToBottom}
+              >
+                ↓ Ir ao fim
+              </button>
+            ) : null}
+          </>
+        ) : null}
+        <div className={`terminal-host${scrolls ? ' scrolls' : ''}`} data-testid="terminal-host" hidden={mode !== 'terminal'}>
+          <div ref={containerRef} className="terminal-canvas" />
+        </div>
       </div>
 
       <div className="key-bar" role="toolbar" aria-label="Teclas">
         {KEYS.map(({ key, label: keyLabel, aria }) => (
-          <button key={key} type="button" aria-label={aria} data-testid={`key-${key}`} disabled={ctrlDisabled} onClick={() => pressKey(key)}>
+          <button key={key} type="button" aria-label={aria} title={aria} data-testid={`key-${key}`} disabled={ctrlDisabled} onClick={() => pressKey(key)}>
             {keyLabel}
           </button>
         ))}
@@ -254,6 +448,7 @@ export function TerminalScreen({
         }}
       >
         <textarea
+          ref={inputRef}
           rows={1}
           value={text}
           maxLength={TERMINAL_SEND_MAX_CHARS}
@@ -279,13 +474,24 @@ export function TerminalScreen({
           <div className="dialog" role="dialog" aria-label="Trocar modelo" data-testid="model-dialog">
             <strong>Trocar modelo de {name}</strong>
             <ul className="model-list">
-              {modelList.map((option) => (
-                <li key={option.id}>
-                  <button type="button" onClick={() => { setModelList(null); setPending({ kind: 'model', model: option.id }); }}>
-                    {option.label}
-                  </button>
-                </li>
-              ))}
+              {modelList.map((option) => {
+                const isCurrent = option.id === activeModelOptionId;
+                return (
+                  <li key={option.id}>
+                    <button
+                      type="button"
+                      ref={isCurrent ? activeModelBtnRef : undefined}
+                      className={isCurrent ? 'is-current' : undefined}
+                      aria-current={isCurrent ? 'true' : undefined}
+                      data-testid={`model-option-${option.id}`}
+                      onClick={() => { setModelList(null); setPending({ kind: 'model', model: option.id }); }}
+                    >
+                      <span>{option.label}</span>
+                      {isCurrent ? <span className="model-check" aria-label="Em uso">✓</span> : null}
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
             <button type="button" onClick={() => setModelList(null)}>
               Cancelar

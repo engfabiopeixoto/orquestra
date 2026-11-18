@@ -101,6 +101,7 @@ describe('PairScreen', () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ deviceToken: 'tok-novo', device }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
     render(<PairScreen initialToken="" onPaired={onPaired} />);
+    expect((screen.getByTestId('pair-device-name') as HTMLInputElement).placeholder).toBe('Ex.: Meu celular');
     fireEvent.change(screen.getByTestId('pair-token-input'), { target: { value: 'codigo-123' } });
     fireEvent.click(screen.getByTestId('pair-submit'));
     await waitFor(() => expect(onPaired).toHaveBeenCalledWith({ token: 'tok-novo', device }));
@@ -143,15 +144,26 @@ describe('App', () => {
     expect(screen.getByTestId('pair-submit')).toBeTruthy();
   });
 
-  it('lista os workspaces, abre os agentes e acompanha o estado ao vivo, incluindo ações feitas no PC', async () => {
+  it('lista os workspaces sem dir, destaca Ativo no PC, usa <button> nos agentes e ponto de status discreto no cabeçalho', async () => {
     storeAuth();
     render(<App />);
-    fireEvent.click(await screen.findByTestId('workspace-card-w1'));
+    const cardW1 = await screen.findByTestId('workspace-card-w1');
+    expect(cardW1.textContent).not.toContain('C:/Alpha');
+    expect(screen.getByTestId('workspace-active-badge-w1').textContent).toBe('Ativo no PC');
+    expect(screen.getByTestId('workspace-card-w2').textContent).not.toContain('Aberto');
+
+    // Ponto de status no cabeçalho: conectado não mostra texto; desconectado mostra texto
+    const statusEl = screen.getByTestId('mobile-conn-status');
+    expect(statusEl.textContent).toBe('');
+
+    fireEvent.click(cardW1);
     expect(await screen.findByTestId('active-workspace-title')).toHaveProperty('textContent', 'Agentes · Alpha');
     const socket = lastSocket();
 
-    // "esperando você" sobe para o topo
-    const cards = screen.getAllByTestId(/^agent-card-/).map((el) => el.getAttribute('data-testid'));
+    // "esperando você" sobe para o topo e os cartões de agente são <button> reais
+    const agentEls = screen.getAllByTestId(/^agent-card-/);
+    expect(agentEls.every((el) => el.tagName === 'BUTTON')).toBe(true);
+    const cards = agentEls.map((el) => el.getAttribute('data-testid'));
     expect(cards).toEqual(['agent-card-revisor', 'agent-card-arquiteto']);
 
     socket.event({ type: 'terminal.state', name: 'arquiteto', state: 'busy', queued: 0, workspaceId: 'w1', sequence: 6 });
@@ -267,6 +279,8 @@ describe('App', () => {
     await screen.findByTestId('workspace-card-w1');
     socket.event({ type: 'workspace.activated', workspaceId: 'w1' });
     expect(socket.commands.filter((c) => c.method === 'workspace.activate')).toHaveLength(2);
+    expect((await screen.findByTestId('workspace-active-badge-w1')).textContent).toBe('Ativo no PC');
+    expect(screen.queryByTestId('workspace-active-badge-w2')).toBeNull();
   });
 
   it('mostra a tela de revogação e permite parear de novo', async () => {
@@ -299,13 +313,53 @@ describe('App', () => {
     fireEvent.click(screen.getByTestId('terminal-back'));
     fireEvent.click(await screen.findByTestId('mobile-back-workspaces'));
 
+    // Menu ⋮ do cabeçalho contém Notificações e Desparear com confirmação
+    expect(screen.queryByTestId('mobile-unpair')).toBeNull();
+    fireEvent.click(await screen.findByTestId('mobile-menu'));
+
     const btn = await screen.findByTestId('mobile-enable-notifications');
     expect(btn.textContent).toBe('Ativar notificações');
     expect(requestPermission).not.toHaveBeenCalled();
 
     fireEvent.click(btn);
     await waitFor(() => expect(requestPermission).toHaveBeenCalledTimes(1));
-    expect((await screen.findByTestId('mobile-notifications-status')).textContent).toBe('Notificações ativas');
+    fireEvent.click(screen.getByTestId('mobile-menu'));
+    expect((await screen.findByTestId('mobile-notifications-status')).textContent).toContain('Notificações ativas');
+
+    // Desparear pede confirmação: cancelar mantém conectado; confirmar despareia
+    fireEvent.click(screen.getByTestId('mobile-unpair'));
+    expect(await screen.findByTestId('unpair-confirm-dialog')).toBeTruthy();
+    fireEvent.click(screen.getByText('Cancelar'));
+    expect(screen.queryByTestId('unpair-confirm-dialog')).toBeNull();
+    expect(localStorage.getItem('orquestra.mobile.auth')).not.toBeNull();
+
+    fireEvent.click(screen.getByTestId('mobile-menu'));
+    fireEvent.click(await screen.findByTestId('mobile-unpair'));
+    fireEvent.click(await screen.findByTestId('confirm-unpair-yes'));
+    expect(localStorage.getItem('orquestra.mobile.auth')).toBeNull();
+    expect(await screen.findByTestId('pair-submit')).toBeTruthy();
+  });
+
+  it('fecha o menu ⋮ ao tocar em um workspace ou em um agente', async () => {
+    storeAuth();
+    render(<App />);
+    await screen.findByTestId('workspace-card-w1');
+
+    // Menu aberto + clique em workspace => fecha menu
+    fireEvent.click(screen.getByTestId('mobile-menu'));
+    expect(screen.getByTestId('mobile-menu-sheet')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('workspace-card-w1'));
+    expect(await screen.findByTestId('active-workspace-title')).toBeTruthy();
+    expect(screen.queryByTestId('mobile-menu-sheet')).toBeNull();
+
+    // Menu aberto + clique em agente => fecha menu ao entrar e não reaparece ao voltar
+    fireEvent.click(screen.getByTestId('mobile-menu'));
+    expect(screen.getByTestId('mobile-menu-sheet')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('agent-card-revisor'));
+    expect(await screen.findByTestId('terminal-screen')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('terminal-back'));
+    expect(await screen.findByTestId('active-workspace-title')).toBeTruthy();
+    expect(screen.queryByTestId('mobile-menu-sheet')).toBeNull();
   });
 
   it('serviceWorker postMessage orquestra:open-terminal abre o terminal conectado e guarda alvo pendente durante reconexão', async () => {
@@ -408,7 +462,7 @@ describe('App', () => {
 });
 
 describe('UsageSection', () => {
-  it('mostra janelas com renovação, créditos e detalhes das assinaturas', async () => {
+  it('inicia recolhida com resumo em uma linha e expande ao tocar para mostrar janelas, créditos, detalhes e erros', async () => {
     const resetsAt = new Date(Date.now() + 2 * 3_600_000 + 30_000).toISOString();
     const client = new RemoteWsClient({ url: 'ws://x/ws', token: 't', createSocket: () => { throw new Error('não usar'); } });
     vi.spyOn(client, 'command').mockImplementation((async (method: string) => {
@@ -417,6 +471,16 @@ describe('UsageSection', () => {
       throw new Error('Indisponível.');
     }) as never);
     render(<UsageSection client={client} />);
+
+    // Fechada por padrão: mostra resumo em uma linha e oculta detalhes/erros
+    const toggle = screen.getByTestId('usage-toggle');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    await waitFor(() => expect(screen.getByTestId('usage-summary').textContent).toBe('Claude 95% · Antigravity — · Codex 42%'));
+    expect(screen.queryByText('sessão 5h')).toBeNull();
+
+    // Abre ao clicar
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
     expect(await screen.findByText('sessão 5h')).toBeTruthy();
     expect(screen.getByText(/42% usado · renova em 2h/)).toBeTruthy();
     expect(screen.getByTestId('usage-credits-codex').textContent).toContain('US$ 12,30');

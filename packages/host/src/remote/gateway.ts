@@ -20,6 +20,7 @@ import {
   remoteClientMessageSchema,
   remotePairRequestSchema,
   toRemoteSnapshot,
+  toRemoteWorkspaceList,
   type HostToMain,
   type MainToHost,
   type RemoteDevice,
@@ -950,6 +951,14 @@ export class RemoteGateway {
                 result = toRemoteSnapshot(message.result as Parameters<typeof toRemoteSnapshot>[0]);
               } catch (error) {
                 this.opts.log.error({ err: error }, 'snapshot remoto inválido');
+                this.sendWs(conn.ws, { type: 'response-error', id: target.clientCmdId, error: { code: 'INTERNAL', message: 'Resposta inválida do núcleo.' } });
+                return;
+              }
+            } else if (target.method === 'workspace.list') {
+              try {
+                result = toRemoteWorkspaceList(message.result as Parameters<typeof toRemoteWorkspaceList>[0]);
+              } catch (error) {
+                this.opts.log.error({ err: error }, 'lista de workspaces remota inválida');
                 this.sendWs(conn.ws, { type: 'response-error', id: target.clientCmdId, error: { code: 'INTERNAL', message: 'Resposta inválida do núcleo.' } });
                 return;
               }

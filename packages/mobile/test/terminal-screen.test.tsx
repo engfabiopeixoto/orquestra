@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TerminalInfo } from '@orquestra/shared/host-protocol';
 import { TerminalScreen, type OutputBus, type OutputSignal } from '../src/TerminalScreen';
-import { fontSizeForWidth, type TerminalView } from '../src/terminal-view';
+import { fontSizeForWidth, readXtermBufferText, type TerminalView } from '../src/terminal-view';
 import type { ConnectionStatus, RemoteWsClient } from '../src/ws-client';
 
 const term = (extra: Partial<TerminalInfo> = {}): TerminalInfo => ({
@@ -14,7 +14,25 @@ function setup(opts: { terminal?: TerminalInfo; status?: ConnectionStatus; comma
   const listeners = new Set<(signal: OutputSignal) => void>();
   const bus: OutputBus = { subscribe: (l) => { listeners.add(l); return () => void listeners.delete(l); } };
   const emit = (signal: OutputSignal) => act(() => listeners.forEach((l) => l(signal)));
-  const view = { load: vi.fn(), write: vi.fn(), dispose: vi.fn() } satisfies TerminalView;
+  const updateListeners = new Set<(immediate?: boolean) => void>();
+  let bufferText = '';
+  const view = {
+    load: vi.fn((data: string) => {
+      bufferText = data.replace(/\n+$/, '');
+      for (const l of updateListeners) l(true);
+    }),
+    write: vi.fn((data: string) => {
+      bufferText += data;
+      for (const l of updateListeners) l(false);
+    }),
+    readText: vi.fn(() => bufferText.replace(/\n+$/, '')),
+    fitWidth: vi.fn(() => false),
+    onUpdate: vi.fn((listener: (immediate?: boolean) => void) => {
+      updateListeners.add(listener);
+      return () => void updateListeners.delete(listener);
+    }),
+    dispose: vi.fn(),
+  } satisfies TerminalView;
   const handlers: Record<string, (params: any) => unknown> = {
     'terminal.snapshot': () => ({ data: 'retrato', cols: 100, rows: 30 }),
     'models.catalog': () => ({ claude: { models: [{ id: 'opus', label: 'Opus' }, { id: 'sonnet', label: 'Sonnet' }] } }),
@@ -35,7 +53,10 @@ function setup(opts: { terminal?: TerminalInfo; status?: ConnectionStatus; comma
 }
 const calls = (client: { command: ReturnType<typeof vi.fn> }, method: string) => client.command.mock.calls.filter((c) => c[0] === method);
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+});
 
 describe('fontSizeForWidth', () => {
   it('encolhe a letra para caber as colunas do PC e só rola na horizontal quando não couber', () => {
@@ -75,7 +96,10 @@ describe('TerminalScreen', () => {
   it('mostra o estado do agente no topo e volta para a lista de agentes', () => {
     const { onBack } = setup({ terminal: term({ state: 'waiting' }) });
     expect(screen.getByTestId('terminal-state').textContent).toBe('Esperando você');
-    fireEvent.click(screen.getByTestId('terminal-back'));
+    const backBtn = screen.getByTestId('terminal-back');
+    expect(backBtn.getAttribute('aria-label')).toBe('Voltar aos agentes');
+    expect(backBtn.textContent).toBe('←');
+    fireEvent.click(backBtn);
     expect(onBack).toHaveBeenCalled();
   });
 
@@ -166,12 +190,35 @@ describe('TerminalScreen', () => {
     await waitFor(() => expect(calls(unloaded.client, 'terminal.restart')).toHaveLength(1));
   });
 
-  it('Trocar modelo lista o catálogo do agente e só troca depois da confirmação', async () => {
-    const { client } = setup();
+  it('Trocar modelo lista o catálogo do agente, marca o modelo em uso (✓), rola até ele e só troca depois da confirmação', async () => {
+    const scrollIntoViewMock = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoViewMock;
+    const { client } = setup({
+      terminal: term({ model: { chosen: 'sonnet', effective: 'claude-sonnet-5-5-20261101', status: 'match' } }),
+      commands: {
+        'models.catalog': () => ({
+          claude: {
+            models: [
+              { id: 'fable', label: 'Fable' },
+              { id: 'opus', label: 'Opus' },
+              { id: 'sonnet', label: 'Sonnet' },
+            ],
+          },
+        }),
+      },
+    });
     fireEvent.click(screen.getByTestId('terminal-menu'));
     fireEvent.click(screen.getByText('Trocar modelo'));
     expect(await screen.findByTestId('model-dialog')).toBeTruthy();
-    fireEvent.click(screen.getByText('Sonnet'));
+
+    const currentBtn = screen.getByTestId('model-option-sonnet');
+    expect(currentBtn.getAttribute('aria-current')).toBe('true');
+    expect(currentBtn.className).toContain('is-current');
+    expect(currentBtn.textContent).toContain('✓');
+    expect(screen.getByTestId('model-option-opus').getAttribute('aria-current')).toBeNull();
+    expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'center' });
+
+    fireEvent.click(currentBtn);
     expect(screen.getByTestId('confirm-dialog').textContent).toContain('Trocar o modelo de revisor para sonnet?');
     expect(calls(client, 'terminal.model')).toHaveLength(0);
     fireEvent.click(screen.getByTestId('confirm-yes'));
@@ -211,5 +258,82 @@ describe('TerminalScreen', () => {
     await waitFor(() => expect(calls(client, 'terminal.snapshot')).toHaveLength(1));
     rerenderWith('connected', term({ id: '22222222-2222-4222-8222-222222222222' }));
     await waitFor(() => expect(calls(client, 'terminal.snapshot')).toHaveLength(2));
+  });
+
+  it('abre no modo Leitura por padrão, atualiza o texto com throttle, alterna para Terminal salvando no localStorage e mostra "↓ Ir ao fim" ao rolar para cima', async () => {
+    const { emit } = setup({
+      commands: { 'terminal.snapshot': () => ({ data: 'linha 1\nlinha 2\n\n\n', cols: 100, rows: 30 }) },
+    });
+
+    const reading = await screen.findByTestId('terminal-reading');
+    await waitFor(() => expect(reading.textContent).toBe('linha 1\nlinha 2'));
+    expect(screen.getByTestId('terminal-host').hidden).toBe(true);
+
+    // Saída ao vivo atualiza o texto do modo Leitura (com throttle ~100 ms)
+    emit({ kind: 'output', event: { type: 'terminal.output', name: 'revisor', data: '\nlinha 3', workspaceId: 'w1' } });
+    await waitFor(() => expect(reading.textContent).toBe('linha 1\nlinha 2\nlinha 3'));
+
+    // Rolar para cima exibe "↓ Ir ao fim"; clicar volta ao fim e esconde o botão
+    Object.defineProperty(reading, 'scrollHeight', { configurable: true, value: 1000 });
+    Object.defineProperty(reading, 'clientHeight', { configurable: true, value: 400 });
+    Object.defineProperty(reading, 'scrollTop', { configurable: true, writable: true, value: 100 });
+    fireEvent.scroll(reading);
+    const jumpBtn = await screen.findByTestId('terminal-scroll-bottom');
+    expect(jumpBtn.textContent).toContain('Ir ao fim');
+    fireEvent.click(jumpBtn);
+    expect(reading.scrollTop).toBe(1000);
+    expect(screen.queryByTestId('terminal-scroll-bottom')).toBeNull();
+
+    // Alterna para o modo Terminal e persiste a preferência no localStorage
+    const toggle = screen.getByTestId('terminal-mode-toggle');
+    expect(toggle.textContent).toContain('Leitura');
+    fireEvent.click(toggle);
+    expect(localStorage.getItem('orquestra.mobile.terminalMode')).toBe('terminal');
+    expect(screen.getByTestId('terminal-host').hidden).toBe(false);
+    expect(screen.queryByTestId('terminal-reading')).toBeNull();
+    expect(toggle.textContent).toContain('Terminal');
+
+    // Nova montagem respeita a escolha salva no localStorage
+    cleanup();
+    setup();
+    await waitFor(() => expect(screen.getByTestId('terminal-host').hidden).toBe(false));
+  });
+
+  it('readXtermBufferText extrai linhas com translateToString(true), junta soft-wrap (isWrapped) e remove linhas vazias no fim', () => {
+    const fakeLines = [
+      { isWrapped: false, translateToString: (trim: boolean) => (trim ? 'linha A' : 'linha A ') },
+      { isWrapped: true, translateToString: (trim: boolean) => (trim ? 'continua' : 'continua   ') },
+      { isWrapped: false, translateToString: () => '' },
+      { isWrapped: false, translateToString: (trim: boolean) => (trim ? 'linha B' : 'linha B  ') },
+      { isWrapped: false, translateToString: () => '' },
+      { isWrapped: false, translateToString: () => '' },
+    ];
+    const fakeTerm = {
+      buffer: {
+        active: {
+          length: fakeLines.length,
+          getLine: (i: number) => fakeLines[i],
+        },
+      },
+    };
+    expect(readXtermBufferText(fakeTerm as never)).toBe('linha A continua\n\nlinha B');
+  });
+
+  it('no modo Terminal não chama readText nem fitWidth em novas saídas e lê via onUpdate após parse do xterm', async () => {
+    const { view, emit } = setup();
+    await waitFor(() => expect(view.load).toHaveBeenCalledTimes(1));
+    expect(view.readText).toHaveBeenCalledTimes(1);
+
+    // Muda para modo Terminal: fitWidth roda uma vez na troca
+    fireEvent.click(screen.getByTestId('terminal-mode-toggle'));
+    expect(view.fitWidth).toHaveBeenCalledTimes(1);
+    view.readText.mockClear();
+    view.fitWidth.mockClear();
+
+    // Novas saídas em modo Terminal não varrem readText nem chamam fitWidth
+    emit({ kind: 'output', event: { type: 'terminal.output', name: 'revisor', data: 'nova saída', workspaceId: 'w1' } });
+    await new Promise((r) => setTimeout(r, 120));
+    expect(view.readText).not.toHaveBeenCalled();
+    expect(view.fitWidth).not.toHaveBeenCalled();
   });
 });

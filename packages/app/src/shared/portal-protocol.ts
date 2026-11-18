@@ -70,6 +70,17 @@ export const MOBILE_PRESETS: DevicePreset[] = [
     hasTouch: true,
   },
   {
+    id: 'galaxy-a36',
+    name: 'Samsung Galaxy A36 (412x892)',
+    width: 412,
+    height: 892,
+    deviceScaleFactor: 2.625,
+    isMobile: true,
+    userAgent:
+      'Mozilla/5.0 (Linux; Android 15; SM-A366B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Mobile Safari/537.36',
+    hasTouch: true,
+  },
+  {
     id: 'galaxy-s23',
     name: 'Samsung Galaxy S23 (360x780)',
     width: 360,

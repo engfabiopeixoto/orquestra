@@ -255,6 +255,8 @@ describe('RemoteGateway', () => {
     const r1 = await waitForMsg(c1.messages, (m) => m.id === 'c1-list');
     expect(r1.type).toBe('response');
     expect(r1.result.workspaces).toHaveLength(1);
+    expect(r1.result.workspaces[0]).not.toHaveProperty('dir');
+    expect(r1.result.workspaces[0].name).toBe('proj');
 
     // Resposta do c1 NÃO chega no c2 nem no Electron
     expect(c2.messages.some((m) => m.id === 'c1-list')).toBe(false);

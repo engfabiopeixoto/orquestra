@@ -96,6 +96,28 @@ describe('portal-protocol', () => {
       expect(fallback.isMobile).toBe(true);
     });
 
+    it('inclui Samsung Galaxy A36 (412x892) logo depois do Pixel 7', () => {
+      const pixelIdx = MOBILE_PRESETS.findIndex((p) => p.id === 'pixel-7');
+      const a36Idx = MOBILE_PRESETS.findIndex((p) => p.id === 'galaxy-a36');
+      expect(pixelIdx).toBeGreaterThanOrEqual(0);
+      expect(a36Idx).toBe(pixelIdx + 1);
+
+      const preset = getDevicePreset('galaxy-a36');
+      expect(preset).toMatchObject({
+        id: 'galaxy-a36',
+        name: 'Samsung Galaxy A36 (412x892)',
+        width: 412,
+        height: 892,
+        deviceScaleFactor: 2.625,
+        isMobile: true,
+        hasTouch: true,
+      });
+      expect(preset.userAgent).toContain('Android 15');
+      expect(preset.userAgent).toContain('SM-A366B');
+      expect(preset.userAgent).toMatch(/Chrome\/13\d\./);
+      expect(preset.userAgent).toContain('Mobile');
+    });
+
     it('garante que todos os presets mobile possuem userAgent e hasTouch', () => {
       for (const p of MOBILE_PRESETS) {
         expect(p.hasTouch).toBe(true);
