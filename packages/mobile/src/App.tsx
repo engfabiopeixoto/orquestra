@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { OrqError } from '@orquestra/shared/errors';
 import type {
   HostEvent,
   HostResult,
@@ -10,6 +11,15 @@ import { formatResetTime, formatWindowLabel } from '@orquestra/shared/usage-form
 import { remotePairResponseSchema } from '@orquestra/shared/remote';
 import type { RemoteSnapshot } from '@orquestra/shared/remote-snapshot';
 import { applyEventToSnapshot, replayEvents } from './snapshot';
+import {
+  isOpenTerminalMessage,
+  MobileNotifier,
+  parseDeepLinkTarget,
+  readNotificationPermission,
+  requestNotificationPermission,
+  type DeepLinkTarget,
+  type NotificationPermissionState,
+} from './notifications';
 import { TerminalScreen, type OutputBus, type OutputSignal } from './TerminalScreen';
 import { clearStoredAuth, loadStoredAuth, saveStoredAuth, type StoredAuth } from './storage';
 import { effectiveTerminalState, modelLabelOf, sortTerminalsForMobile, terminalStateLabel } from './terminals';
@@ -226,14 +236,36 @@ export function UsageSection({ client }: { client: RemoteWsClient }) {
 
 export function App() {
   const [pairCode] = useState(initialPairToken);
+  const pendingTargetRef = useRef<DeepLinkTarget | null>(parseDeepLinkTarget());
 
-  // O código de pareamento sai da barra de endereço assim que é lido (não fica no histórico nem em Referer).
+  // O código de pareamento e os parâmetros de foco saem da barra de endereço assim que são lidos.
   useEffect(() => {
-    if (pairCode && window.location.search.includes('pair=')) {
+    if (
+      (pairCode && window.location.search.includes('pair=')) ||
+      window.location.search.includes('workspace=') ||
+      window.location.search.includes('terminal=')
+    ) {
       window.history.replaceState({}, '', window.location.pathname);
     }
   }, [pairCode]);
   const [auth, setAuth] = useState<StoredAuth | null>(() => (pairCode ? null : loadStoredAuth()));
+  const [notifPermission, setNotifPermission] = useState<NotificationPermissionState>(readNotificationPermission);
+  const [notifOptIn, setNotifOptIn] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('orquestra.mobile.notifications') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const notifOptInRef = useRef(notifOptIn);
+  notifOptInRef.current = notifOptIn;
+  const notifier = useMemo(
+    () =>
+      new MobileNotifier({
+        getPermission: () => (notifOptInRef.current ? readNotificationPermission() : 'default'),
+      }),
+    [],
+  );
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
   const [statusReason, setStatusReason] = useState<string | null>(null);
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
@@ -246,6 +278,10 @@ export function App() {
 
   const activeWorkspaceIdRef = useRef<string | null>(null);
   activeWorkspaceIdRef.current = activeSnapshot?.workspaceId ?? null;
+  const activeSnapshotRef = useRef<RemoteSnapshot | null>(activeSnapshot);
+  activeSnapshotRef.current = activeSnapshot;
+  const statusRef = useRef<ConnectionStatus>(status);
+  statusRef.current = status;
   const [openTerminal, setOpenTerminal] = useState<string | null>(null);
   const outputListeners = useRef(new Set<(signal: OutputSignal) => void>());
   const bus = useMemo<OutputBus>(
@@ -259,7 +295,7 @@ export function App() {
   );
   const activatingRef = useRef<string | null>(null);
   const bufferedEventsRef = useRef<HostEvent[]>([]);
-  const openWorkspaceRef = useRef<(id: string) => Promise<void>>(async () => {});
+  const openWorkspaceRef = useRef<(id: string, targetTerminal?: string) => Promise<void>>(async () => {});
   const refreshWorkspacesRef = useRef<(quiet?: boolean) => Promise<void>>(async () => {});
 
   const client = useMemo(() => {
@@ -299,8 +335,24 @@ export function App() {
           bufferedEventsRef.current.push(event);
           return;
         }
+        const currentSnap = activeSnapshotRef.current;
+        if (
+          event.workspaceId &&
+          currentSnap &&
+          event.workspaceId === currentSnap.workspaceId &&
+          event.sequence !== undefined &&
+          currentSnap.eventSequence !== undefined &&
+          event.sequence <= currentSnap.eventSequence
+        ) {
+          return;
+        }
+        notifier.observeEvent(event);
         if (event.workspaceId && event.workspaceId === activeWorkspaceIdRef.current) {
-          setActiveSnapshot((prev) => (prev ? applyEventToSnapshot(prev, event) : prev));
+          setActiveSnapshot((prev) => {
+            const next = prev ? applyEventToSnapshot(prev, event) : prev;
+            activeSnapshotRef.current = next;
+            return next;
+          });
           if (event.type === 'terminal.notice') {
             setNotices((prev) => ({ ...prev, [event.name]: event.message }));
           }
@@ -314,7 +366,7 @@ export function App() {
         }
       },
     });
-  }, [auth?.token]);
+  }, [auth?.token, notifier]);
 
   const refreshWorkspaces = async (quiet = false) => {
     if (!client) return;
@@ -343,13 +395,61 @@ export function App() {
   useEffect(() => {
     if (status === 'connected' && client) {
       void refreshWorkspaces();
-      if (activeWorkspaceIdRef.current) {
+      const target = pendingTargetRef.current;
+      if (target?.workspaceId) {
+        pendingTargetRef.current = null;
+        void openWorkspace(target.workspaceId, target.terminal);
+      } else if (activeWorkspaceIdRef.current) {
         void openWorkspace(activeWorkspaceIdRef.current);
       }
     }
   }, [status, client]);
 
-  const openWorkspace = async (id: string) => {
+  useEffect(() => {
+    if (
+      typeof navigator === 'undefined' ||
+      !('serviceWorker' in navigator) ||
+      typeof navigator.serviceWorker?.addEventListener !== 'function'
+    ) {
+      return;
+    }
+    const onMessage = (event: MessageEvent) => {
+      if (!isOpenTerminalMessage(event.data)) return;
+      const { workspaceId, terminal } = event.data;
+      const targetWorkspaceId = workspaceId ?? activeWorkspaceIdRef.current ?? undefined;
+      if (statusRef.current !== 'connected') {
+        pendingTargetRef.current = { workspaceId: targetWorkspaceId, terminal };
+        return;
+      }
+      if (targetWorkspaceId && targetWorkspaceId !== activeWorkspaceIdRef.current) {
+        void openWorkspaceRef.current(targetWorkspaceId, terminal);
+      } else if (terminal) {
+        setOpenTerminal(terminal);
+      }
+    };
+    navigator.serviceWorker.addEventListener('message', onMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', onMessage);
+  }, []);
+
+  const enableNotifications = async () => {
+    const next = await requestNotificationPermission();
+    setNotifPermission(next);
+    if (next === 'granted') {
+      setNotifOptIn(true);
+      try {
+        localStorage.setItem('orquestra.mobile.notifications', '1');
+      } catch {}
+    }
+  };
+
+  const disableNotifications = () => {
+    setNotifOptIn(false);
+    try {
+      localStorage.removeItem('orquestra.mobile.notifications');
+    } catch {}
+  };
+
+  const openWorkspace = async (id: string, targetTerminal?: string) => {
     if (!client) return;
     activatingRef.current = id;
     bufferedEventsRef.current = [];
@@ -362,11 +462,25 @@ export function App() {
       activatingRef.current = null;
       // Atualiza a referência junto com o estado: evento que chegue antes do re-render não pode ser descartado.
       activeWorkspaceIdRef.current = snap.workspaceId;
-      setActiveSnapshot(replayEvents(snap, buffered));
-      setOpenTerminal((current) => (current && snap.terminals.some((t) => t.name === current) ? current : null));
+      const merged = replayEvents(snap, buffered);
+      activeSnapshotRef.current = merged;
+      notifier.seedSnapshot(merged);
+      setActiveSnapshot(merged);
+      setOpenTerminal((current) => {
+        const wanted = targetTerminal ?? current;
+        return wanted && merged.terminals.some((t) => t.name === wanted) ? wanted : null;
+      });
       setNotices({});
       setSelectedId(id);
     } catch (err) {
+      if (err instanceof OrqError && err.code === 'NOT_CONNECTED') {
+        pendingTargetRef.current = {
+          workspaceId: id,
+          terminal:
+            targetTerminal ??
+            (pendingTargetRef.current?.workspaceId === id ? pendingTargetRef.current.terminal : undefined),
+        };
+      }
       setError(err instanceof Error ? err.message : 'Não foi possível ativar o workspace.');
     } finally {
       activatingRef.current = null;
@@ -494,7 +608,32 @@ export function App() {
 
         {!activeSnapshot ? (
           <>
-            <h2 className="section-title">Workspaces</h2>
+            <div className="section-header-row">
+              <h2 className="section-title">Workspaces</h2>
+              {notifPermission === 'granted' && notifOptIn ? (
+                <button
+                  type="button"
+                  className="ghost"
+                  data-testid="mobile-notifications-status"
+                  onClick={disableNotifications}
+                >
+                  Notificações ativas
+                </button>
+              ) : notifPermission === 'denied' ? (
+                <span className="badge" data-testid="mobile-notifications-status">
+                  Notificações bloqueadas
+                </span>
+              ) : notifPermission !== 'unsupported' ? (
+                <button
+                  type="button"
+                  className="ghost"
+                  data-testid="mobile-enable-notifications"
+                  onClick={() => void enableNotifications()}
+                >
+                  Ativar notificações
+                </button>
+              ) : null}
+            </div>
             {workspaces.length === 0 ? (
               <div className="card empty-state" data-testid="workspaces-empty">
                 {loadingList ? 'Carregando workspaces…' : 'Nenhum workspace aberto no computador.'}

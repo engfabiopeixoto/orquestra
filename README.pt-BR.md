@@ -22,6 +22,18 @@ Rodar vários agentes ao mesmo tempo significa alternar entre janelas de termina
 - **Monitoramento de atividade.** Ative o monitoramento por terminal para receber uma notificação do Windows quando ele terminar um turno ou esperar por você com o app fora de foco.
 - **Uso das assinaturas.** Veja as janelas de uso e os horários de renovação do Claude, do Codex e do agy. Os agentes consultam esses dados com `orq usage`, e o regente pode delegar sem estourar os limites.
 - **Fluxo visual de dados.** Monte um grafo de processamento no mesmo canvas com nós de entrada, arquivo, algoritmo (JavaScript ou Python), validação, teste, visualização e saída. Veja [docs/fluxo-visual.md](docs/fluxo-visual.md).
+- **Controle remoto no celular (PWA).** Acompanhe e controle os workspaces do PC pelo celular via Tailscale.
+
+## Celular
+
+O Orquestra inclui uma PWA servida pelo próprio computador dentro da sua tailnet privada:
+
+1. **Como ligar:** No desktop, abra **Padrões dos agentes** → seção **Celular** e ative o acesso remoto. O Orquestra expõe o gateway local (`127.0.0.1:47820`) na sua tailnet com `tailscale serve --bg --https=8443`.
+2. **Parear pelo QR:** Clique em **Parear celular** e escaneie o QR code de uso único (expira em 5 minutos). Cada aparelho recebe um token próprio que pode ser revogado a qualquer momento no PC.
+3. **Requisito:** Tailscale instalado e conectado no PC e no celular, com MagicDNS e certificados HTTPS habilitados na tailnet. Se o HTTPS não estiver disponível na tailnet, o painel oferece o plano B em HTTP no IP `100.x` do Tailscale (sem instalação como app nem notificações).
+4. **Limitações conhecidas:**
+   - **Notificações** ("está esperando você" e "terminou") funcionam apenas com o app aberto ou em segundo plano recente pelo Service Worker (não há push com o app totalmente fechado).
+   - **Workspace compartilhado:** O workspace selecionado é o mesmo do PC; trocar de workspace no celular também troca no desktop.
 
 ## Requisitos
 
@@ -41,19 +53,19 @@ npm install
 npm run dist
 ```
 
-O `npm run dist` compila o CLI e o processo host e empacota o app com o electron-builder. O instalador fica em `packages/app/release`.
+O `npm run dist` compila o CLI, o processo host e `packages/mobile`, e empacota o app com o electron-builder. O instalador fica em `packages/app/release`.
 
 ## Desenvolvimento
 
 ```
 npm install
-npm run dev          # compila o CLI e o host e inicia o app em modo de desenvolvimento
+npm run dev          # compila o CLI, o host e a interface móvel e inicia o app em modo de desenvolvimento
 npm test             # testes unitários (vitest)
-npm run typecheck    # tsc na raiz e em packages/app
+npm run typecheck    # tsc na raiz, em packages/app e em packages/mobile
 npm run e2e          # testes ponta a ponta do app Electron com Playwright
 ```
 
-Outros scripts: `npm run build:cli`, `npm run build:host`, `npm run e2e:packaged` (testa o app empacotado) e `npm run harness` (cria terminais reais e os conecta sem a interface).
+Outros scripts: `npm run build:cli`, `npm run build:host`, `npm run build:mobile`, `npm run mobile:dev` (sobe o gateway móvel isolado com suporte a `--tailscale`), `npm run e2e:packaged` (testa o app empacotado) e `npm run harness` (cria terminais reais e os conecta sem a interface).
 
 ## O CLI `orq`
 
@@ -99,6 +111,7 @@ Workspaces do npm em `packages/`:
 | `host` | Processo em segundo plano que mantém terminais, workspaces, grupos do canvas e o motor do fluxo visual. O app fala com ele por um protocolo tipado. |
 | `core` | Sessões de terminal (node-pty), adaptadores dos agentes claude, agy, codex e shell, servidor de pipe local, notas, funções e uso das assinaturas. |
 | `cli` | O comando `orq` e o servidor MCP, empacotados em um único `orq.mjs`. |
+| `mobile` | PWA (React + Vite + xterm.js) servida pelo gateway remoto do host para acompanhar e controlar workspaces pelo celular. |
 | `shared` | Schemas Zod e tipos compartilhados por todos os pacotes: protocolo do host, workspace, fluxo e cliente do CLI. |
 
 ## Licença

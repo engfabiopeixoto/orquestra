@@ -28,6 +28,8 @@ extraResources:
     to: host/node_modules
   - from: ../cli/dist/orq.mjs
     to: cli/orq.mjs
+  - from: ../mobile/dist
+    to: mobile
 
 win:
   icon: build/orquestra-icon.png

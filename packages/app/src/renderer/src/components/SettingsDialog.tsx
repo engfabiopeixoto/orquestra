@@ -47,16 +47,14 @@ export function SettingsDialog({ api, onClose, onCanvasChange }: { api: CommandA
 
   if (!texts) return null;
 
-  const toggleRemote = async (enabled: boolean) => {
+  const toggleRemote = async (enabled: boolean, fallbackHttp?: boolean) => {
     setRemoteBusy(true);
     setRemoteError(null);
     try {
-      const next = await api.command('remote.enable', { enabled });
+      const next = await api.command('remote.enable', fallbackHttp ? { enabled, fallbackHttp } : { enabled });
       setRemoteStatus(next);
-      if (!enabled) {
-        setRemotePairing(null);
-        setQrSrc(null);
-      }
+      setRemotePairing(null);
+      setQrSrc(null);
     } catch (err) {
       setRemoteError((err as Error).message);
     } finally {
@@ -163,12 +161,44 @@ export function SettingsDialog({ api, onClose, onCanvasChange }: { api: CommandA
             <span className="muted" data-testid="settings-remote-status">
               Estado: {remoteStatus?.enabled ? 'Ligado' : 'Desligado'}
             </span>
+            {remoteStatus?.tailscale ? (
+              <span className="muted" data-testid="settings-remote-tailscale-state">
+                Tailscale:{' '}
+                {remoteStatus.tailscale.state === 'serving'
+                  ? `HTTPS ativo (${remoteStatus.tailscale.dnsName ?? 'tailnet'})`
+                  : remoteStatus.tailscale.state === 'fallback'
+                    ? 'Plano B ativo (HTTP no IP do Tailscale)'
+                    : remoteStatus.tailscale.state === 'error'
+                      ? 'Indisponível para HTTPS'
+                      : 'Desligado'}
+              </span>
+            ) : null}
+            {remoteStatus?.enabled && remoteStatus.tailscale?.url ? (
+              <span className="muted" data-testid="settings-remote-tailscale-url">
+                Endereço Tailscale: <code>{remoteStatus.tailscale.url}</code>
+              </span>
+            ) : null}
             {remoteStatus?.enabled ? (
               <span className="muted" data-testid="settings-remote-url">
                 Endereço local: <code>{remoteStatus.localUrl}</code>
               </span>
             ) : null}
           </div>
+          {remoteStatus?.enabled && remoteStatus.tailscale?.error ? (
+            <div className="remote-fallback-box" data-testid="settings-remote-tailscale-error">
+              <p className="dialog-error">{remoteStatus.tailscale.error}</p>
+              {remoteStatus.tailscale.state !== 'fallback' && remoteStatus.tailscale.tailscaleIp ? (
+                <button
+                  type="button"
+                  data-testid="settings-remote-fallback-btn"
+                  disabled={remoteBusy}
+                  onClick={() => void toggleRemote(true, true)}
+                >
+                  Ouvir também no IP do Tailscale (HTTP: {remoteStatus.tailscale.tailscaleIp}:{remoteStatus.port})
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           <div className="remote-actions">
             <button
               type="button"

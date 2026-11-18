@@ -95,6 +95,24 @@ describe('TerminalScreen', () => {
     expect(input.value).toBe('de novo');
   });
 
+  it('Enter sem Shift na textarea envia a mensagem; Shift+Enter mantém a quebra de linha sem enviar', async () => {
+    const { client } = setup();
+    const input = screen.getByLabelText('Mensagem para revisor') as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: 'linha 1' } });
+
+    const shiftEnterPrevented = !fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
+    expect(shiftEnterPrevented).toBe(false);
+    expect(calls(client, 'terminal.send')).toHaveLength(0);
+
+    fireEvent.change(input, { target: { value: 'linha 1\nlinha 2' } });
+    const enterPrevented = !fireEvent.keyDown(input, { key: 'Enter', shiftKey: false });
+    expect(enterPrevented).toBe(true);
+    await waitFor(() =>
+      expect(calls(client, 'terminal.send')).toEqual([['terminal.send', { name: 'revisor', text: 'linha 1\nlinha 2' }, 'w1']]),
+    );
+    await waitFor(() => expect(input.value).toBe(''));
+  });
+
   it('a barra de teclas envia cada tecla nomeada (terminal.key)', async () => {
     const { client } = setup();
     const expected: Record<string, string> = { Enter: 'Enter', Escape: 'Escape', Tab: 'Tab', ArrowUp: 'ArrowUp', ArrowDown: 'ArrowDown', CtrlC: 'CtrlC', Digit1: 'Digit1', Digit2: 'Digit2', Digit3: 'Digit3' };

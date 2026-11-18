@@ -141,7 +141,7 @@ export function TerminalScreen({
 
   const send = async () => {
     const message = text.trim();
-    if (!message || sending) return;
+    if (!message || sending || inactive || status !== 'connected') return;
     setSending(true);
     setError(null);
     try {
@@ -262,6 +262,12 @@ export function TerminalScreen({
           data-testid="send-input"
           disabled={inactive}
           onChange={(event) => setText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              void send();
+            }
+          }}
         />
         <button type="submit" className="primary" data-testid="send-submit" disabled={inactive || sending || status !== 'connected' || !text.trim()}>
           Enviar

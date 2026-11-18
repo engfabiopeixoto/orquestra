@@ -239,7 +239,7 @@ export const hostMethodSchemas = {
     result: remoteStatusSchema,
   },
   'remote.enable': {
-    params: z.object({ enabled: z.boolean() }),
+    params: z.object({ enabled: z.boolean(), fallbackHttp: z.boolean().optional() }),
     result: remoteStatusSchema,
   },
   'remote.pair': {

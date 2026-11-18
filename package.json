@@ -16,7 +16,7 @@
     "mobile:dev": "tsx dev/mobile-dev.ts",
     "dev": "npm run build:cli && npm run build:host && npm run build:mobile && tsx dev/run-dev.ts",
     "e2e": "npm run build:cli && npm run build:host && npm run e2e -w @orquestra/app",
-    "dist": "npm run build:cli && tsx packages/host/pack.ts && npm run dist -w @orquestra/app",
+    "dist": "npm run build:cli && npm run build:mobile && tsx packages/host/pack.ts && npm run dist -w @orquestra/app",
     "e2e:packaged": "npm run e2e:packaged -w @orquestra/app"
   },
   "devDependencies": {

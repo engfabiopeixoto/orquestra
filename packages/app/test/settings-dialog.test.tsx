@@ -129,4 +129,81 @@ describe('SettingsDialog', () => {
     await waitFor(() => expect(calls.some(([m, p]) => m === 'remote.revoke' && (p as { id: string }).id === 'dev-1')).toBe(true));
     await waitFor(() => expect(screen.queryByTestId('settings-remote-revoke-dev-1')).toBeNull());
   });
+
+  it('mostra o estado e a URL https do Tailscale, o QR apontando para ela, e o motivo/ação do plano B quando o serve falha', async () => {
+    let fallbackActive = false;
+    const { api, calls } = mockApi((method, params) => {
+      if (method === 'remote.status') {
+        return {
+          enabled: true,
+          port: 47820,
+          localUrl: 'http://127.0.0.1:47820',
+          devicesCount: 0,
+          tailscale: {
+            state: 'error',
+            dnsName: 'meu-pc.tailnet.ts.net',
+            url: null,
+            error: 'Certificados HTTPS não estão habilitados na sua tailnet. Ative HTTPS ou use o plano B em HTTP.',
+            tailscaleIp: '100.113.98.14',
+          },
+        };
+      }
+      if (method === 'remote.enable') {
+        const p = params as { enabled: boolean; fallbackHttp?: boolean };
+        fallbackActive = Boolean(p.fallbackHttp);
+        return {
+          enabled: p.enabled,
+          port: 47820,
+          localUrl: 'http://127.0.0.1:47820',
+          devicesCount: 0,
+          tailscale: fallbackActive
+            ? {
+                state: 'fallback',
+                dnsName: 'meu-pc.tailnet.ts.net',
+                url: 'http://100.113.98.14:47820',
+                error: 'Certificados HTTPS não estão habilitados na sua tailnet. Ative HTTPS ou use o plano B em HTTP.',
+                tailscaleIp: '100.113.98.14',
+              }
+            : {
+                state: 'serving',
+                dnsName: 'meu-pc.tailnet.ts.net',
+                url: 'https://meu-pc.tailnet.ts.net:8443',
+                error: null,
+                tailscaleIp: '100.113.98.14',
+              },
+        };
+      }
+      if (method === 'remote.pair') {
+        const base = fallbackActive ? 'http://100.113.98.14:47820' : 'https://meu-pc.tailnet.ts.net:8443';
+        return { token: 'tok999', url: `${base}/?pair=tok999`, expiresAt: '2026-11-18T00:05:00Z' };
+      }
+      return undefined;
+    });
+
+    render(<SettingsDialog api={api} onClose={() => {}} />);
+    expect((await screen.findByTestId('settings-remote-tailscale-state')).textContent).toContain('Indisponível');
+    expect(screen.getByTestId('settings-remote-tailscale-error').textContent).toContain('Certificados HTTPS');
+
+    const fbBtn = screen.getByTestId('settings-remote-fallback-btn');
+    expect(fbBtn.textContent).toContain('100.113.98.14:47820');
+    fireEvent.click(fbBtn);
+
+    await waitFor(() =>
+      expect(calls.some(([m, p]) => m === 'remote.enable' && (p as any).fallbackHttp === true)).toBe(true),
+    );
+    expect(screen.getByTestId('settings-remote-tailscale-state').textContent).toContain('Plano B ativo');
+    expect(screen.getByTestId('settings-remote-tailscale-url').textContent).toContain('http://100.113.98.14:47820');
+
+    // Simula desligar e religar com HTTPS ativo e parear: o QR e o link apontam para a URL do Tailscale
+    fireEvent.click(screen.getByTestId('settings-remote-enable'));
+    await waitFor(() => expect(screen.getByTestId('settings-remote-status').textContent).toContain('Desligado'));
+    fireEvent.click(screen.getByTestId('settings-remote-enable'));
+    await waitFor(() => expect(screen.getByTestId('settings-remote-tailscale-state').textContent).toContain('HTTPS ativo'));
+    expect(screen.getByTestId('settings-remote-tailscale-url').textContent).toContain('https://meu-pc.tailnet.ts.net:8443');
+
+    fireEvent.click(screen.getByTestId('settings-remote-pair'));
+    expect((await screen.findByTestId('settings-remote-pair-url') as HTMLInputElement).value).toBe(
+      'https://meu-pc.tailnet.ts.net:8443/?pair=tok999',
+    );
+  });
 });

@@ -22,6 +22,18 @@ Running several agents at once means juggling terminal windows, copying prompts 
 - **Activity monitoring.** Turn on monitoring per terminal to get a Windows notification when it finishes a turn or waits for you while the app is unfocused.
 - **Subscription usage.** See the usage windows and reset times for Claude, Codex and agy. Agents can check them with `orq usage`, so the regent can delegate without hitting the limits.
 - **Visual data flow.** Build a processing graph on the same canvas with input, file, algorithm (JavaScript or Python), validation, test, view and output nodes. See [docs/fluxo-visual.md](docs/fluxo-visual.md) (in Portuguese).
+- **Mobile remote control (PWA).** Monitor and control your PC's workspaces from your phone over Tailscale.
+
+## Mobile (Celular)
+
+Orquestra includes a Progressive Web App (PWA) served directly by your PC over your private Tailscale network:
+
+1. **Enable:** In the desktop app, open **Padrões dos agentes** (Settings) → **Celular** and turn on remote access. Orquestra exposes the local gateway (`127.0.0.1:47820`) to your tailnet via `tailscale serve --bg --https=8443`.
+2. **Pair:** Click **Parear celular** and scan the single-use QR code from your phone (expires in 5 minutes). Each phone receives its own revocable device token.
+3. **Requirements:** Tailscale installed and signed in on both the PC and the phone, with MagicDNS and HTTPS certificates enabled on the tailnet. If HTTPS is disabled on the tailnet, you can use the HTTP fallback on your PC's `100.x` Tailscale IP (without PWA installation or notifications).
+4. **Known limitations:**
+   - **Notifications** ("waiting for you" and "turn finished") work while the app is open or recently in the background via the Service Worker (no Web Push / FCM when the browser is fully closed).
+   - **Shared active workspace:** Selecting a workspace on the phone switches the active workspace on the PC as well.
 
 ## Requirements
 
@@ -41,19 +53,19 @@ npm install
 npm run dist
 ```
 
-`npm run dist` builds the CLI and the host process, then packages the app with electron-builder. The installer lands in `packages/app/release`.
+`npm run dist` builds the CLI, the host process, and `packages/mobile`, then packages the app with electron-builder. The installer lands in `packages/app/release`.
 
 ## Development
 
 ```
 npm install
-npm run dev          # builds the CLI and host, then starts the app in dev mode
+npm run dev          # builds the CLI, host, and mobile UI, then starts the app in dev mode
 npm test             # unit tests (vitest)
-npm run typecheck    # tsc for the root and for packages/app
+npm run typecheck    # tsc for the root, packages/app, and packages/mobile
 npm run e2e          # Playwright end-to-end tests of the Electron app
 ```
 
-Other scripts: `npm run build:cli`, `npm run build:host`, `npm run e2e:packaged` (tests the packaged app) and `npm run harness` (creates real terminals and connects them without the UI).
+Other scripts: `npm run build:cli`, `npm run build:host`, `npm run build:mobile`, `npm run mobile:dev` (starts a standalone mobile gateway with `--tailscale` support), `npm run e2e:packaged` (tests the packaged app) and `npm run harness` (creates real terminals and connects them without the UI).
 
 ## The `orq` CLI
 
@@ -99,6 +111,7 @@ npm workspaces under `packages/`:
 | `host` | Background process that owns terminals, workspaces, canvas groups and the visual flow engine. The app talks to it over a typed protocol. |
 | `core` | Terminal sessions (node-pty), agent adapters for claude, agy, codex and shell, the local pipe server, notes, personas and subscription usage. |
 | `cli` | The `orq` command and the MCP server, bundled to a single `orq.mjs`. |
+| `mobile` | Progressive Web App (React + Vite + xterm.js) served by the host's remote gateway for monitoring and controlling workspaces from a phone. |
 | `shared` | Zod schemas and types shared by all packages: host protocol, workspace, flow and CLI client. |
 
 ## License

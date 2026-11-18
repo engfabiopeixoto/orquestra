@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { AGENT_PID_FILE, defaultPipePath, HOST_EXIT_PIPE_BUSY, mainToHostSchema, type HostToMain } from '@orquestra/shared';
 import { createLogger, DEFAULT_BIN_DIR, installCli, type AgentAdapter, type ModelCatalogStoreDeps } from '@orquestra/core';
 import { type HostBridge } from './bridge.js';
-import { RemoteGateway } from './remote/index.js';
+import { RemoteGateway, TailscaleServeManager } from './remote/index.js';
 import { startWorkspaceManager } from './workspace-manager.js';
 
 export async function runHost(opts: { adapters: Record<string, AgentAdapter>; modelCatalogDeps?: ModelCatalogStoreDeps }): Promise<void> {
@@ -28,6 +28,7 @@ export async function runHost(opts: { adapters: Record<string, AgentAdapter>; mo
     electronSend: send,
     port: Number.isFinite(remotePort) && remotePort! > 0 ? remotePort : undefined,
     mobileDir: process.env.ORQ_MOBILE_DIR,
+    tailscale: new TailscaleServeManager({ log: hostLog.child({ component: 'tailscale' }) }),
   });
   let bridge: HostBridge;
   try {

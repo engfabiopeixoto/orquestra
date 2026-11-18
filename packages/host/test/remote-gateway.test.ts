@@ -27,7 +27,7 @@ afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((fn) => fn()));
 });
 
-async function setupGateway(opts?: { authTimeoutMs?: number; rateLimit?: number; pairTtlMs?: number; mobileDir?: string; log?: Logger; port?: number; outputBufferLimit?: number }) {
+async function setupGateway(opts?: { authTimeoutMs?: number; rateLimit?: number; pairTtlMs?: number; mobileDir?: string; log?: Logger; port?: number; outputBufferLimit?: number; outputFlushMs?: number }) {
   const dataDir = mkdtempSync(join(tmpdir(), 'orq-gateway-test-'));
   const mobileDir = opts?.mobileDir ?? join(dataDir, 'mobile-dist');
   mkdirSync(mobileDir, { recursive: true });
@@ -41,6 +41,7 @@ async function setupGateway(opts?: { authTimeoutMs?: number; rateLimit?: number;
     electronSend: (msg) => electronSent.push(msg),
     port: opts?.port ?? 0,
     outputBufferLimit: opts?.outputBufferLimit,
+    outputFlushMs: opts?.outputFlushMs,
     mobileDir,
     authTimeoutMs: opts?.authTimeoutMs ?? 5_000,
     rateLimit: opts?.rateLimit ?? 5,
@@ -775,10 +776,65 @@ describe('RemoteGateway: assinatura da saída do terminal', () => {
     ws.send(JSON.stringify({ type: 'subscribe', workspaceId: 'w', name: 'A' }));
     expect(await closed).toBe(4001);
   });
+
+  it('recalcula outputBytes ao remover saída pendente (unsubscribe, terminal.snapshot e workspace.activated) sem falso overflow', async () => {
+    const { gateway, electronCommand, dataDir, ptyHost } = await setupGateway({ outputBufferLimit: 200, outputFlushMs: 250 });
+    const status = (await electronCommand('remote.enable', { enabled: true })) as { localUrl: string };
+    const snap = await openProjectWithTerminals(electronCommand, join(dataDir, 'proj'), ['A', 'B']);
+    const pair = (await electronCommand('remote.pair')) as { token: string };
+    const client = await authedClient(status.localUrl, pair.token, 'Cel');
+
+    client.ws.send(JSON.stringify({ type: 'subscribe', workspaceId: snap.workspaceId, name: 'A' }));
+    client.ws.send(JSON.stringify({ type: 'subscribe', workspaceId: snap.workspaceId, name: 'B' }));
+    await new Promise((r) => setTimeout(r, 30));
+
+    // 1) unsubscribe remove 150 bytes pendentes de A; 100 bytes em B não podem somar 250 > 200.
+    gateway.onHostMessage({ kind: 'event', event: { type: 'terminal.output', name: 'A', data: 'a'.repeat(150), workspaceId: snap.workspaceId } });
+    client.ws.send(JSON.stringify({ type: 'unsubscribe', workspaceId: snap.workspaceId, name: 'A' }));
+    await new Promise((r) => setTimeout(r, 20));
+    gateway.onHostMessage({ kind: 'event', event: { type: 'terminal.output', name: 'B', data: 'b'.repeat(100), workspaceId: snap.workspaceId } });
+
+    // 2) terminal.snapshot remove os 100 bytes de B; re-assinar A e emitir 150 bytes não pode causar overflow.
+    client.ws.send(JSON.stringify({ type: 'command', id: 'snap-b', method: 'terminal.snapshot', params: { name: 'B' }, workspaceId: snap.workspaceId }));
+    await waitForMsg(client.messages, (m) => m.id === 'snap-b');
+    client.ws.send(JSON.stringify({ type: 'subscribe', workspaceId: snap.workspaceId, name: 'A' }));
+    await new Promise((r) => setTimeout(r, 20));
+    gateway.onHostMessage({ kind: 'event', event: { type: 'terminal.output', name: 'A', data: 'c'.repeat(150), workspaceId: snap.workspaceId } });
+
+    // 3) workspace.activated remove os 150 bytes de A; assinar no novo workspace e emitir 120 bytes não causa overflow.
+    const snap2 = await openProjectWithTerminals(electronCommand, join(dataDir, 'proj2'), ['C']);
+    await waitForMsg(client.messages, (m) => m.type === 'event' && m.event.type === 'workspace.activated' && m.event.workspaceId === snap2.workspaceId);
+    client.ws.send(JSON.stringify({ type: 'subscribe', workspaceId: snap2.workspaceId, name: 'C' }));
+    await new Promise((r) => setTimeout(r, 20));
+    gateway.onHostMessage({ kind: 'event', event: { type: 'terminal.output', name: 'C', data: 'd'.repeat(120), workspaceId: snap2.workspaceId } });
+
+    await waitForMsg(client.messages, (m) => m.type === 'event' && m.event.type === 'terminal.output' && m.event.name === 'C');
+    expect(client.messages.filter((m) => m.type === 'output-overflow')).toHaveLength(0);
+    expect(ptyHost.spawned.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('aceita até 16 assinaturas e recusa a 17ª com USAGE', async () => {
+    const { electronCommand } = await setupGateway();
+    const status = (await electronCommand('remote.enable', { enabled: true })) as { localUrl: string };
+    const pair = (await electronCommand('remote.pair')) as { token: string };
+    const client = await authedClient(status.localUrl, pair.token, 'Cel');
+
+    for (let i = 1; i <= 16; i++) {
+      client.ws.send(JSON.stringify({ type: 'subscribe', workspaceId: 'w1', name: `T${i}` }));
+    }
+    // Reassinar uma existente dentre as 16 não conta como nova.
+    client.ws.send(JSON.stringify({ type: 'subscribe', workspaceId: 'w1', name: 'T1' }));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(client.messages.filter((m) => m.type === 'error')).toHaveLength(0);
+
+    client.ws.send(JSON.stringify({ type: 'subscribe', workspaceId: 'w1', name: 'T17' }));
+    const err = await waitForMsg(client.messages, (m) => m.type === 'error');
+    expect(err.error).toMatchObject({ code: 'USAGE', message: expect.stringContaining('Assinaturas demais') });
+  });
 });
 
 describe('RemoteGateway: terminal.send, terminal.key e recarga', () => {
-  it('terminal.send digita a mensagem e envia Enter; terminal.key envia a tecla; mais de 16 KB é recusado', async () => {
+  it('terminal.send digita a mensagem e envia Enter; terminal.key envia a tecla; exatamente 16 KB é aceito e mais de 16 KB é recusado', async () => {
     const { electronCommand, dataDir, ptyHost } = await setupGateway();
     const status = (await electronCommand('remote.enable', { enabled: true })) as { localUrl: string };
     const snap = await openProjectWithTerminals(electronCommand, join(dataDir, 'proj'), ['A']);
@@ -794,6 +850,9 @@ describe('RemoteGateway: terminal.send, terminal.key e recarga', () => {
     expect(pty.written.slice(-2)).toEqual(['echo oi', '\r']);
     expect((await send('k1', 'terminal.key', { name: 'A', key: 'ArrowUp' })).type).toBe('response');
     expect(pty.written.at(-1)).toBe('\x1b[A');
+    const exactMax = await send('s-max', 'terminal.send', { name: 'A', text: 'z'.repeat(16 * 1024) });
+    expect(exactMax.type).toBe('response');
+    expect(exactMax.ok).toBe(true);
     const tooBig = await send('s2', 'terminal.send', { name: 'A', text: 'y'.repeat(16 * 1024 + 1) });
     expect(tooBig.error.code).toBe('USAGE');
     expect((await send('k2', 'terminal.key', { name: 'A', key: 'F13' })).error.code).toBe('USAGE');

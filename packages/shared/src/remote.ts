@@ -3,6 +3,8 @@ import { errorCodeSchema } from './errors.js';
 
 export const REMOTE_DEFAULT_PORT = 47820;
 export const REMOTE_DEV_PORT = 47821;
+export const REMOTE_TAILSCALE_HTTPS_PORT = 8443;
+export const REMOTE_TAILSCALE_DEV_HTTPS_PORT = 8444;
 export const REMOTE_MAX_MESSAGE_BYTES = 64 * 1024;
 export const REMOTE_AUTH_TIMEOUT_MS = 5_000;
 export const REMOTE_PAIR_TTL_MS = 5 * 60_000;
@@ -73,11 +75,24 @@ export const remoteDeviceSchema = z.object({
 });
 export type RemoteDevice = z.infer<typeof remoteDeviceSchema>;
 
+export const remoteTailscaleStateSchema = z.enum(['disabled', 'serving', 'fallback', 'error']);
+export type RemoteTailscaleState = z.infer<typeof remoteTailscaleStateSchema>;
+
+export const remoteTailscaleStatusSchema = z.object({
+  state: remoteTailscaleStateSchema,
+  dnsName: z.string().nullable(),
+  url: z.string().nullable(),
+  error: z.string().nullable(),
+  tailscaleIp: z.string().nullable().optional(),
+});
+export type RemoteTailscaleStatus = z.infer<typeof remoteTailscaleStatusSchema>;
+
 export const remoteStatusSchema = z.object({
   enabled: z.boolean(),
   port: z.number().int().positive(),
   localUrl: z.string(),
   devicesCount: z.number().int().nonnegative(),
+  tailscale: remoteTailscaleStatusSchema.optional(),
 });
 export type RemoteStatus = z.infer<typeof remoteStatusSchema>;
 

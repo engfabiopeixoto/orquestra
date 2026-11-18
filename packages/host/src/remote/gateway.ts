@@ -26,10 +26,12 @@ import {
   type RemotePairResult,
   type RemoteServerMessage,
   type RemoteStatus,
+  type RemoteTailscaleStatus,
 } from '@orquestra/shared';
 import type { Logger } from '@orquestra/core';
 import type { HostBridge } from '../bridge.js';
 import { RemoteDeviceStore } from './device-store.js';
+import { TailscaleServeManager, type TailscaleController } from './tailscale.js';
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -45,7 +47,7 @@ const MIME_TYPES: Record<string, string> = {
 
 const SECURITY_HEADERS: Record<string, string> = {
   'Content-Security-Policy':
-    "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'",
+    "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'",
   'X-Frame-Options': 'DENY',
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
@@ -120,7 +122,17 @@ export type RemoteGatewayOptions = {
   outputFlushMs?: number;
   outputBufferLimit?: number;
   persistEnabledState?: boolean;
+  tailscale?: TailscaleController | false;
+  fallbackBindHost?: string;
   now?: () => number;
+};
+
+const DISABLED_TAILSCALE_STATUS: RemoteTailscaleStatus = {
+  state: 'disabled',
+  dnsName: null,
+  url: null,
+  error: null,
+  tailscaleIp: null,
 };
 
 export class RemoteGateway {
@@ -133,10 +145,13 @@ export class RemoteGateway {
   private readonly outputFlushMs: number;
   private readonly outputBufferLimit: number;
   private readonly extraAllowedOrigins: Set<string>;
+  private readonly tailscale: TailscaleController | null;
   private server: Server | null = null;
+  private fallbackServer: Server | null = null;
   private wss: WebSocketServer | null = null;
   private activePort: number;
   private enabled = false;
+  private tailscaleStatus: RemoteTailscaleStatus = { ...DISABLED_TAILSCALE_STATUS };
   private bridge: HostBridge | null = null;
   private lifecycle: Promise<unknown> = Promise.resolve();
   private readonly clients = new Map<string, ClientConn>();
@@ -156,6 +171,15 @@ export class RemoteGateway {
     this.outputFlushMs = opts.outputFlushMs ?? REMOTE_OUTPUT_FLUSH_MS;
     this.outputBufferLimit = opts.outputBufferLimit ?? REMOTE_OUTPUT_BUFFER_LIMIT;
     this.extraAllowedOrigins = new Set(opts.allowedOrigins ?? []);
+    if (opts.tailscale === false) {
+      this.tailscale = null;
+    } else if (opts.tailscale) {
+      this.tailscale = opts.tailscale;
+    } else if (!process.env.VITEST) {
+      this.tailscale = new TailscaleServeManager({ log: opts.log });
+    } else {
+      this.tailscale = null;
+    }
     this.store = new RemoteDeviceStore({
       dataDir: opts.dataDir,
       log: opts.log,
@@ -191,13 +215,17 @@ export class RemoteGateway {
       port: this.activePort,
       localUrl: `http://${this.formatHostForUrl()}:${this.activePort}`,
       devicesCount: this.store.list().length,
+      tailscale: { ...this.tailscaleStatus },
     };
   }
 
-  enable(enabled: boolean): Promise<RemoteStatus> {
+  enable(enabled: boolean, opts?: { fallbackHttp?: boolean }): Promise<RemoteStatus> {
     return this.enqueueLifecycle(async () => {
       if (enabled) {
         await this.startListening();
+        if (opts?.fallbackHttp) {
+          await this.startFallbackListening();
+        }
         if (this.persistEnabledState) this.store.setEnabled(true);
       } else {
         if (this.persistEnabledState) this.store.setEnabled(false);
@@ -212,9 +240,10 @@ export class RemoteGateway {
       throw new OrqError('USAGE', 'Ligue o acesso remoto antes de gerar um link de pareamento.');
     }
     const { token, expiresAt } = this.store.createPairing();
+    const baseUrl = this.tailscaleStatus.url ?? `http://${this.formatHostForUrl()}:${this.activePort}`;
     return {
       token,
-      url: `http://${this.formatHostForUrl()}:${this.activePort}/?pair=${encodeURIComponent(token)}`,
+      url: `${baseUrl}/?pair=${encodeURIComponent(token)}`,
       expiresAt,
     };
   }
@@ -255,6 +284,18 @@ export class RemoteGateway {
     conn.outputTimer = null;
     conn.output.clear();
     conn.outputBytes = 0;
+  }
+
+  private recomputeOutputBytes(conn: ClientConn): void {
+    let total = 0;
+    for (const entry of conn.output.values()) {
+      total += entry.data.length;
+    }
+    conn.outputBytes = total;
+    if (conn.output.size === 0 && conn.outputTimer) {
+      clearTimeout(conn.outputTimer);
+      conn.outputTimer = null;
+    }
   }
 
   private flushOutput(conn: ClientConn): void {
@@ -305,6 +346,10 @@ export class RemoteGateway {
       `http://${hostUrl}:${this.activePort}`,
       `http://127.0.0.1:${this.activePort}`,
       `http://localhost:${this.activePort}`,
+      ...(this.tailscaleStatus.url ? [this.tailscaleStatus.url] : []),
+      ...(this.tailscaleStatus.state === 'fallback' && this.tailscaleStatus.tailscaleIp
+        ? [`http://${this.tailscaleStatus.tailscaleIp}:${this.activePort}`]
+        : []),
       ...this.extraAllowedOrigins,
     ]);
     return allowed.has(origin);
@@ -320,8 +365,7 @@ export class RemoteGateway {
     }
   }
 
-  private async startListening(): Promise<void> {
-    if (this.server) return;
+  private createHttpServer(wss: WebSocketServer): Server {
     const server = createServer((req, res) => {
       void this.handleHttp(req, res).catch((error) => {
         this.opts.log.warn({ err: error }, 'erro inesperado na requisição HTTP remota');
@@ -332,7 +376,6 @@ export class RemoteGateway {
         }
       });
     });
-    const wss = new WebSocketServer({ noServer: true, maxPayload: REMOTE_MAX_MESSAGE_BYTES });
 
     server.on('upgrade', (req, socket, head) => {
       const url = this.parseRequestUrl(req);
@@ -354,6 +397,14 @@ export class RemoteGateway {
       }
       wss.handleUpgrade(req, socket, head, (ws) => this.handleWsConnection(ws));
     });
+
+    return server;
+  }
+
+  private async startListening(): Promise<void> {
+    if (this.server) return;
+    const wss = new WebSocketServer({ noServer: true, maxPayload: REMOTE_MAX_MESSAGE_BYTES });
+    const server = this.createHttpServer(wss);
 
     try {
       await new Promise<void>((resolveListen, rejectListen) => {
@@ -383,12 +434,71 @@ export class RemoteGateway {
     this.server = server;
     this.wss = wss;
     this.enabled = true;
+    if (this.tailscale) {
+      this.tailscaleStatus = await this.tailscale.startServe(this.activePort);
+    } else {
+      this.tailscaleStatus = { ...DISABLED_TAILSCALE_STATUS };
+    }
     this.opts.log.info({ host: this.host, port: this.activePort }, 'gateway remoto ligado');
   }
 
+  private async startFallbackListening(): Promise<void> {
+    if (!this.wss) {
+      throw new OrqError('APP_UNAVAILABLE', 'Ligue o gateway remoto antes de ativar o plano B.');
+    }
+    const tsIp = this.tailscaleStatus.tailscaleIp?.trim() ?? '';
+    if (!tsIp || !isAllowedBindHost(tsIp) || !tsIp.startsWith('100.')) {
+      throw new OrqError('APP_UNAVAILABLE', 'IP 100.x do Tailscale indisponível neste computador.');
+    }
+    const bindHost = (this.opts.fallbackBindHost ?? tsIp).trim();
+    if (!isAllowedBindHost(bindHost)) {
+      throw new OrqError('USAGE', `Endereço de escuta do plano B não permitido: ${bindHost}.`);
+    }
+    if (!this.fallbackServer) {
+      const fbServer = this.createHttpServer(this.wss);
+      try {
+        await new Promise<void>((resolveListen, rejectListen) => {
+          const onError = (err: Error) => {
+            fbServer.off('listening', onListening);
+            rejectListen(err);
+          };
+          const onListening = () => {
+            fbServer.off('error', onError);
+            resolveListen();
+          };
+          fbServer.once('error', onError);
+          fbServer.once('listening', onListening);
+          fbServer.listen(this.activePort, bindHost);
+        });
+        this.fallbackServer = fbServer;
+      } catch (error) {
+        try { fbServer.close(); } catch {}
+        throw new OrqError(
+          'APP_UNAVAILABLE',
+          `Não foi possível ouvir no IP do Tailscale (${tsIp}:${this.activePort}): ${(error as Error).message}`,
+        );
+      }
+    }
+    this.tailscaleStatus = {
+      ...this.tailscaleStatus,
+      state: 'fallback',
+      url: `http://${tsIp}:${this.activePort}`,
+    };
+    this.opts.log.info({ ip: tsIp, port: this.activePort }, 'gateway remoto ouvindo também no IP do Tailscale (plano B)');
+  }
+
   private async stopListening(): Promise<void> {
+    if (!this.enabled && !this.server && !this.fallbackServer) {
+      this.tailscaleStatus = { ...DISABLED_TAILSCALE_STATUS };
+      return;
+    }
     this.enabled = false;
     this.activePort = this.configuredPort;
+
+    if (this.tailscale) {
+      await this.tailscale.stopServe();
+    }
+    this.tailscaleStatus = { ...DISABLED_TAILSCALE_STATUS };
 
     for (const conn of [...this.clients.values()]) {
       if (conn.authTimer) {
@@ -405,12 +515,19 @@ export class RemoteGateway {
     this.pending.clear();
 
     const wss = this.wss;
+    const fbServer = this.fallbackServer;
     const server = this.server;
     this.wss = null;
+    this.fallbackServer = null;
     this.server = null;
 
     if (wss) {
       await new Promise<void>((resolveWss) => wss.close(() => resolveWss()));
+    }
+    if (fbServer) {
+      fbServer.closeIdleConnections?.();
+      fbServer.closeAllConnections?.();
+      await new Promise<void>((resolveFb) => fbServer.close(() => resolveFb()));
     }
     if (server) {
       server.closeIdleConnections?.();
@@ -605,11 +722,11 @@ export class RemoteGateway {
 
     const ext = extname(finalReal).toLowerCase();
     const contentType = MIME_TYPES[ext] ?? 'application/octet-stream';
-    const isHtml = ext === '.html';
+    const noCache = ext === '.html' || ext === '.webmanifest' || finalReal.endsWith(`${sep}sw.js`);
     res.writeHead(200, {
       ...SECURITY_HEADERS,
       'Content-Type': contentType,
-      'Cache-Control': isHtml ? 'no-cache' : 'public, max-age=3600',
+      'Cache-Control': noCache ? 'no-cache' : 'public, max-age=3600',
     });
     res.end(readFileSync(finalReal));
   }
@@ -728,6 +845,7 @@ export class RemoteGateway {
       if (msg.type === 'unsubscribe') {
         conn.subscriptions.delete(`${msg.workspaceId}:${msg.name}`);
         for (const [key, entry] of conn.output) if (entry.name === msg.name && key.startsWith(`${msg.workspaceId}:`)) conn.output.delete(key);
+        this.recomputeOutputBytes(conn);
         conn.overflowed.delete(msg.name);
         return;
       }
@@ -838,6 +956,7 @@ export class RemoteGateway {
             } else if (target.method === 'terminal.snapshot' && target.terminal) {
               // A saída acumulada até aqui já está no retrato: descartar evita linhas repetidas e libera o terminal mudo.
               for (const [key, entry] of conn.output) if (entry.name === target.terminal) conn.output.delete(key);
+              this.recomputeOutputBytes(conn);
               conn.overflowed.delete(target.terminal);
             }
             this.sendWs(conn.ws, { type: 'response', id: target.clientCmdId, ok: true, result });
@@ -861,6 +980,7 @@ export class RemoteGateway {
         for (const conn of this.clients.values()) {
           for (const key of [...conn.subscriptions]) if (!key.startsWith(`${event.workspaceId}:`)) conn.subscriptions.delete(key);
           for (const [key, entry] of [...conn.output]) if (entry.workspaceId !== event.workspaceId) conn.output.delete(key);
+          this.recomputeOutputBytes(conn);
           conn.overflowed.clear();
         }
       }
@@ -922,8 +1042,8 @@ export class RemoteGateway {
       return this.status();
     }
     if (method === 'remote.enable') {
-      const { enabled } = parseHostParams('remote.enable', params);
-      return this.enable(enabled);
+      const { enabled, fallbackHttp } = parseHostParams('remote.enable', params);
+      return this.enable(enabled, { fallbackHttp });
     }
     if (method === 'remote.pair') {
       parseHostParams('remote.pair', params);

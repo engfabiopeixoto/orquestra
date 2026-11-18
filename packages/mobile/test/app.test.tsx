@@ -279,6 +279,132 @@ describe('App', () => {
     expect(localStorage.getItem('orquestra.mobile.auth')).toBeNull();
     expect(screen.getByTestId('pair-submit')).toBeTruthy();
   });
+
+  it('não pede permissão de notificação ao abrir; botão Ativar notificações solicita ao clicar e abre terminal via ?workspace=&terminal=', async () => {
+    const requestPermission = vi.fn(async () => 'granted' as NotificationPermission);
+    Object.defineProperty(window, 'Notification', {
+      configurable: true,
+      writable: true,
+      value: { permission: 'default', requestPermission },
+    });
+    window.history.replaceState({}, '', '/?workspace=w1&terminal=revisor');
+    storeAuth();
+    render(<App />);
+
+    // Deep-link ?workspace=w1&terminal=revisor abre direto o terminal e limpa a barra de endereço.
+    expect(await screen.findByTestId('terminal-screen')).toBeTruthy();
+    expect(window.location.search).toBe('');
+    expect(requestPermission).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('terminal-back'));
+    fireEvent.click(await screen.findByTestId('mobile-back-workspaces'));
+
+    const btn = await screen.findByTestId('mobile-enable-notifications');
+    expect(btn.textContent).toBe('Ativar notificações');
+    expect(requestPermission).not.toHaveBeenCalled();
+
+    fireEvent.click(btn);
+    await waitFor(() => expect(requestPermission).toHaveBeenCalledTimes(1));
+    expect((await screen.findByTestId('mobile-notifications-status')).textContent).toBe('Notificações ativas');
+  });
+
+  it('serviceWorker postMessage orquestra:open-terminal abre o terminal conectado e guarda alvo pendente durante reconexão', async () => {
+    const swListeners = new Set<(e: MessageEvent) => void>();
+    Object.defineProperty(navigator, 'serviceWorker', {
+      configurable: true,
+      value: {
+        addEventListener: (type: string, fn: (e: MessageEvent) => void) => {
+          if (type === 'message') swListeners.add(fn);
+        },
+        removeEventListener: (type: string, fn: (e: MessageEvent) => void) => {
+          if (type === 'message') swListeners.delete(fn);
+        },
+        getRegistration: async () => undefined,
+        ready: Promise.resolve(undefined),
+      },
+    });
+    const postSwMessage = (data: unknown) => {
+      act(() => {
+        for (const fn of swListeners) fn({ data } as MessageEvent);
+      });
+    };
+
+    storeAuth();
+    render(<App />);
+    await screen.findByTestId('workspace-card-w1');
+
+    // 1) Com socket conectado: abre direto o workspace e o terminal pedidos
+    postSwMessage({ type: 'orquestra:open-terminal', workspaceId: 'w2', terminal: 'solo' });
+    expect(await screen.findByTestId('terminal-screen')).toBeTruthy();
+    expect(screen.getByTestId('terminal-screen').textContent).toContain('solo');
+
+    // Volta para lista de agentes de w2 para testar reconexão
+    fireEvent.click(screen.getByTestId('terminal-back'));
+    expect(await screen.findByTestId('active-workspace-title')).toHaveProperty('textContent', 'Agentes · Beta');
+
+    // 2) Simula queda de WebSocket (status = 'reconnecting') e toque na notificação de w1/revisor
+    const firstCount = FakeWebSocket.instances.length;
+    act(() => {
+      lastSocket().onclose?.({ code: 1006 });
+    });
+    await waitFor(() => expect(screen.getByText('Reconectando…')).toBeTruthy());
+
+    postSwMessage({ type: 'orquestra:open-terminal', workspaceId: 'w1', terminal: 'revisor' });
+    expect(screen.queryByText(/Sem conexão ativa/)).toBeNull();
+
+    // Aguarda o backoff inicial (1s) criar um novo socket e concluir o alvo pendente
+    await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(firstCount), { timeout: 3000 });
+    expect(await screen.findByTestId('terminal-screen')).toBeTruthy();
+    expect(screen.getByTestId('terminal-screen').textContent).toContain('revisor');
+  });
+
+  it('não dispara notificação para eventos em voo durante workspace.activate nem para eventos atrasados (sequence <= snapshot)', async () => {
+    const showNotification = vi.fn(async () => {});
+    Object.defineProperty(window, 'Notification', {
+      configurable: true,
+      writable: true,
+      value: { permission: 'granted', requestPermission: vi.fn(async () => 'granted') },
+    });
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    Object.defineProperty(navigator, 'serviceWorker', {
+      configurable: true,
+      value: {
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        getRegistration: async () => ({ showNotification }),
+        ready: Promise.resolve({ showNotification }),
+      },
+    });
+    localStorage.setItem('orquestra.mobile.notifications', '1');
+    storeAuth();
+
+    let release: (() => void) | undefined;
+    setupHost((method, params) => {
+      if (method === 'workspace.activate') return new Promise((resolve) => { release = () => resolve(SNAPSHOTS[params.id]); });
+      return undefined;
+    });
+
+    try {
+      render(<App />);
+      fireEvent.click(await screen.findByTestId('workspace-card-w1'));
+      await waitFor(() => expect(release).toBeDefined());
+      const socket = lastSocket();
+
+      // Evento de terminal já em waiting chegando durante workspace.activate em voo não notifica
+      socket.event({ type: 'terminal.state', name: 'revisor', state: 'waiting', queued: 1, workspaceId: 'w1', sequence: 6 });
+      await act(async () => release!());
+      await screen.findByTestId('active-workspace-title');
+      await new Promise((r) => setTimeout(r, 0));
+      expect(showNotification).not.toHaveBeenCalled();
+
+      // Evento atrasado (sequence <= snapshot.eventSequence) de um terminal novo/ausente também não notifica
+      socket.event({ type: 'terminal.state', name: 'fantasma', state: 'waiting', queued: 0, workspaceId: 'w1', sequence: 5 });
+      await new Promise((r) => setTimeout(r, 0));
+      expect(showNotification).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    }
+  });
 });
 
 describe('UsageSection', () => {
