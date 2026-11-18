@@ -42,4 +42,8 @@ export interface AgentAdapter {
   encodeInput?(body: string): string;
   /** Detecta se o rodapé da tela mostra shells ou monitores ativos em segundo plano (Claude Code). */
   hasBackgroundActivity?(visibleScreen: string): boolean;
+  /** Se a tela mostra um modal não-seguro que bloqueia a entrada (ex.: pesquisa), devolve as teclas para dispensá-lo. */
+  dismissBlockingOverlay?(visibleScreen: string): string | null;
+  /** Detecta na tela um indicador visual de que o agente aceitou o prompt e está trabalhando. */
+  isWorkingScreen?(visibleScreen: string): boolean;
 }

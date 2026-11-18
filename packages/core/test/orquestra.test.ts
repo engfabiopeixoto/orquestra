@@ -2,7 +2,9 @@ import { randomBytes } from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pino } from 'pino';
 import { afterEach, describe, expect, it } from 'vitest';
+import { agyAdapter } from '../src/adapters/agy.js';
 import { silentLogger } from '../src/log.js';
 import { createOrquestra, type Orquestra, type OrquestraEvent, type OrquestraOptions, type RegentHandler } from '../src/orquestra.js';
 import { createFakeAdapter } from './helpers/fake-adapter.js';
@@ -859,5 +861,270 @@ describe('rascunho do usuário depois do Esc antecipado', () => {
     await waitFor(() => enters() === before + 2);
     await session.handleHook('Stop', { last_assistant_message: 'resposta ao outro agente' });
     await expect(answer).resolves.toMatchObject({ answer: 'resposta ao outro agente' });
+  });
+});
+
+describe('BUG 5 — bloqueio de modal e verificação de aceitação ponta a ponta', () => {
+  it('pesquisa aberta no agy é dispensada com "0" e o prompt entra normalmente', async () => {
+    const env = await setupOrquestra({
+      adapters: {
+        agy: {
+          ...createFakeAdapter(),
+          kind: 'agy',
+          dismissBlockingOverlay: agyAdapter.dismissBlockingOverlay,
+          isWorkingScreen: agyAdapter.isWorkingScreen,
+        },
+      },
+      overlaySettleMs: 300,
+      acceptanceTimeoutMs: 500,
+    });
+    const req = env.orq.createTerminal({ name: 'REQ', agent: 'agy', cwd: tmpdir() });
+    const agyTerm = env.orq.createTerminal({ name: 'AGY', agent: 'agy', cwd: tmpdir() });
+    env.orq.connect('REQ', 'AGY');
+
+    const reqPty = env.host.spawned[0]!.pty;
+    const pty = env.host.spawned[1]!.pty;
+    pty.emitData("How's the CLI experience so far?\r\nHelp us improve:  [1] Good  [2] Fine  [3] Bad  [0] Skip");
+    reqPty.emitData('> ');
+    await waitFor(() => agyTerm.state === 'idle' && req.state === 'idle');
+
+    const origWrite = pty.write.bind(pty);
+    pty.write = (data: string) => {
+      origWrite(data);
+      if (data === '0') setTimeout(() => pty.emitData('\x1b[2J\x1b[H> '), 10);
+      if (data === '\r') {
+        setTimeout(() => {
+          pty.emitData('Thinking... (esc to cancel)');
+          void agyTerm.handleHook('Stop', { last_assistant_message: 'ok após pesquisa' });
+        }, 15);
+      }
+    };
+
+    const ask = env.orq.broker.submit({ asker: 'REQ', target: 'AGY', text: 'faça o trabalho', timeoutMs: 10_000 });
+    await expect(ask).resolves.toMatchObject({ status: 'answered', answer: 'ok após pesquisa' });
+    expect(pty.written[0]).toBe('0');
+    expect(pty.written.join('')).toContain('faça o trabalho');
+  });
+
+  it('modal de permissão mantém o pedido na fila, marca terminal como waiting e entrega quando o usuário aprova', async () => {
+    const logs: Array<Record<string, unknown>> = [];
+    const log = pino({ level: 'info' }, { write: (line: string) => void logs.push(JSON.parse(line)) });
+    const env = await setupOrquestra({
+      log,
+      adapters: { agy: { ...createFakeAdapter(), kind: 'agy', screenRules: agyAdapter.screenRules } },
+      acceptanceTimeoutMs: 500,
+    });
+    const req = env.orq.createTerminal({ name: 'REQ', agent: 'agy', cwd: tmpdir() });
+    const agy = env.orq.createTerminal({ name: 'AGY', agent: 'agy', cwd: tmpdir() });
+    env.orq.connect('REQ', 'AGY');
+    const reqPty = env.host.spawned[0]!.pty;
+    const agyPty = env.host.spawned[1]!.pty;
+    reqPty.emitData('> ');
+    agyPty.emitData('> ');
+    await waitFor(() => req.state === 'idle' && agy.state === 'idle');
+
+    // Modal de permissão chega logo antes da submissão (corrida antes mesmo de atualizar state)
+    agyPty.emitData('Allow access to this file? [y/N]');
+    const ask = env.orq.broker.submit({ asker: 'REQ', target: 'AGY', text: 'faça algo', timeoutMs: 10_000 });
+    await waitFor(() => agy.state === 'waiting');
+    expect(agyPty.written.join('')).not.toContain('faça algo');
+    expect(env.orq.broker.queued('AGY')).toBe(1);
+    expect(logs.some((entry) => entry.msg === 'modal de permissão bloqueando injeção; mantendo pedido na fila')).toBe(true);
+
+    // Usuário aprova o modal e o prompt entra automaticamente
+    agyPty.emitData('\x1b[2J\x1b[H> ');
+    await waitFor(() => {
+      const i = agyPty.written.findIndex((c) => c.includes('faça algo'));
+      return i >= 0 && agyPty.written.slice(i + 1).includes('\r');
+    });
+    expect(agy.state).toBe('busy');
+    await agy.handleHook('Stop', { last_assistant_message: 'pronto' });
+    await expect(ask).resolves.toMatchObject({ status: 'answered', answer: 'pronto' });
+  });
+
+  it('pesquisa no meio da conversa não envia "0" espúrio ao terminal', async () => {
+    const env = await setupOrquestra({
+      adapters: {
+        agy: {
+          ...createFakeAdapter(),
+          kind: 'agy',
+          dismissBlockingOverlay: agyAdapter.dismissBlockingOverlay,
+          isWorkingScreen: agyAdapter.isWorkingScreen,
+        },
+      },
+      overlaySettleMs: 100,
+    });
+    const req = env.orq.createTerminal({ name: 'REQ', agent: 'agy', cwd: tmpdir() });
+    const agyTerm = env.orq.createTerminal({ name: 'AGY', agent: 'agy', cwd: tmpdir() });
+    env.orq.connect('REQ', 'AGY');
+
+    const reqPty = env.host.spawned[0]!.pty;
+    const pty = env.host.spawned[1]!.pty;
+    pty.emitData("How's the CLI experience so far?\r\nHelp us improve:  [1] Good  [2] Fine  [3] Bad  [0] Skip\r\nl1\r\nl2\r\nl3\r\nl4\r\nl5\r\nl6\r\n> ");
+    reqPty.emitData('> ');
+    await waitFor(() => agyTerm.state === 'idle' && req.state === 'idle');
+
+    const ask = env.orq.broker.submit({ asker: 'REQ', target: 'AGY', text: 'conversa normal', timeoutMs: 10_000 });
+    await waitFor(() => {
+      const i = pty.written.findIndex((c) => c.includes('conversa normal'));
+      return i >= 0 && pty.written.slice(i + 1).includes('\r');
+    });
+    expect(pty.written[0]).not.toBe('0');
+    await agyTerm.handleHook('Stop', { last_assistant_message: 'ok' });
+    await expect(ask).resolves.toMatchObject({ status: 'answered', answer: 'ok' });
+  });
+
+  it('agente sem sinal de aceitação apenas registra log e emite notice visível, mantendo o pedido ativo sem reinjetar', async () => {
+    const logs: Array<Record<string, unknown>> = [];
+    const log = pino({ level: 'info' }, { write: (line: string) => void logs.push(JSON.parse(line)) });
+    const env = await setupOrquestra({
+      log,
+      adapters: { agy: { ...createFakeAdapter(), kind: 'agy', dismissBlockingOverlay: agyAdapter.dismissBlockingOverlay, isWorkingScreen: agyAdapter.isWorkingScreen } },
+      acceptanceTimeoutMs: 60,
+      overlaySettleMs: 50,
+    });
+    const req = env.orq.createTerminal({ name: 'REQ', agent: 'agy', cwd: tmpdir() });
+    const agy = env.orq.createTerminal({ name: 'dev2-agy', agent: 'agy', cwd: tmpdir() });
+    env.orq.connect('REQ', 'dev2-agy');
+    const reqPty = env.host.spawned[0]!.pty;
+    const agyPty = env.host.spawned[1]!.pty;
+    reqPty.emitData('> ');
+    agyPty.emitData('> ');
+    await waitFor(() => req.state === 'idle' && agy.state === 'idle');
+
+    const ask = env.orq.broker.submit({ asker: 'REQ', target: 'dev2-agy', text: 'sem sinal inicial', timeoutMs: 10_000 });
+    await waitFor(() => env.events.some((e) => e.type === 'notice' && e.name === 'dev2-agy' && e.message.includes('dev2-agy ainda não mostrou sinal de ter recebido o pedido')));
+
+    expect(agy.state).toBe('busy');
+    expect(agyPty.written.filter((chunk) => chunk.includes('sem sinal inicial'))).toHaveLength(1);
+    expect(logs).toContainEqual(expect.objectContaining({
+      msg: 'pedido sem sinal de aceitação',
+      screenTail: expect.any(String),
+    }));
+
+    // O pedido continua ativo e responde normalmente quando Stop chega depois
+    await agy.handleHook('Stop', { last_assistant_message: 'respondido depois' });
+    await expect(ask).resolves.toMatchObject({ status: 'answered', answer: 'respondido depois' });
+  });
+
+  it('usuário digitando durante dispensa de modal reenfileira via PromptBlockedError sem falhar e entrega após Ctrl+U', async () => {
+    const env = await setupOrquestra({
+      adapters: { agy: { ...createFakeAdapter(), kind: 'agy', dismissBlockingOverlay: agyAdapter.dismissBlockingOverlay, isWorkingScreen: agyAdapter.isWorkingScreen } },
+      overlaySettleMs: 120,
+      acceptanceTimeoutMs: 500,
+    });
+    const req = env.orq.createTerminal({ name: 'REQ', agent: 'agy', cwd: tmpdir() });
+    const agy = env.orq.createTerminal({ name: 'AGY', agent: 'agy', cwd: tmpdir() });
+    env.orq.connect('REQ', 'AGY');
+    env.host.spawned[0]!.pty.emitData('> ');
+    env.host.spawned[1]!.pty.emitData("How's the CLI experience so far?\r\nHelp us improve:  [1] Good  [2] Fine  [3] Bad  [0] Skip");
+    await waitFor(() => req.state === 'idle' && agy.state === 'idle');
+
+    const agyPty = env.host.spawned[1]!.pty;
+    const origWrite = agyPty.write.bind(agyPty);
+    agyPty.write = (data: string) => {
+      origWrite(data);
+      if (data === '0') {
+        setTimeout(() => {
+          agyPty.emitData('\x1b[2J\x1b[H> ');
+          agy.userInput('abc');
+        }, 10);
+      }
+    };
+
+    const ask = env.orq.broker.submit({ asker: 'REQ', target: 'AGY', text: 'depois do ctrl+u', timeoutMs: 10_000 });
+    await waitFor(() => agyPty.written.includes('0'));
+    await new Promise((r) => setTimeout(r, 150));
+    // Reenfileirado (não falhou nem foi injetado por cima do texto do usuário)
+    expect(agyPty.written.join('')).not.toContain('depois do ctrl+u');
+    expect(env.orq.broker.queued('AGY')).toBe(1);
+
+    // Usuário apaga com Ctrl+U e a fila retoma a entrega
+    agy.userInput('\x15');
+    await waitFor(() => {
+      const i = agyPty.written.findIndex((c) => c.includes('depois do ctrl+u'));
+      return i >= 0 && agyPty.written.slice(i + 1).includes('\r');
+    });
+    await agy.handleHook('Stop', { last_assistant_message: 'ok final' });
+    await expect(ask).resolves.toMatchObject({ status: 'answered', answer: 'ok final' });
+  });
+
+  it('agente normal entrega imediatamente sem atraso perceptível', async () => {
+    const env = await setupOrquestra({
+      adapters: { agy: { ...createFakeAdapter(), kind: 'agy', dismissBlockingOverlay: agyAdapter.dismissBlockingOverlay, isWorkingScreen: agyAdapter.isWorkingScreen } },
+    });
+    const req = env.orq.createTerminal({ name: 'REQ', agent: 'agy', cwd: tmpdir() });
+    const agy = env.orq.createTerminal({ name: 'AGY', agent: 'agy', cwd: tmpdir() });
+    env.orq.connect('REQ', 'AGY');
+    env.host.spawned[0]!.pty.emitData('> ');
+    env.host.spawned[1]!.pty.emitData('> ');
+    await waitFor(() => req.state === 'idle' && agy.state === 'idle');
+
+    const start = Date.now();
+    const ask = env.orq.broker.submit({ asker: 'REQ', target: 'AGY', text: 'rápido', timeoutMs: 10_000 });
+    await waitFor(() => {
+      const joined = env.host.spawned[1]!.pty.written.join('');
+      return joined.includes('rápido') && env.host.spawned[1]!.pty.written.includes('\r');
+    });
+    await agy.handleHook('Stop', { last_assistant_message: 'veloz' });
+    await expect(ask).resolves.toMatchObject({ status: 'answered', answer: 'veloz' });
+    expect(Date.now() - start).toBeLessThan(1000);
+  });
+
+  it('achado 1: texto na caixa bloqueia antes de tirar da fila sem laço de injeção/requeue em 2 s e entrega ao esvaziar', async () => {
+    const logs: Array<Record<string, unknown>> = [];
+    const log = pino({ level: 'info' }, { write: (line: string) => void logs.push(JSON.parse(line)) });
+    const env = await setupOrquestra({
+      log,
+      adapters: { agy: { ...createFakeAdapter(), kind: 'agy', dismissBlockingOverlay: agyAdapter.dismissBlockingOverlay, isWorkingScreen: agyAdapter.isWorkingScreen } },
+    });
+    const req = env.orq.createTerminal({ name: 'REQ', agent: 'agy', cwd: tmpdir() });
+    const agy = env.orq.createTerminal({ name: 'AGY', agent: 'agy', cwd: tmpdir() });
+    env.orq.connect('REQ', 'AGY');
+    env.host.spawned[0]!.pty.emitData('> ');
+    env.host.spawned[1]!.pty.emitData('> ');
+    await waitFor(() => req.state === 'idle' && agy.state === 'idle');
+
+    // Usuário digita sem apertar Enter (inputHasText = true, draftPending = false)
+    agy.userInput('ola');
+    const ask = env.orq.broker.submit({ asker: 'REQ', target: 'AGY', text: 'pedido na fila', timeoutMs: 10_000 });
+    await new Promise((r) => setTimeout(r, 2050));
+
+    // Nenhum ciclo de injeção/requeue em > 2 s
+    expect(logs.filter((entry) => entry.msg === 'injetando no terminal')).toHaveLength(0);
+    expect(logs.filter((entry) => entry.msg === 'entrega bloqueada')).toHaveLength(1);
+    expect(logs.find((entry) => entry.msg === 'entrega bloqueada')?.reason).toBe('user-draft');
+    expect(env.events.filter((e) => e.type === 'queue' && e.name === 'AGY')).toHaveLength(1);
+    expect(env.host.spawned[1]!.pty.written.join('')).not.toContain('pedido na fila');
+
+    // Ao esvaziar com Backspace até zerar, o pedido é entregue imediatamente
+    agy.userInput('\x7f\x7f\x7f');
+    const agyPty = env.host.spawned[1]!.pty;
+    await waitFor(() => {
+      const i = agyPty.written.findIndex((c) => c.includes('pedido na fila'));
+      return i >= 0 && agyPty.written.slice(i + 1).includes('\r');
+    });
+    await agy.handleHook('Stop', { last_assistant_message: 'entregue' });
+    await expect(ask).resolves.toMatchObject({ status: 'answered', answer: 'entregue' });
+  });
+
+  it('achado 2: morte do processo após aviso de aceitação limpa terminal.notice', async () => {
+    const env = await setupOrquestra({
+      adapters: { agy: { ...createFakeAdapter(), kind: 'agy', isWorkingScreen: agyAdapter.isWorkingScreen } },
+      acceptanceTimeoutMs: 50,
+    });
+    const req = env.orq.createTerminal({ name: 'REQ', agent: 'agy', cwd: tmpdir() });
+    const agy = env.orq.createTerminal({ name: 'AGY', agent: 'agy', cwd: tmpdir() });
+    env.orq.connect('REQ', 'AGY');
+    env.host.spawned[0]!.pty.emitData('> ');
+    env.host.spawned[1]!.pty.emitData('> ');
+    await waitFor(() => req.state === 'idle' && agy.state === 'idle');
+
+    const ask = env.orq.broker.submit({ asker: 'REQ', target: 'AGY', text: 'sem resposta', timeoutMs: 10_000 });
+    await waitFor(() => env.events.some((e) => e.type === 'notice' && e.name === 'AGY' && e.message.includes('ainda não mostrou sinal')));
+    const mark = env.events.length;
+    env.host.spawned[1]!.pty.emitExit(1);
+    await expect(ask).rejects.toMatchObject({ code: 'PROMPT_FAILED' });
+    expect(env.events.slice(mark)).toContainEqual({ type: 'notice', name: 'AGY', message: '' });
   });
 });

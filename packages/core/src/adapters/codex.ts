@@ -59,4 +59,5 @@ export const codexAdapter: AgentAdapter = {
     };
   },
   preparePrompt: (text) => text,
+  isWorkingScreen: (visibleScreen) => /\besc to interrupt\b|\bWorking\s*\(/i.test(visibleScreen),
 };

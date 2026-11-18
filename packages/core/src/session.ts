@@ -15,10 +15,20 @@ import { ScreenWatcher } from './screen-watcher.js';
 export type TurnOwner = 'broker' | 'user';
 export type TurnFailure = 'interrupted' | 'exited' | 'no-answer' | 'agent-error';
 
+export class PromptBlockedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PromptBlockedError';
+  }
+}
+
 type SessionEvents = {
   state: [SessionState];
   turnEnded: [{ owner: TurnOwner; answer: string | null }];
   turnFailed: [{ owner: TurnOwner; reason: TurnFailure }];
+  acceptanceTimeout: [string];
+  acceptanceRecovered: [string];
+  inputCleared: [];
   agentSession: [string];
   /** Há (true) ou deixou de haver (false) rascunho do usuário na caixa de entrada do agente. */
   draft: [boolean];
@@ -54,9 +64,15 @@ export type SessionOptions = {
   idleGraceMs?: number;
   /** Pausa entre o texto de um comando do agente e o Enter (padrão 300 ms). */
   commandSubmitDelayMs?: number;
+  /** Prazo para detectar aceitação após colar/enviar um prompt (padrão 20 s). */
+  acceptanceTimeoutMs?: number;
+  /** Espera máxima pelo fechamento de modal dispensável antes de injetar (padrão 800 ms). */
+  overlaySettleMs?: number;
 };
 
 const COMMAND_SUBMIT_DELAY_MS = 300;
+const DEFAULT_ACCEPTANCE_TIMEOUT_MS = 20_000;
+const DEFAULT_OVERLAY_SETTLE_MS = 800;
 
 export class Session extends EventEmitter<SessionEvents> {
   readonly id: string;
@@ -87,6 +103,13 @@ export class Session extends EventEmitter<SessionEvents> {
   private draftChars = 0;
   private resolvingTurn: number | null = null;
   private idleGraceTimer: NodeJS.Timeout | undefined;
+  private acceptanceTimer: NodeJS.Timeout | undefined;
+  private turnAccepted = false;
+  private acceptanceWarned = false;
+  private acceptanceNeedle: string | null = null;
+  private acceptanceNeedleInitialCount = 0;
+  private initialPastedCount = 0;
+  private pendingScreenWrites = 0;
   private submittingTurn: number | null = null;
   private readonly completedHooks = new Set<string>();
   private codexTurnId: string | null = null;
@@ -167,6 +190,7 @@ export class Session extends EventEmitter<SessionEvents> {
   userInput(data: string): void {
     // Só em trace (desligado por padrão): registra o que o usuário digita, para depurar sequências de escape.
     this.opts.log.trace({ data: JSON.stringify(data) }, 'entrada da interface');
+    const hadInput = this.hasInput;
     const keys = keyboardInput(data);
     if (keys.length > 0) {
       this.userInputAt = Date.now();
@@ -202,6 +226,8 @@ export class Session extends EventEmitter<SessionEvents> {
         if (this.draftPending && this.draftChars > 0 && --this.draftChars === 0) {
           this.inputHasText = false;
           this.setDraft(false);
+        } else if (!this.draftPending && this.inputHasText && this.lineChars === 0) {
+          this.inputHasText = false;
         }
       } else if (key === '\x1b[A' || key === '\x1b[B' || key === '\x1bOA' || key === '\x1bOB' || (!key.startsWith('\x1b') && /[^\s\x00-\x1f\x7f]/.test(key))) {
         this.inputHasText = true;
@@ -212,6 +238,7 @@ export class Session extends EventEmitter<SessionEvents> {
       }
     }
     this.refreshWaiting();
+    if (hadInput && !this.hasInput) this.emit('inputCleared');
   }
 
   /** Teclas nomeadas no formato que o programa pediu: Win32 (Codex com DECSET 9001) ou VT comum. */
@@ -239,20 +266,160 @@ export class Session extends EventEmitter<SessionEvents> {
     if (!isReadySessionState(this.currentState)) {
       throw new OrqError('INTERNAL', `A sessão ${this.name} não está ociosa (${this.currentState}). O broker só injeta em idle.`);
     }
+    await this.prepareForInjection(askId);
+    if (!isReadySessionState(this.currentState) || this.inputHasText || this.draftPending) {
+      throw new PromptBlockedError('a caixa de entrada ou o estado mudou durante a preparação');
+    }
     const prepared = this.adapter.preparePrompt(text, { cwd: this.opts.cwd, askId });
+    const needle = this.extractAcceptanceNeedle(prepared, askId);
+    const beforeText = this.screen.text();
+    const initialCount = needle ? this.countOccurrences(this.normalizeAcceptanceText(beforeText), needle) : 0;
+    const initialPasted = this.countPastedMarkers(beforeText);
     this.startTurn('broker', askId);
+    this.turnAccepted = false;
+    this.acceptanceWarned = false;
+    this.acceptanceNeedle = needle;
+    this.acceptanceNeedleInitialCount = initialCount;
+    this.initialPastedCount = initialPasted;
     const turn = this.turnSeq;
     this.submittingTurn = turn;
     try {
       await writePrompt({ write: (data) => {
         if (turn !== this.turnSeq || this.currentState === 'exited') throw new OrqError('PROMPT_FAILED', 'O turno terminou durante a escrita no terminal.');
-        if (data === '\r') this.submittingTurn = null;
+        if (data === '\r') {
+          this.submittingTurn = null;
+          this.armAcceptanceWatch(turn, askId);
+        }
         this.opts.pty.write(data);
       } }, prepared, { encode: this.adapter.encodeInput?.bind(this.adapter) });
     } catch (error) {
       if (turn === this.turnSeq) this.endTurn();
       throw error;
     }
+  }
+
+  private hasWaitingScreenModal(visibleScreen: string): boolean {
+    return this.adapter.screenRules.some((rule) => rule.signal === 'waiting' && rule.pattern.test(visibleScreen));
+  }
+
+  private async prepareForInjection(askId: string): Promise<void> {
+    if (this.pendingScreenWrites > 0) await this.settle();
+    const visible = this.screen.visible();
+    if (this.waitingByHook || this.hasWaitingScreenModal(visible)) {
+      this.waitingOnScreen = true;
+      this.refreshWaiting();
+      this.opts.log.warn({ terminal: this.name, askId }, 'modal de permissão bloqueando injeção; mantendo pedido na fila');
+      throw new PromptBlockedError('modal de permissão bloqueando injeção');
+    }
+    const dismissKeys = this.adapter.dismissBlockingOverlay?.(visible) ?? null;
+    if (!dismissKeys) return;
+    this.opts.log.info({ terminal: this.name, askId, keys: dismissKeys }, 'dispensando modal bloqueante antes de injetar');
+    this.opts.pty.write(dismissKeys);
+    await this.waitOverlayDismissed();
+    if (this.currentState === 'exited') {
+      throw new OrqError('PROMPT_FAILED', 'O terminal foi encerrado ao dispensar o modal.');
+    }
+    if (this.inputHasText || this.draftPending || !isReadySessionState(this.currentState)) {
+      throw new PromptBlockedError('a caixa de entrada ou o estado mudou durante a preparação');
+    }
+    await this.settle();
+    const settledVisible = this.screen.visible();
+    if (this.waitingByHook || this.hasWaitingScreenModal(settledVisible)) {
+      this.waitingOnScreen = true;
+      this.refreshWaiting();
+      this.opts.log.warn({ terminal: this.name, askId }, 'modal de permissão bloqueando injeção; mantendo pedido na fila');
+      throw new PromptBlockedError('modal de permissão bloqueando injeção');
+    }
+  }
+
+  private async waitOverlayDismissed(): Promise<void> {
+    const deadline = Date.now() + (this.opts.overlaySettleMs ?? DEFAULT_OVERLAY_SETTLE_MS);
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      if (this.currentState === 'exited' || this.inputHasText || this.draftPending || !isReadySessionState(this.currentState)) return;
+      await this.settle();
+      if (!(this.adapter.dismissBlockingOverlay?.(this.screen.visible()))) {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        await this.settle();
+        return;
+      }
+    }
+  }
+
+  private normalizeAcceptanceText(text: string): string {
+    return text.replace(/\s+/g, ' ').trim();
+  }
+
+  private extractAcceptanceNeedle(prepared: string, askId: string): string | null {
+    if (askId && prepared.includes(askId)) return askId;
+    const firstLine = prepared.split(/\r?\n/).find((line) => line.trim().length > 0) ?? '';
+    const normalized = this.normalizeAcceptanceText(firstLine);
+    return normalized.length >= 4 ? normalized.slice(0, 24) : null;
+  }
+
+  private countOccurrences(haystack: string, needle: string): number {
+    if (!needle) return 0;
+    let count = 0;
+    let index = 0;
+    while ((index = haystack.indexOf(needle, index)) >= 0) {
+      count++;
+      index += needle.length;
+    }
+    return count;
+  }
+
+  private countPastedMarkers(text: string): number {
+    return text.match(/\[Pasted text\b/gi)?.length ?? 0;
+  }
+
+  private hasTextAcceptance(fullText: string): boolean {
+    if (this.countPastedMarkers(fullText) > this.initialPastedCount) return true;
+    if (!this.acceptanceNeedle) return false;
+    return this.countOccurrences(this.normalizeAcceptanceText(fullText), this.acceptanceNeedle) > this.acceptanceNeedleInitialCount;
+  }
+
+  private checkScreenAcceptance(visibleScreen: string): void {
+    if (this.owner !== 'broker' || this.submittingTurn !== null || this.turnAccepted) return;
+    if (this.waitingOnScreen || this.waitingByHook || this.adapter.isWorkingScreen?.(visibleScreen)) {
+      this.markTurnAccepted();
+      return;
+    }
+    if (this.hasTextAcceptance(this.screen.text())) {
+      this.markTurnAccepted();
+    }
+  }
+
+  private markTurnAccepted(): void {
+    if (this.turnAccepted) return;
+    this.turnAccepted = true;
+    clearTimeout(this.acceptanceTimer);
+    this.acceptanceTimer = undefined;
+    if (this.acceptanceWarned) {
+      this.acceptanceWarned = false;
+      this.emit('acceptanceRecovered', this.currentAskId ?? '');
+    }
+  }
+
+  private armAcceptanceWatch(turn: number, askId: string): void {
+    if (this.turnAccepted || turn !== this.turnSeq || this.owner !== 'broker') return;
+    this.checkScreenAcceptance(this.screen.visible());
+    if (this.turnAccepted) return;
+    clearTimeout(this.acceptanceTimer);
+    this.acceptanceTimer = setTimeout(() => {
+      this.acceptanceTimer = undefined;
+      void this.onAcceptanceTimeout(turn, askId);
+    }, this.opts.acceptanceTimeoutMs ?? DEFAULT_ACCEPTANCE_TIMEOUT_MS).unref();
+  }
+
+  private async onAcceptanceTimeout(turn: number, askId: string): Promise<void> {
+    if (turn !== this.turnSeq || this.owner !== 'broker' || this.turnAccepted || this.state === 'exited') return;
+    if (this.pendingScreenWrites > 0) await this.settle();
+    if (turn !== this.turnSeq || this.owner !== 'broker' || this.turnAccepted) return;
+    this.checkScreenAcceptance(this.screen.visible());
+    if (this.turnAccepted) return;
+    this.opts.log.warn({ terminal: this.name, askId, screenTail: this.screen.tail(10) }, 'pedido sem sinal de aceitação');
+    this.acceptanceWarned = true;
+    this.emit('acceptanceTimeout', askId);
   }
 
   async handleHook(event: string, payload: unknown, agent: string = this.adapter.kind): Promise<void> {
@@ -275,6 +442,13 @@ export class Session extends EventEmitter<SessionEvents> {
     if ((signal.kind === 'turn-end' || signal.kind === 'turn-failed') && this.submittingTurn === this.turnSeq) {
       this.opts.log.warn({ event, askId: this.currentAskId }, 'fim de turno anterior durante a colagem; ignorado');
       return;
+    }
+    if (
+      this.owner === 'broker' &&
+      this.submittingTurn === null &&
+      (signal.kind === 'activity' || signal.kind === 'waiting' || signal.kind === 'turn-end' || signal.kind === 'turn-failed')
+    ) {
+      this.markTurnAccepted();
     }
     if (signal.kind === 'activity') {
       this.waitingByHook = false;
@@ -371,6 +545,11 @@ export class Session extends EventEmitter<SessionEvents> {
     return this.draftPending;
   }
 
+  /** Há texto digitado ou rascunho pendente na caixa de entrada do agente. */
+  get hasInput(): boolean {
+    return this.inputHasText || this.draftPending;
+  }
+
   private setDraft(pending: boolean): void {
     if (pending === this.draftPending) return;
     this.draftPending = pending;
@@ -405,6 +584,7 @@ export class Session extends EventEmitter<SessionEvents> {
   agentBusy(): void {
     clearTimeout(this.idleGraceTimer);
     this.idleGraceTimer = undefined;
+    if (this.owner === 'broker' && this.submittingTurn === null) this.markTurnAccepted();
   }
 
   async kill(): Promise<void> {
@@ -466,7 +646,11 @@ export class Session extends EventEmitter<SessionEvents> {
     for (const listener of this.outputListeners) listener(data);
     if (this.currentState === 'starting') this.armReady();
     if (this.owner === 'user' && this.provisionalUserTurn) this.armUserTurn();
-    void this.screen.write(data).then(() => this.onScreen(turn));
+    this.pendingScreenWrites++;
+    void this.screen.write(data).then(() => {
+      this.pendingScreenWrites = Math.max(0, this.pendingScreenWrites - 1);
+      this.onScreen(turn);
+    });
   }
 
   private onScreen(turn: number): void {
@@ -475,6 +659,10 @@ export class Session extends EventEmitter<SessionEvents> {
     const { appeared, visible } = this.watcher.update(visibleScreen, this.screen.text());
     // O xterm processa a saída de modo assíncrono: ela pode pertencer a um turno já encerrado.
     if (turn !== this.turnSeq) {
+      if (this.owner === null) {
+        this.waitingOnScreen = visible.has('waiting');
+        this.refreshWaiting();
+      }
       this.refreshBackground();
       return;
     }
@@ -489,6 +677,7 @@ export class Session extends EventEmitter<SessionEvents> {
     }
     this.refreshWaiting();
     this.refreshBackground();
+    this.checkScreenAcceptance(visibleScreen);
   }
 
   private learnAgentSession(id: string | null): void {
@@ -500,10 +689,12 @@ export class Session extends EventEmitter<SessionEvents> {
 
   private onCodexRollout(event: CodexRolloutEvent): void {
     this.learnAgentSession(event.sessionId);
+    if (this.owner === 'broker' && this.submittingTurn === null) this.markTurnAccepted();
     if (event.kind === 'session') return;
     const completionId = `${event.sessionId}:${event.turnId}`;
     if (event.kind === 'task-started') {
       if (this.completedHooks.has(completionId)) return;
+      if (this.owner === 'broker' && this.submittingTurn === null) this.markTurnAccepted();
       clearTimeout(this.userTurnTimer);
       this.provisionalUserTurn = false;
       this.waitingByHook = false;
@@ -515,6 +706,7 @@ export class Session extends EventEmitter<SessionEvents> {
     }
     if (this.codexTurnId !== event.turnId || this.owner === null || this.completedHooks.has(completionId)) return;
     this.rememberCompletion(completionId);
+    if (this.owner === 'broker' && this.submittingTurn === null) this.markTurnAccepted();
     const owner = this.owner;
     this.endTurn();
     if (event.kind === 'turn-aborted') {
@@ -536,10 +728,15 @@ export class Session extends EventEmitter<SessionEvents> {
     clearTimeout(this.readyTimer);
     clearTimeout(this.userTurnTimer);
     clearTimeout(this.turnWarningTimer);
+    clearTimeout(this.acceptanceTimer);
+    this.acceptanceTimer = undefined;
+    const warnedAskId = this.acceptanceWarned ? (this.currentAskId ?? '') : null;
+    this.acceptanceWarned = false;
     void this.codexRolloutWatcher?.stop();
     const owner = this.owner;
     this.owner = null;
     this.turnSeq++;
+    if (warnedAskId !== null) this.emit('acceptanceRecovered', warnedAskId);
     this.opts.log.info({ code }, 'processo do terminal saiu');
     this.setState('exited', 'process-exit');
     if (owner) this.emit('turnFailed', { owner, reason: 'exited' });
@@ -568,6 +765,8 @@ export class Session extends EventEmitter<SessionEvents> {
     this.currentAskId = askId;
     this.setState('busy', `turn-start:${owner}`);
     clearTimeout(this.turnWarningTimer);
+    clearTimeout(this.acceptanceTimer);
+    this.acceptanceTimer = undefined;
     if (this.adapter.kind === 'codex' && owner === 'broker') {
       const turn = this.turnSeq;
       this.turnWarningTimer = setTimeout(() => {
@@ -594,11 +793,20 @@ export class Session extends EventEmitter<SessionEvents> {
     clearTimeout(this.userTurnTimer);
     this.userTurnTimer = undefined;
     clearTimeout(this.turnWarningTimer);
+    clearTimeout(this.acceptanceTimer);
+    this.acceptanceTimer = undefined;
+    const warnedAskId = this.acceptanceWarned ? (this.currentAskId ?? '') : null;
+    this.acceptanceWarned = false;
+    this.turnAccepted = false;
+    this.acceptanceNeedle = null;
+    this.acceptanceNeedleInitialCount = 0;
+    this.initialPastedCount = 0;
     this.turnSeq++;
     this.codexTurnId = null;
     this.owner = null;
     this.currentAskId = null;
     this.waitingByHook = false;
+    if (warnedAskId !== null) this.emit('acceptanceRecovered', warnedAskId);
     if (this.currentState === 'exited') return;
     this.everIdle = true;
     this.backgroundOnScreen = Boolean(this.adapter.hasBackgroundActivity?.(this.screen.visible()));

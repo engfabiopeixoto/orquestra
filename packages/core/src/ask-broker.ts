@@ -13,6 +13,8 @@ export interface BrokerTarget {
   readonly backgroundJob?: BackgroundJob | null;
   /** Texto do usuário na caixa de entrada que o agente devolveu: entregar agora o misturaria ao pedido. */
   readonly hasDraft?: boolean;
+  /** Há texto digitado ou rascunho não enviado na caixa de entrada do terminal. */
+  readonly hasInput?: boolean;
   injectPrompt(text: string, askId: string): Promise<void>;
 }
 
@@ -209,6 +211,24 @@ export class AskBroker {
     this.failQueue(name, reason);
   }
 
+  /** Recoloca o pedido em curso na cabeça da fila quando a injeção bloqueia antes de iniciar o turno (ex.: modal de permissão ou digitação). */
+  requeueInFlight(target: string, askId: string): void {
+    const item = this.inFlight.get(target);
+    if (!item || item.askId !== askId) return;
+    this.inFlight.delete(target);
+    if (item.kind === 'prompt' && item.status.status === 'running') item.status = { status: 'queued' };
+    const queue = this.queues.get(target) ?? [];
+    queue.unshift(item);
+    this.queues.set(target, queue);
+    this.notify(target, 'blocked-waiting');
+    const resolved = this.opts.resolveTarget(target);
+    if (resolved && isReadySessionState(resolved.state) && !resolved.hasDraft && !resolved.hasInput) {
+      this.retryLater(target, 200);
+      return;
+    }
+    this.pump(target);
+  }
+
   /** Pedido em curso primeiro, depois a fila, na ordem de atendimento. */
   list(target: string): QueueEntry[] {
     const running = this.inFlight.get(target);
@@ -283,8 +303,8 @@ export class AskBroker {
       this.retryLater(name, 1000);
       return;
     }
-    if (target.hasDraft) {
-      // Sem nova tentativa por tempo: o fim do rascunho (Enter, Ctrl+C, Ctrl+U) chama sessionChanged.
+    if (target.hasDraft || target.hasInput) {
+      // Sem nova tentativa por tempo: o fim da edição (Enter, Ctrl+C, Ctrl+U, Backspace) chama sessionChanged.
       this.blocked(name, 'user-draft');
       return;
     }
@@ -303,6 +323,10 @@ export class AskBroker {
     this.notify(name, 'injecting');
     this.opts.log.info({ askId: item.askId, target: name, kind: item.kind }, 'injetando no terminal');
     target.injectPrompt(item.text, item.askId).catch((error: unknown) => {
+      if (error instanceof Error && error.name === 'PromptBlockedError') {
+        this.requeueInFlight(name, item.askId);
+        return;
+      }
       this.opts.log.error({ askId: item.askId, err: error }, 'falha ao digitar no terminal');
       // O PTY antigo pode rejeitar depois de remover/recarregar ou de terminar o turno.
       if (this.inFlight.get(name) !== item) return;

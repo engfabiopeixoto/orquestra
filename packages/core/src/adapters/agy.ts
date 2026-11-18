@@ -43,6 +43,16 @@ function writePromptFile(text: string, ctx: { cwd: string; askId: string }): str
   return `Leia o arquivo ${file.replaceAll('\\', '/')} e atenda ao pedido escrito nele. Responda aqui.`;
 }
 
+const AGY_SURVEY_RE = /(?:How's the CLI experience so far\?|Help us improve:)[\s\S]*?\[1\]\s*Good[\s\S]*?\[0\]\s*Skip/i;
+
+function agyOverlayFooter(visibleScreen: string): string {
+  return visibleScreen
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0)
+    .slice(-6)
+    .join('\n');
+}
+
 export const agyAdapter: AgentAdapter = {
   kind: 'agy',
   acceptsPrompts: true,
@@ -71,6 +81,9 @@ export const agyAdapter: AgentAdapter = {
     };
   },
   readTranscript: readAgyTranscript,
+  dismissBlockingOverlay: (visibleScreen) =>
+    (AGY_SURVEY_RE.test(agyOverlayFooter(visibleScreen)) ? '0' : null),
+  isWorkingScreen: (visibleScreen) => /\besc to cancel\b|[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+\S/i.test(visibleScreen),
   preparePrompt: (text, ctx) => {
     if (AGY_SYMBOL_STRATEGY === 'file' && [...text].some(isUnsafeForAgy)) return writePromptFile(text, ctx);
     return text;

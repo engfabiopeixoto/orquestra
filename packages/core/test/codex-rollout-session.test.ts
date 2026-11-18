@@ -18,14 +18,14 @@ afterEach(async () => {
   for (const path of tempDirs.splice(0)) rmSync(path, { recursive: true, force: true });
 });
 
-function makeSession() {
+function makeSession(acceptanceTimeoutMs?: number) {
   const home = mkdtempSync(join(tmpdir(), 'codex-session-test-'));
   tempDirs.push(home);
   const pty = new FakePty();
   const session = new Session({
     id: 'codex-test', name: 'codex-test', adapter: codexAdapter, pty,
     cwd: 'C:\\workspace\\sample', log: silentLogger(), readyQuietMs: 10,
-    codexHome: home, codexRolloutPollMs: 10,
+    codexHome: home, codexRolloutPollMs: 10, acceptanceTimeoutMs,
   });
   sessions.push(session);
   const ended: Array<{ owner: string; answer: string | null }> = [];
@@ -157,5 +157,18 @@ describe('Session Codex via rollout', () => {
     await new Promise((resolve) => setTimeout(resolve, 40));
     expect(session.state).toBe('waiting');
     expect(ended).toEqual([]);
+  });
+
+  it('evento session do rollout marca aceitação do pedido no Codex sem emitir aviso de timeout', async () => {
+    const { home, session } = makeSession(60);
+    await ready(session);
+    const warned: string[] = [];
+    session.on('acceptanceTimeout', (id) => warned.push(id));
+
+    await session.injectPrompt('pedido codex', 'ask-codex-sess');
+    createRollout(home, 'thread-session-accept');
+    await waitFor(() => session.agentSessionId === 'thread-session-accept');
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(warned).toEqual([]);
   });
 });

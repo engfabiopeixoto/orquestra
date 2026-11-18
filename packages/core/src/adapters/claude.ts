@@ -103,5 +103,6 @@ export const claudeAdapter: AgentAdapter = {
   },
   readTranscript: readClaudeTranscript,
   hasBackgroundActivity: (visibleScreen) => BACKGROUND_FOOTER_RE.test(claudeFooterText(visibleScreen)),
+  isWorkingScreen: (visibleScreen) => /\b(?:esc|ctrl\+c) to interrupt\b|[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✶✳✽✻✢]\s+[^\r\n]+?(?:…|\.{3})/i.test(visibleScreen),
   preparePrompt: (text) => text,
 };

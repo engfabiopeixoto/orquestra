@@ -6,7 +6,7 @@ import type { AgentAdapter } from '../src/adapters/types.js';
 import { pino } from 'pino';
 import { silentLogger, type Logger } from '../src/log.js';
 import { Screen } from '../src/screen.js';
-import { Session, type TurnFailure, type TurnOwner } from '../src/session.js';
+import { PromptBlockedError, Session, type TurnFailure, type TurnOwner } from '../src/session.js';
 import { FakePty } from './helpers/fake-pty.js';
 import { waitFor } from './helpers/wait.js';
 import { claudeAdapter } from '../src/adapters/claude.js';
@@ -621,5 +621,214 @@ describe('Session', () => {
     // Rodapé real com "1 shell" entra em background
     pty.emitData('\x1b[2J\x1b[HOi.\r\n──────────\r\n❯ \r\n──────────\r\n  1 shell · ↓ to manage\r\n');
     await waitFor(() => session.state === 'background');
+  });
+
+  it('BUG 5: dispensa modal da pesquisa com "0" antes de injetar sem enviar Esc ao Claude', async () => {
+    const surveyAdapter: AgentAdapter = {
+      ...testAdapter(),
+      kind: 'agy',
+      dismissBlockingOverlay: (screen) => (/How's the CLI experience so far\?/.test(screen) ? '0' : null),
+      isWorkingScreen: (screen) => /\besc to cancel\b/i.test(screen),
+    };
+    const pty = new FakePty();
+    const session = new Session({
+      id: 's1', name: 'A', adapter: surveyAdapter, pty, cwd: '.', log: silentLogger(),
+      readyQuietMs: 20, overlaySettleMs: 300, acceptanceTimeoutMs: 500,
+    });
+    pty.emitData("How's the CLI experience so far?\r\nHelp us improve: [1] Good [0] Skip");
+    await waitFor(() => session.state === 'idle');
+
+    // Simula agy limpando a pesquisa ao receber '0'
+    const origWrite = pty.write.bind(pty);
+    pty.write = (data: string) => {
+      origWrite(data);
+      if (data === '0') setTimeout(() => pty.emitData('\x1b[2J\x1b[H> '), 10);
+    };
+
+    await session.injectPrompt('oi agy', 'ask-survey');
+    expect(pty.written[0]).toBe('0');
+    expect(pty.written.join('')).toContain('oi agy');
+    expect(pty.written.some((chunk) => chunk === '\x1b')).toBe(false);
+
+    pty.emitData('Working (esc to cancel)');
+    await session.handleHook('Stop', { text: 'ok' });
+    expect(session.state).toBe('idle');
+  });
+
+  it('BUG 5: se o agente aceita com indicador na tela (esc to cancel / spinner) ou eco do pedido, não falha no prazo de aceitação', async () => {
+    const adapter: AgentAdapter = {
+      ...testAdapter(),
+      isWorkingScreen: (screen) => /\besc to cancel\b/i.test(screen),
+    };
+    const pty = new FakePty();
+    const session = new Session({
+      id: 's2', name: 'B', adapter, pty, cwd: '.', log: silentLogger(),
+      readyQuietMs: 20, acceptanceTimeoutMs: 60,
+    });
+    const failed: unknown[] = [];
+    session.on('turnFailed', (e) => failed.push(e));
+    pty.emitData('> ');
+    await waitFor(() => session.state === 'idle');
+
+    await session.injectPrompt('trabalhe bastante', 'ask-work');
+    pty.emitData('Pensando... (esc to cancel)');
+    await new Promise((r) => setTimeout(r, 150));
+    expect(failed).toEqual([]);
+    expect(session.state).toBe('busy');
+    await session.handleHook('Stop', { text: 'feito' });
+    expect(session.state).toBe('idle');
+  });
+
+  it('BUG 5: agente sem sinal de aceitação apenas registra log e emite aviso sem reinjetar nem falhar o pedido', async () => {
+    const lines: Array<Record<string, unknown>> = [];
+    const log = pino({ level: 'info' }, { write: (line: string) => void lines.push(JSON.parse(line)) });
+    const pty = new FakePty();
+    const session = new Session({
+      id: 's3', name: 'Dev2', adapter: testAdapter(), pty, cwd: '.', log,
+      readyQuietMs: 20, acceptanceTimeoutMs: 60, overlaySettleMs: 50,
+    });
+    const warned: string[] = [];
+    const failed: Array<{ owner: TurnOwner; reason: TurnFailure }> = [];
+    const ended: Array<{ owner: TurnOwner; answer: string | null }> = [];
+    session.on('acceptanceTimeout', (askId) => warned.push(askId));
+    session.on('turnFailed', (e) => failed.push(e));
+    session.on('turnEnded', (e) => ended.push(e));
+    pty.emitData('caixa vazia> ');
+    await waitFor(() => session.state === 'idle');
+
+    await session.injectPrompt('prompt sem sinal', 'ask-lost');
+    await waitFor(() => warned.length === 1, 2000);
+
+    expect(warned).toEqual(['ask-lost']);
+    expect(failed).toEqual([]);
+    expect(session.state).toBe('busy');
+    // Nenhuma reinjeção duplicada: apenas 1 escrita do prompt
+    expect(pty.written.filter((chunk) => chunk.includes('prompt sem sinal'))).toHaveLength(1);
+    expect(lines).toContainEqual(expect.objectContaining({
+      msg: 'pedido sem sinal de aceitação',
+      screenTail: expect.stringContaining('caixa vazia>'),
+    }));
+
+    // O pedido continua em andamento e pode concluir normalmente depois
+    await session.handleHook('Stop', { text: 'concluído tarde' });
+    expect(ended).toEqual([{ owner: 'broker', answer: 'concluído tarde' }]);
+    expect(session.state).toBe('idle');
+  });
+
+  it('BUG 5: agentBusy(), rollout session do Codex, askId/scrollback e [Pasted text marcam aceitação sem aviso falso', async () => {
+    // 1) agentBusy() do ClaudeStatusWatcher
+    const pty1 = new FakePty();
+    const s1 = new Session({ id: 'a1', name: 'C1', adapter: claudeAdapter, pty: pty1, cwd: '.', log: silentLogger(), readyQuietMs: 20, acceptanceTimeoutMs: 60 });
+    const w1: string[] = [];
+    s1.on('acceptanceTimeout', (id) => w1.push(id));
+    pty1.emitData('> ');
+    await waitFor(() => s1.state === 'idle');
+    await s1.injectPrompt('oi claude', 'ask-busy');
+    s1.agentBusy();
+    await new Promise((r) => setTimeout(r, 120));
+    expect(w1).toEqual([]);
+    await s1.handleHook('Stop', { text: 'ok' });
+
+    // 2) askId (caso writePromptFile do agy) / scrollback > 24 linhas / [Pasted text
+    const pty2 = new FakePty();
+    const s2 = new Session({
+      id: 'a2',
+      name: 'Agy2',
+      adapter: { ...testAdapter(), kind: 'agy', preparePrompt: (_t, ctx) => `Leia o arquivo C:/proj/.orquestra/prompts/${ctx.askId}.md` },
+      pty: pty2,
+      cwd: '.',
+      log: silentLogger(),
+      readyQuietMs: 20,
+      acceptanceTimeoutMs: 60,
+    });
+    const w2: string[] = [];
+    s2.on('acceptanceTimeout', (id) => w2.push(id));
+    pty2.emitData('> ');
+    await waitFor(() => s2.state === 'idle');
+    await s2.injectPrompt('algo longo', 'ask-scrollback-123');
+    pty2.emitData('ask-scrollback-123.md\r\n' + 'linha\r\n'.repeat(30));
+    await new Promise((r) => setTimeout(r, 120));
+    expect(w2).toEqual([]);
+    await s2.handleHook('Stop', { text: 'ok' });
+
+    // Aumento de [Pasted text] na tela também conta como aceitação
+    await s2.injectPrompt('outra coisa', 'ask-paste-456');
+    pty2.emitData('[Pasted text #1 +5 lines]');
+    await new Promise((r) => setTimeout(r, 120));
+    expect(w2).toEqual([]);
+    await s2.handleHook('Stop', { text: 'ok' });
+  });
+
+  it('BUG 5: digitação do usuário durante prepareForInjection lança PromptBlockedError e onScreen atrasado atualiza waiting', async () => {
+    const surveyAdapter: AgentAdapter = {
+      ...testAdapter(),
+      dismissBlockingOverlay: (screen) => (/Pesquisa \[0\] Skip/.test(screen) ? '0' : null),
+    };
+    const pty = new FakePty();
+    const session = new Session({
+      id: 's4', name: 'A', adapter: surveyAdapter, pty, cwd: '.', log: silentLogger(),
+      readyQuietMs: 20, overlaySettleMs: 120,
+    });
+    pty.emitData('Pesquisa [0] Skip');
+    await waitFor(() => session.state === 'idle');
+
+    // Usuário começa a digitar enquanto prepareForInjection aguarda o modal fechar
+    setTimeout(() => session.userInput('rascunho'), 25);
+    await expect(session.injectPrompt('oi', 'ask-race')).rejects.toBeInstanceOf(PromptBlockedError);
+
+    // onScreen de geração anterior quando owner === null ainda atualiza waitingOnScreen -> waiting
+    session.userInput('\x15'); // Ctrl+U
+    await session.injectPrompt('limpo', 'ask-2');
+    pty.emitData('Permitir? [y/N]');
+    // Encerra o turno antes do xterm terminar de processar a escrita anterior
+    await session.handleHook('Stop', { text: 'ok' });
+    await waitFor(() => session.state === 'waiting');
+  });
+
+  it('BUG 5 achado 1 e 2: hasInput acompanha digitação e limpa em Enter/Ctrl+C/Ctrl+U/Backspace, e onExit limpa aviso de aceitação', async () => {
+    const pty = new FakePty();
+    const session = new Session({
+      id: 's5', name: 'A', adapter: testAdapter(), pty, cwd: '.', log: silentLogger(),
+      readyQuietMs: 20, acceptanceTimeoutMs: 50,
+    });
+    const cleared: number[] = [];
+    const recovered: string[] = [];
+    const warned: string[] = [];
+    session.on('inputCleared', () => cleared.push(1));
+    session.on('acceptanceTimeout', (id) => warned.push(id));
+    session.on('acceptanceRecovered', (id) => recovered.push(id));
+    pty.emitData('> ');
+    await waitFor(() => session.state === 'idle');
+
+    expect(session.hasInput).toBe(false);
+    session.userInput('ab');
+    expect(session.hasInput).toBe(true);
+    session.userInput('\x7f');
+    expect(session.hasInput).toBe(true);
+    session.userInput('\x7f'); // Backspace até esvaziar
+    expect(session.hasInput).toBe(false);
+    expect(cleared).toHaveLength(1);
+
+    session.userInput('x');
+    session.userInput('\x03'); // Ctrl+C
+    expect(session.hasInput).toBe(false);
+    expect(cleared).toHaveLength(2);
+
+    session.userInput('y');
+    session.userInput('\x15'); // Ctrl+U
+    expect(session.hasInput).toBe(false);
+    expect(cleared).toHaveLength(3);
+
+    session.userInput('z');
+    session.userInput('\r'); // Enter
+    expect(session.hasInput).toBe(false);
+    expect(cleared).toHaveLength(4);
+    await session.handleHook('Stop', { text: 'ok' });
+
+    // Achado 2: onExit após acceptanceTimeout limpa acceptanceWarned e emite acceptanceRecovered
+    await session.injectPrompt('sem sinal', 'ask-exit');
+    await waitFor(() => warned.length === 1);
+    pty.emitExit(1);
+    expect(recovered).toEqual(['ask-exit']);
   });
 });

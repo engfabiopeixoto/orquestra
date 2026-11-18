@@ -129,6 +129,27 @@ describe('agyAdapter', () => {
     expect(match('Requesting permission for:\n   Get-ChildItem')).toEqual(['waiting']);
     expect(match('⎿  Interrupted · What should Antigravity CLI do instead?')).toEqual(['interrupted']);
   });
+
+  it('dispensa pesquisa modal de experiência com "0" e reconhece indicador de trabalho', () => {
+    expect(agyAdapter.dismissBlockingOverlay?.("How's the CLI experience so far?\nHelp us improve:  [1] Good  [2] Fine  [3] Bad  [0] Skip")).toBe('0');
+    // Não dispara se faltar opções ou se aparecer no meio da conversa acima do rodapé
+    expect(agyAdapter.dismissBlockingOverlay?.("How's the CLI experience so far?")).toBeNull();
+    expect(
+      agyAdapter.dismissBlockingOverlay?.(
+        "How's the CLI experience so far?\nHelp us improve:  [1] Good  [2] Fine  [3] Bad  [0] Skip\nl1\nl2\nl3\nl4\nl5\nl6\n> ",
+      ),
+    ).toBeNull();
+    expect(agyAdapter.dismissBlockingOverlay?.('> ')).toBeNull();
+    expect(agyAdapter.isWorkingScreen?.('Thinking... (esc to cancel)')).toBe(true);
+    expect(agyAdapter.isWorkingScreen?.('⠋ Lendo arquivos')).toBe(true);
+    expect(agyAdapter.isWorkingScreen?.('Type a message...')).toBe(false);
+    expect(claudeAdapter.isWorkingScreen?.('· esc to interrupt')).toBe(true);
+    expect(claudeAdapter.isWorkingScreen?.('✻ Thinking...')).toBe(true);
+    expect(claudeAdapter.isWorkingScreen?.('✻ Reading 2 files…')).toBe(true);
+    expect(claudeAdapter.isWorkingScreen?.('❯ ')).toBe(false);
+    expect(codexAdapter.isWorkingScreen?.('• Working (3s • esc to interrupt)')).toBe(true);
+    expect(codexAdapter.isWorkingScreen?.('› ')).toBe(false);
+  });
 });
 
 describe('codexAdapter', () => {

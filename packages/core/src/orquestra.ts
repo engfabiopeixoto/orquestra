@@ -55,6 +55,10 @@ export type OrquestraOptions = {
   claudeStatusPollMs?: number;
   /** Tolerância ao hook de fim de turno depois que o status do Claude volta a idle (padrão 2,5 s). */
   claudeIdleGraceMs?: number;
+  /** Prazo para sinal de aceitação do pedido pelo agente antes de reinjetar/falhar (padrão 20 s). */
+  acceptanceTimeoutMs?: number;
+  /** Espera máxima pelo fechamento de modal dispensável antes de injetar (padrão 800 ms). */
+  overlaySettleMs?: number;
   /** Lista os named pipes do sistema (o daemon abre um por conversa viva); injetável nos testes. */
   listPipes?: ListPipes;
   typingGuardMs?: number;
@@ -248,7 +252,21 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
     }
     const log = opts.log.child({ session: input.name, sessionId: id, agent: adapter.kind });
     const agentSessionId = unloaded ? input.agentSessionId ?? null : launch.agentSessionId ?? (ignoredCodexResume ? null : input.agentSessionId ?? null);
-    const session = new Session({ id, name: input.name, adapter, pty, cwd: input.cwd, log, readyQuietMs: opts.readyQuietMs, agentSessionId, unloaded, idleGraceMs: opts.claudeIdleGraceMs, codexHome: opts.codexHome });
+    const session = new Session({
+      id,
+      name: input.name,
+      adapter,
+      pty,
+      cwd: input.cwd,
+      log,
+      readyQuietMs: opts.readyQuietMs,
+      agentSessionId,
+      unloaded,
+      idleGraceMs: opts.claudeIdleGraceMs,
+      codexHome: opts.codexHome,
+      acceptanceTimeoutMs: opts.acceptanceTimeoutMs,
+      overlaySettleMs: opts.overlaySettleMs,
+    });
     // session.name, não input.name: o terminal pode ser renomeado depois.
     const stopOutput = session.onOutput((data) => emit({ type: 'output', name: session.name, data }));
     session.on('state', () => {
@@ -263,8 +281,18 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
       if (event.owner === 'broker') broker.turnFailed(session.name, FAILURE_TEXT[event.reason]);
       emit({ type: 'turn', name: session.name, owner: event.owner, outcome: 'failed' });
     });
+    session.on('acceptanceTimeout', () => emit({
+      type: 'notice',
+      name: session.name,
+      message: `${session.name} ainda não mostrou sinal de ter recebido o pedido; veja a tela do terminal (orq restart ${session.name} se travou)`,
+    }));
+    session.on('acceptanceRecovered', () => emit({ type: 'notice', name: session.name, message: '' }));
     session.on('draft', (pending) => {
       if (pending) return;
+      emit({ type: 'notice', name: session.name, message: '' });
+      broker.sessionChanged(session.name);
+    });
+    session.on('inputCleared', () => {
       emit({ type: 'notice', name: session.name, message: '' });
       broker.sessionChanged(session.name);
     });
