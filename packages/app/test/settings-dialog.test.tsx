@@ -121,8 +121,11 @@ describe('SettingsDialog', () => {
     expect(screen.getByTestId('settings-remote-url').textContent).toContain('http://127.0.0.1:47820');
 
     fireEvent.click(screen.getByTestId('settings-remote-pair'));
-    const qr = (await screen.findByTestId('settings-remote-qr')) as HTMLImageElement;
-    expect(qr.src.startsWith('data:image/svg+xml;utf8,')).toBe(true);
+    const qr = await screen.findByTestId('settings-remote-qr');
+    expect(qr.tagName.toLowerCase()).toBe('svg');
+    expect(qr.getAttribute('role')).toBe('img');
+    expect(qr.getAttribute('aria-label')).toBe('QR code para parear o celular');
+    expect(document.querySelector('img[src^="data:"]')).toBeNull();
     expect((screen.getByTestId('settings-remote-pair-url') as HTMLInputElement).value).toBe('http://127.0.0.1:47820/?pair=abc123');
 
     fireEvent.click(screen.getByTestId('settings-remote-revoke-dev-1'));

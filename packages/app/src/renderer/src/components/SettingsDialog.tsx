@@ -1,9 +1,9 @@
 import { canvasMotionSchema, formatArgs, parseArgs, reservedArgError, type CanvasMotion, type Settings } from '@orquestra/shared/args';
 import type { RemoteDevice, RemotePairResult, RemoteStatus } from '@orquestra/shared/remote';
-import QRCode from 'qrcode';
 import { useEffect, useState } from 'react';
 import type { CommandApi } from '../api';
 import { ArgsField } from './ArgsField';
+import { QrCode } from './QrCode';
 
 const AGENTS = ['claude', 'agy', 'codex'] as const;
 
@@ -17,7 +17,6 @@ export function SettingsDialog({ api, onClose, onCanvasChange }: { api: CommandA
   const [remoteStatus, setRemoteStatus] = useState<RemoteStatus | null>(null);
   const [remoteDevices, setRemoteDevices] = useState<RemoteDevice[]>([]);
   const [remotePairing, setRemotePairing] = useState<RemotePairResult | null>(null);
-  const [qrSrc, setQrSrc] = useState<string | null>(null);
   const [remoteBusy, setRemoteBusy] = useState(false);
   const [remoteError, setRemoteError] = useState<string | null>(null);
 
@@ -54,7 +53,6 @@ export function SettingsDialog({ api, onClose, onCanvasChange }: { api: CommandA
       const next = await api.command('remote.enable', fallbackHttp ? { enabled, fallbackHttp } : { enabled });
       setRemoteStatus(next);
       setRemotePairing(null);
-      setQrSrc(null);
     } catch (err) {
       setRemoteError((err as Error).message);
     } finally {
@@ -67,9 +65,7 @@ export function SettingsDialog({ api, onClose, onCanvasChange }: { api: CommandA
     setRemoteError(null);
     try {
       const pair = await api.command('remote.pair', {});
-      const svg = await QRCode.toString(pair.url, { type: 'svg', width: 180, margin: 1 });
       setRemotePairing(pair);
-      setQrSrc(`data:image/svg+xml;utf8,${encodeURIComponent(svg)}`);
     } catch (err) {
       setRemoteError((err as Error).message);
     } finally {
@@ -209,9 +205,9 @@ export function SettingsDialog({ api, onClose, onCanvasChange }: { api: CommandA
               Parear celular
             </button>
           </div>
-          {remotePairing && qrSrc ? (
+          {remotePairing ? (
             <div className="remote-pair-box" data-testid="settings-remote-pair-box">
-              <img src={qrSrc} alt="QR code para parear celular" width={160} height={160} data-testid="settings-remote-qr" />
+              <QrCode value={remotePairing.url} testId="settings-remote-qr" />
               <div className="remote-pair-info">
                 <span className="muted">Link de uso único (expira em 5 min):</span>
                 <input
