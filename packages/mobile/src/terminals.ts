@@ -1,12 +1,13 @@
 import type { TerminalInfo } from '@orquestra/shared/host-protocol';
 
-export type TerminalStateKind = 'waiting' | 'busy' | 'idle' | 'starting' | 'exited';
+export type TerminalStateKind = 'waiting' | 'busy' | 'background' | 'idle' | 'starting' | 'exited';
 
 export function effectiveTerminalState(terminal: TerminalInfo): TerminalStateKind {
   if (terminal.unloaded || terminal.state === 'exited') return 'exited';
   if (terminal.state === 'waiting') return 'waiting';
   if (terminal.state === 'busy' || terminal.queued > 0) return 'busy';
   if (terminal.state === 'starting') return 'starting';
+  if (terminal.state === 'background') return 'background';
   return 'idle';
 }
 
@@ -14,8 +15,9 @@ const PRIORITY: Record<TerminalStateKind, number> = {
   waiting: 0,
   busy: 1,
   starting: 2,
-  idle: 3,
-  exited: 4,
+  background: 3,
+  idle: 4,
+  exited: 5,
 };
 
 /** Mantém terminais "esperando você" sempre no topo da lista. */
@@ -38,6 +40,8 @@ export function terminalStateLabel(terminal: TerminalInfo): string {
       return 'Iniciando';
     case 'idle':
       return 'Ocioso';
+    case 'background':
+      return 'Em segundo plano';
     case 'exited':
       return 'Encerrado';
   }

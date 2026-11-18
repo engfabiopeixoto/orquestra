@@ -118,4 +118,29 @@ describe('rascunho devolvido pelo agente depois de um turno do usuário interrom
     await session.handleHook('Stop', { text: 'resposta' });
     expect(session.hasDraft).toBe(false);
   });
+
+  it('respostas automáticas de consulta de terminal não contam como texto digitado, rascunho nem entrada do usuário', async () => {
+    const { pty, session } = await setup();
+    const replies = [
+      '\x1b[I',
+      '\x1b[O',
+      '\x1b[12;34R',
+      '\x1b[?62;1c',
+      '\x1b[>0;276;0c',
+      '\x1b[=0c',
+      '\x1b[0n',
+      '\x1b[?2004;2$y',
+      '\x1b[4;500;800t',
+      '\x1b]10;rgb:d6d6/dada/e2e2\x1b\\',
+      '\x1b]11;rgb:1616/1a1a/2121\x07',
+      '\x1bP>|xterm.js(5.5.0)\x1b\\',
+    ];
+    for (const reply of replies) session.userInput(reply);
+    expect(session.lastUserInputAt).toBe(0);
+    expect(session.hasDraft).toBe(false);
+    const cmd = session.sendCommand('/model sonnet');
+    await waitFor(() => pty.written.includes('/model sonnet'));
+    pty.emitData('\r');
+    await expect(cmd).resolves.toBeUndefined();
+  });
 });

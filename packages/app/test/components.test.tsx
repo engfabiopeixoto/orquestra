@@ -105,4 +105,10 @@ describe('ContextBar', () => {
     fireEvent.click(screen.getByTestId('ctx-edit'));
     expect(appStore.getState().editing).toBe('A');
   });
+
+  it('expõe o rótulo em segundo plano para o estado background no desktop', async () => {
+    Object.assign(window, { orquestra: { invoke: vi.fn(), reportError: vi.fn() } });
+    const { STATE_LABEL } = await import('../src/renderer/src/terminal/TerminalNode');
+    expect(STATE_LABEL.background).toBe('em segundo plano');
+  });
 });

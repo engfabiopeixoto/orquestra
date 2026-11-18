@@ -155,11 +155,31 @@ function providerUsageSummary(data?: Usage): string {
   return `${Math.round(max)}%`;
 }
 
-export function UsageSection({ client }: { client: RemoteWsClient }) {
+export function UsageSection({ client, externalUsage }: { client: RemoteWsClient; externalUsage?: Partial<Record<UsageProvider, Usage>> }) {
   const [open, setOpen] = useState(false);
   const [usage, setUsage] = useState<Partial<Record<UsageProvider, Usage>>>({});
   const [loading, setLoading] = useState<Partial<Record<UsageProvider, boolean>>>({});
   const [errors, setErrors] = useState<Partial<Record<UsageProvider, string>>>({});
+  const lastExternal = useRef<Partial<Record<UsageProvider, Usage>>>({});
+
+  useEffect(() => {
+    if (!externalUsage) return;
+    const updates: Array<[UsageProvider, Usage]> = [];
+    for (const provider of ['codex', 'claude', 'agy'] as const) {
+      const value = externalUsage[provider];
+      if (value && lastExternal.current[provider] !== value) {
+        lastExternal.current[provider] = value;
+        updates.push([provider, value]);
+      }
+    }
+    if (updates.length === 0) return;
+    setUsage((prev) => ({ ...prev, ...Object.fromEntries(updates) }));
+    setErrors((prev) => {
+      const next = { ...prev };
+      for (const [provider] of updates) delete next[provider];
+      return next;
+    });
+  }, [externalUsage]);
 
   const loadProvider = async (provider: UsageProvider) => {
     setLoading((prev) => ({ ...prev, [provider]: true }));
@@ -303,6 +323,7 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmUnpair, setConfirmUnpair] = useState(false);
+  const [remoteUsage, setRemoteUsage] = useState<Partial<Record<UsageProvider, Usage>>>({});
 
   const activeWorkspaceIdRef = useRef<string | null>(null);
   activeWorkspaceIdRef.current = activeSnapshot?.workspaceId ?? null;
@@ -342,6 +363,10 @@ export function App() {
         for (const listener of outputListeners.current) listener({ kind: 'overflow', name });
       },
       onEvent: (event: HostEvent) => {
+        if (event.type === 'usage.updated') {
+          setRemoteUsage((prev) => ({ ...prev, [event.provider]: event.usage }));
+          return;
+        }
         if (event.type === 'terminal.output') {
           // A saída só importa à tela do terminal aberto, e só do workspace que o celular está vendo.
           if (event.workspaceId === activeWorkspaceIdRef.current) {
@@ -814,7 +839,7 @@ export function App() {
                 );
               })
             )}
-            {client ? <UsageSection client={client} /> : null}
+            {client ? <UsageSection client={client} externalUsage={remoteUsage} /> : null}
           </>
         )}
       </main>

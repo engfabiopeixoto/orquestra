@@ -11,6 +11,7 @@ import { FakePty } from './helpers/fake-pty.js';
 import { waitFor } from './helpers/wait.js';
 import { claudeAdapter } from '../src/adapters/claude.js';
 import { codexAdapter } from '../src/adapters/codex.js';
+import { agyAdapter } from '../src/adapters/agy.js';
 
 const codexSessions: Session[] = [];
 const codexHomes: string[] = [];
@@ -475,5 +476,150 @@ describe('Session', () => {
   it('recusa injetar fora de idle', async () => {
     const { session } = setup();
     await expect(session.injectPrompt('x', 'a1')).rejects.toThrow(/não está ociosa/);
+  });
+
+  it('BUG 4 — entra em background quando rodapé indica shell/monitor ativo no fim do turno e volta a idle ao encerrar', async () => {
+    const states: string[] = [];
+    const { pty, session } = setup(claudeAdapter);
+    session.on('state', (state) => states.push(state));
+
+    pty.emitData('Concluído.\r\n──────────\r\n❯ \r\n──────────\r\n  ? for shortcuts\r\n');
+    await waitFor(() => session.state === 'idle');
+
+    // Inicia turno e conclui deixando 1 shell / 1 monitor no rodapé
+    await session.injectPrompt('rode em background', 'a-bg');
+    expect(session.state).toBe('busy');
+    pty.emitData('\x1b[2J\x1b[HIniciado.\r\n──────────\r\n❯ \r\n──────────\r\n  1 shell · 1 monitor · ↓ to view\r\n');
+    await session.settle();
+    await session.handleHook('Stop', { text: 'Rodando.' });
+    expect(session.state).toBe('background');
+
+    // No estado background aceita novo prompt e comando normalmente
+    const cmd = session.sendCommand('/model sonnet');
+    await waitFor(() => pty.written.includes('/model sonnet'));
+    pty.emitData('\r');
+    await expect(cmd).resolves.toBeUndefined();
+
+    // Quando o shell/monitor termina e o rodapé limpa, volta a idle automaticamente
+    pty.emitData('\x1b[2J\x1b[HTerminou.\r\n──────────\r\n❯ \r\n──────────\r\n  ? for shortcuts\r\n');
+    await waitFor(() => session.state === 'idle');
+    expect(states).toContain('background');
+  });
+
+  it('achado 1: win32-input do Codex (texto, Enter, Ctrl+C, Ctrl+U, Backspace, Esc, setas e keyup) mantém sendCommand livre e zera inputHasText', async () => {
+    const { pty, session } = setup(codexAdapter);
+    await ready(pty, session);
+
+    // keyup isolado (Alt / Enter), Shift, Esc e ArrowLeft/ArrowRight não marcam inputHasText
+    session.userInput('\x1b[18;56;0;0;0;1_\x1b[13;28;13;0;0;1_\x1b[16;42;0;1;16;1_\x1b[27;1;27;1;0;1_\x1b[27;1;0;1;0;1_\x1b[37;75;0;1;256;1_\x1b[39;77;0;1;256;1_');
+    let cmd = session.sendCommand('/model gpt-5');
+    await waitFor(() => pty.written.includes('/model gpt-5'));
+    pty.emitData('\r');
+    await expect(cmd).resolves.toBeUndefined();
+
+    // Texto em win32-input bloqueia até Ctrl+C / Ctrl+U
+    session.userInput('\x1b[79;24;111;1;0;1_\x1b[79;24;111;0;0;1_');
+    await expect(session.sendCommand('/model gpt-5')).rejects.toThrow(/Há texto na caixa de entrada/);
+    session.userInput('\x1b[67;46;3;1;8;1_\x1b[67;46;3;0;8;1_'); // Ctrl+C
+    cmd = session.sendCommand('/model gpt-5');
+    await waitFor(() => pty.written.filter((x) => x.includes('/model gpt-5')).length === 2);
+    pty.emitData('\r');
+    await expect(cmd).resolves.toBeUndefined();
+
+    // Seta para cima marca histórico/texto, Ctrl+U limpa
+    session.userInput('\x1b[38;72;0;1;256;1_\x1b[38;72;0;0;256;1_');
+    await expect(session.sendCommand('/model gpt-5')).rejects.toThrow(/Há texto na caixa de entrada/);
+    session.userInput('\x1b[85;22;21;1;8;1_\x1b[85;22;21;0;8;1_'); // Ctrl+U
+    cmd = session.sendCommand('/model gpt-5');
+    await waitFor(() => pty.written.filter((x) => x.includes('/model gpt-5')).length === 3);
+    pty.emitData('\r');
+    await expect(cmd).resolves.toBeUndefined();
+
+    // Backspace limpa rascunho em win32-input após turno interrompido
+    session.userInput('\x1b[65;30;97;1;0;1_\x1b[13;28;13;1;0;1_\x1b[13;28;13;0;0;1_');
+    session.agentIdle();
+    await waitFor(() => session.hasDraft);
+    session.userInput('\x1b[8;14;8;1;0;1_\x1b[8;14;8;0;0;1_');
+    expect(session.hasDraft).toBe(false);
+  });
+
+  it.each([
+    ['claude', claudeAdapter, '\r', '\x15'],
+    ['agy', agyAdapter, '\r', '\x15'],
+    ['codex', codexAdapter, '\x1b[13;28;13;1;0;1_\x1b[13;28;13;0;0;1_', '\x1b[85;22;21;1;8;1_\x1b[85;22;21;0;8;1_'],
+  ] as const)('inputHasText volta a false após Enter e Ctrl+U no agente %s', async (name, adapter, enterKey, ctrlUKey) => {
+    const { pty, session } = setup(adapter);
+    await ready(pty, session);
+
+    // 1) Texto seguido de Ctrl+U libera sendCommand
+    session.userInput(name === 'codex' ? '\x1b[65;30;97;1;0;1_' : 'abc');
+    await expect(session.sendCommand('/model x')).rejects.toThrow(/Há texto na caixa de entrada/);
+    session.userInput(ctrlUKey);
+    let cmd = session.sendCommand('/model x');
+    await waitFor(() => pty.written.includes('/model x'));
+    pty.emitData('\r');
+    await expect(cmd).resolves.toBeUndefined();
+
+    // 2) Texto seguido de Enter + fim do turno libera sendCommand
+    session.userInput(name === 'codex' ? '\x1b[65;30;97;1;0;1_' : 'abc');
+    session.userInput(enterKey);
+    await session.handleHook('Stop', { text: 'ok' });
+    await waitFor(() => session.state === 'idle', name === 'codex' ? 4000 : 2000);
+    cmd = session.sendCommand('/model x');
+    await waitFor(() => pty.written.filter((x) => x.includes('/model x')).length === 2);
+    pty.emitData('\r');
+    await expect(cmd).resolves.toBeUndefined();
+  });
+
+  it('achado 2: sequências SS3 (F1-F4, Home/End, setas DECCKM) e Alt+letra não marcam inputHasText como letras digitadas', async () => {
+    const { pty, session } = setup();
+    await ready(pty, session);
+    session.userInput('\x1bOP\x1bOQ\x1bOR\x1bOS\x1bOH\x1bOF\x1bOC\x1bOD\x1bb\x1bf');
+    let cmd = session.sendCommand('/model y');
+    await waitFor(() => pty.written.includes('/model y'));
+    pty.emitData('\r');
+    await expect(cmd).resolves.toBeUndefined();
+
+    // Setas para cima/baixo em modo DECCKM (SS3 A/B) continuam marcando inputHasText
+    session.userInput('\x1bOA');
+    await expect(session.sendCommand('/model y')).rejects.toThrow(/Há texto na caixa de entrada/);
+    session.userInput('\x15');
+    session.userInput('\x1bOB');
+    await expect(session.sendCommand('/model y')).rejects.toThrow(/Há texto na caixa de entrada/);
+    session.userInput('\x15');
+    cmd = session.sendCommand('/model y');
+    await waitFor(() => pty.written.filter((x) => x.includes('/model y')).length === 2);
+    pty.emitData('\r');
+    await expect(cmd).resolves.toBeUndefined();
+  });
+
+  it('achado 3: rascunho "1 shell", resposta "2 shells", "0 shells" no rodapé e tela sem ❯ não acionam background; rodapé real com "1 shell" sim', async () => {
+    const { pty, session } = setup(claudeAdapter);
+    pty.emitData('Concluído.\r\n──────────\r\n❯ \r\n──────────\r\n  ? for shortcuts\r\n');
+    await waitFor(() => session.state === 'idle');
+
+    // Tela sem ❯
+    pty.emitData('\x1b[2J\x1b[Hrodei 1 shell\r\npronto> ');
+    await session.settle();
+    expect(session.state).toBe('idle');
+
+    // Resposta do agente com "2 shells" acima do ❯
+    pty.emitData('\x1b[2J\x1b[HRodei 2 shells.\r\n──────────\r\n❯ \r\n──────────\r\n  ? for shortcuts\r\n');
+    await session.settle();
+    expect(session.state).toBe('idle');
+
+    // Rascunho multilinha do usuário com "1 shell" acima da régua inferior
+    pty.emitData('\x1b[2J\x1b[HOi.\r\n──────────\r\n❯ linha 1\r\n1 shell\r\n──────────\r\n  ? for shortcuts\r\n');
+    await session.settle();
+    expect(session.state).toBe('idle');
+
+    // "0 shells" no rodapé
+    pty.emitData('\x1b[2J\x1b[HOi.\r\n──────────\r\n❯ \r\n──────────\r\n  0 shells · ↓ to manage\r\n');
+    await session.settle();
+    expect(session.state).toBe('idle');
+
+    // Rodapé real com "1 shell" entra em background
+    pty.emitData('\x1b[2J\x1b[HOi.\r\n──────────\r\n❯ \r\n──────────\r\n  1 shell · ↓ to manage\r\n');
+    await waitFor(() => session.state === 'background');
   });
 });

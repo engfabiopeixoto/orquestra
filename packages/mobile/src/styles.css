@@ -9,6 +9,7 @@
   --acc: #f2a33a;
   --acc-soft: rgba(242, 163, 58, 0.16);
   --idle: #4cc38a;
+  --background: #38bdf8;
   --busy: #f2a33a;
   --wait: #7aa7ff;
   --exited: #6b7280;
@@ -256,6 +257,10 @@ button:focus-visible {
   border-left-color: var(--idle);
 }
 
+.agent-card.state-background {
+  border-left-color: var(--background);
+}
+
 .agent-card.state-starting {
   border-left-color: var(--muted);
 }
@@ -325,6 +330,12 @@ button:focus-visible {
   background: rgba(76, 195, 138, 0.15);
   color: var(--idle);
   border-color: rgba(76, 195, 138, 0.4);
+}
+
+.badge.state-background {
+  background: rgba(56, 189, 248, 0.15);
+  color: var(--background);
+  border-color: rgba(56, 189, 248, 0.4);
 }
 
 .badge.state-starting,

@@ -28,6 +28,30 @@ export function claudeHookSettings(hookCommand: (event: string) => string): obje
   };
 }
 
+const BACKGROUND_FOOTER_RE = /\b[1-9]\d*\s+(?:background\s+(?:tasks?|shells?|monitors?|jobs?|processes?)|shells?|monitors?|bashes)\b/i;
+
+function claudeFooterText(visibleScreen: string): string {
+  const nonEmpty = visibleScreen.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  let promptIndex = -1;
+  for (let i = nonEmpty.length - 1; i >= 0; i--) {
+    if (/^\s*❯/.test(nonEmpty[i]!)) {
+      promptIndex = i;
+      break;
+    }
+  }
+  if (promptIndex < 0) return '';
+  const afterPrompt = nonEmpty.slice(promptIndex + 1);
+  let ruleIndex = -1;
+  for (let i = afterPrompt.length - 1; i >= 0; i--) {
+    if (/^[\s─━]+$/.test(afterPrompt[i]!)) {
+      ruleIndex = i;
+      break;
+    }
+  }
+  if (ruleIndex < 0) return '';
+  return afterPrompt.slice(ruleIndex + 1).join('\n');
+}
+
 export const claudeAdapter: AgentAdapter = {
   kind: 'claude',
   acceptsPrompts: true,
@@ -78,5 +102,6 @@ export const claudeAdapter: AgentAdapter = {
     return { kind: 'ignored' };
   },
   readTranscript: readClaudeTranscript,
+  hasBackgroundActivity: (visibleScreen) => BACKGROUND_FOOTER_RE.test(claudeFooterText(visibleScreen)),
   preparePrompt: (text) => text,
 };

@@ -93,6 +93,10 @@ export async function startWorkspaceManager(opts: HostBridgeOptions): Promise<Ho
     }
     if (message.kind === 'event') {
       const event = message.event;
+      if (event.type === 'usage.updated') {
+        opts.send({ kind: 'event', event });
+        return;
+      }
       const entry = entries.get(id);
       if (entry) {
         entry.sequence++;

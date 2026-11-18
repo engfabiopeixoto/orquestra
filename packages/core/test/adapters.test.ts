@@ -61,6 +61,20 @@ describe('claudeAdapter', () => {
     });
     expect(claudeAdapter.interpretHook('Stop', 'texto')).toEqual({ kind: 'ignored' });
   });
+
+  it('detecta processos/monitores em segundo plano apenas no rodapé do Claude Code', () => {
+    const screen = (body: string, footer: string) => `${body}\n────────────────\n❯ \n────────────────\n${footer}`;
+    expect(claudeAdapter.hasBackgroundActivity?.(screen('Tudo pronto.', '  1 shell · ↓ to manage'))).toBe(true);
+    expect(claudeAdapter.hasBackgroundActivity?.(screen('Tudo pronto.', '  1 monitor · ctrl+b'))).toBe(true);
+    expect(claudeAdapter.hasBackgroundActivity?.(screen('Tudo pronto.', '  2 background tasks · ↓ to view'))).toBe(true);
+    // Não deve disparar para "0 shells", rascunho multilinha do usuário, resposta do agente nem tela sem ❯
+    expect(claudeAdapter.hasBackgroundActivity?.(screen('Tudo pronto.', '  0 shells · ↓ to manage'))).toBe(false);
+    expect(claudeAdapter.hasBackgroundActivity?.(screen('Use 2 shells no script.', '  ? for shortcuts'))).toBe(false);
+    expect(claudeAdapter.hasBackgroundActivity?.('Tudo pronto.\n────────────────\n❯ linha 1\n1 shell\n────────────────\n  ? for shortcuts')).toBe(false);
+    expect(claudeAdapter.hasBackgroundActivity?.('rodei 1 shell\npronto> ')).toBe(false);
+    expect(claudeAdapter.hasBackgroundActivity?.(screen('Use 1 shell e 1 monitor no script.', '  bypass permissions on'))).toBe(false);
+    expect(claudeAdapter.hasBackgroundActivity?.(screen('Tudo pronto.', '  ? for shortcuts'))).toBe(false);
+  });
 });
 
 describe('readClaudeTranscript', () => {

@@ -40,4 +40,6 @@ export interface AgentAdapter {
   readTranscript?(path: string): Promise<string | null>;
   preparePrompt(text: string, ctx: { cwd: string; askId: string }): string;
   encodeInput?(body: string): string;
+  /** Detecta se o rodapé da tela mostra shells ou monitores ativos em segundo plano (Claude Code). */
+  hasBackgroundActivity?(visibleScreen: string): boolean;
 }

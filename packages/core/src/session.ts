@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { OrqError, type SessionState, type TerminalKey } from '@orquestra/shared';
+import { isReadySessionState, OrqError, type SessionState, type TerminalKey } from '@orquestra/shared';
 import type { AgentAdapter, HookSignal, ScreenSignal } from './adapters/types.js';
 import type { BackgroundJob } from './background-job.js';
 import { CodexRolloutWatcher, type CodexRolloutEvent } from './codex-rollout-watcher.js';
@@ -71,6 +71,7 @@ export class Session extends EventEmitter<SessionEvents> {
   private everIdle = false;
   private waitingByHook = false;
   private waitingOnScreen = false;
+  private backgroundOnScreen = false;
   private userInputAt = 0;
   private readyTimer: NodeJS.Timeout | undefined;
   private userTurnTimer: NodeJS.Timeout | undefined;
@@ -174,11 +175,11 @@ export class Session extends EventEmitter<SessionEvents> {
     this.opts.pty.write(data);
     // Guarda somente a presença de texto, sem registrar o conteúdo. Histórico é conservador:
     // um comando recuperado pode estar trabalhando mesmo sem produzir saída.
-    for (const key of keys.match(/\x1b\[[0-9;?]*[A-Za-z~]|[\s\S]/g) ?? []) {
+    for (const key of keys.match(/\x1b\[[0-9;?]*[A-Za-z~_]|\x1bO[A-Za-z]|\x1b[^\x1b]|[\s\S]/g) ?? []) {
       if (key === '\x1b[200~') { this.pasting = true; continue; }
       if (key === '\x1b[201~') { this.pasting = false; continue; }
       if (key === '\r' && !this.pasting) {
-        if (this.currentState === 'idle' || this.currentState === 'starting') {
+        if (isReadySessionState(this.currentState) || this.currentState === 'starting') {
           const provisional = this.adapter.kind === 'codex' || !this.inputHasText || !this.acceptsPrompts;
           this.submittedHadText = this.inputHasText;
           this.submittedChars = this.lineChars;
@@ -202,7 +203,7 @@ export class Session extends EventEmitter<SessionEvents> {
           this.inputHasText = false;
           this.setDraft(false);
         }
-      } else if (key === '\x1b[A' || key === '\x1b[B' || (!key.startsWith('\x1b') && /[^\s\x00-\x1f\x7f]/.test(key))) {
+      } else if (key === '\x1b[A' || key === '\x1b[B' || key === '\x1bOA' || key === '\x1bOB' || (!key.startsWith('\x1b') && /[^\s\x00-\x1f\x7f]/.test(key))) {
         this.inputHasText = true;
         if (!key.startsWith('\x1b')) {
           this.lineChars++;
@@ -235,7 +236,7 @@ export class Session extends EventEmitter<SessionEvents> {
   }
 
   async injectPrompt(text: string, askId: string): Promise<void> {
-    if (this.currentState !== 'idle') {
+    if (!isReadySessionState(this.currentState)) {
       throw new OrqError('INTERNAL', `A sessão ${this.name} não está ociosa (${this.currentState}). O broker só injeta em idle.`);
     }
     const prepared = this.adapter.preparePrompt(text, { cwd: this.opts.cwd, askId });
@@ -383,7 +384,7 @@ export class Session extends EventEmitter<SessionEvents> {
    * entrada vazia: o comando se misturaria ao rascunho ou entraria como pedido no meio do turno.
    */
   async sendCommand(text: string): Promise<void> {
-    if (this.currentState !== 'idle') throw new OrqError('USAGE', `${this.name} não está ocioso (${this.currentState}). Espere o fim do turno e tente de novo.`);
+    if (!isReadySessionState(this.currentState)) throw new OrqError('USAGE', `${this.name} não está ocioso (${this.currentState}). Espere o fim do turno e tente de novo.`);
     if (this.inputHasText || this.draftPending) throw new OrqError('USAGE', `Há texto na caixa de entrada de ${this.name}. Envie ou apague o texto e tente de novo.`);
     // Conta como digitação: o broker espera e não injeta um pedido entre o texto e o Enter.
     this.userInputAt = Date.now();
@@ -469,9 +470,14 @@ export class Session extends EventEmitter<SessionEvents> {
   }
 
   private onScreen(turn: number): void {
-    const { appeared, visible } = this.watcher.update(this.screen.visible(), this.screen.text());
+    const visibleScreen = this.screen.visible();
+    this.backgroundOnScreen = Boolean(this.adapter.hasBackgroundActivity?.(visibleScreen));
+    const { appeared, visible } = this.watcher.update(visibleScreen, this.screen.text());
     // O xterm processa a saída de modo assíncrono: ela pode pertencer a um turno já encerrado.
-    if (turn !== this.turnSeq) return;
+    if (turn !== this.turnSeq) {
+      this.refreshBackground();
+      return;
+    }
     this.waitingOnScreen = visible.has('waiting');
     const failure: TurnFailure | null = appeared.includes('interrupted') ? 'interrupted' : appeared.includes('failed') ? 'agent-error' : null;
     if (failure && this.owner !== null) {
@@ -482,6 +488,7 @@ export class Session extends EventEmitter<SessionEvents> {
       return;
     }
     this.refreshWaiting();
+    this.refreshBackground();
   }
 
   private learnAgentSession(id: string | null): void {
@@ -544,7 +551,8 @@ export class Session extends EventEmitter<SessionEvents> {
       if (this.currentState !== 'starting') return;
       if (this.waitingOnScreen) return this.setState('waiting');
       this.everIdle = true;
-      this.setState('idle', 'startup-quiet');
+      this.backgroundOnScreen = Boolean(this.adapter.hasBackgroundActivity?.(this.screen.visible()));
+      this.setState(this.readyState(), 'startup-quiet');
     }, this.opts.readyQuietMs ?? 1500);
   }
 
@@ -593,7 +601,20 @@ export class Session extends EventEmitter<SessionEvents> {
     this.waitingByHook = false;
     if (this.currentState === 'exited') return;
     this.everIdle = true;
-    this.setState('idle', 'turn-end');
+    this.backgroundOnScreen = Boolean(this.adapter.hasBackgroundActivity?.(this.screen.visible()));
+    this.setState(this.readyState(), 'turn-end');
+  }
+
+  private readyState(): SessionState {
+    return this.backgroundOnScreen ? 'background' : 'idle';
+  }
+
+  private refreshBackground(): void {
+    if (this.currentState === 'idle' && this.backgroundOnScreen) {
+      this.setState('background', 'background-screen');
+    } else if (this.currentState === 'background' && !this.backgroundOnScreen) {
+      this.setState('idle', 'background-cleared');
+    }
   }
 
   private refreshWaiting(): void {
@@ -609,7 +630,7 @@ export class Session extends EventEmitter<SessionEvents> {
       if (this.provisionalUserTurn) this.armUserTurn();
       return;
     }
-    if (this.everIdle) return this.setState('idle', 'permission-cleared');
+    if (this.everIdle) return this.setState(this.readyState(), 'permission-cleared');
     // Diálogo respondido durante a partida: espera a TUI silenciar de novo antes de aceitar teclas.
     this.setState('starting');
     this.armReady();

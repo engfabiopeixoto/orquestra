@@ -116,4 +116,38 @@ describe('attachTerminal', () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(onError).not.toHaveBeenCalled();
   });
+
+  it('não envia respostas automáticas emitidas durante a escrita assíncrona do snapshot', async () => {
+    const bus = new OutputBus();
+    const writes: string[] = [];
+    let dataListener: ((data: string) => void) | undefined;
+    let resolveWrite: (() => void) | undefined;
+    const writeDone = new Promise<void>((resolve) => {
+      resolveWrite = resolve;
+    });
+    const term: TermLike = {
+      cols: 100,
+      rows: 30,
+      reset() {},
+      write: (data: string, callback?: () => void) => {
+        writes.push(data);
+        setTimeout(() => {
+          // Simula @xterm/xterm emitindo resposta ao processar consulta presente no retrato
+          dataListener?.('\x1b]11;rgb:1616/1a1a/2121\x1b\\');
+          callback?.();
+          resolveWrite?.();
+        }, 5);
+      },
+      onData: (listener) => {
+        dataListener = listener;
+        return { dispose: () => (dataListener = undefined) };
+      },
+    };
+    const { api, calls } = fakeApi(bus);
+    await attachTerminal({ name: 'A', term, fit: () => {}, api, bus });
+    await writeDone;
+    expect(calls.some(([method]) => method === 'terminal.input')).toBe(false);
+    dataListener?.('oi');
+    expect(calls.at(-1)).toEqual(['terminal.input', { name: 'A', data: 'oi' }]);
+  });
 });

@@ -32,7 +32,7 @@ declare global {
 }
 
 const api = createCommandApi(window.orquestra.invoke);
-const STATE_LABEL = { starting: 'iniciando', idle: 'ocioso', busy: 'ocupado', waiting: 'aguardando você', exited: 'encerrado' } as const;
+export const STATE_LABEL = { starting: 'iniciando', idle: 'ocioso', background: 'em segundo plano', busy: 'ocupado', waiting: 'aguardando você', exited: 'encerrado' } as const;
 const RESIZE_DEBOUNCE_MS = 100;
 
 /** Altura de uma linha em pixels de layout (não muda com o zoom do canvas). */

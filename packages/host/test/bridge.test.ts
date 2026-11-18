@@ -2,8 +2,8 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { call, defaultFlowNode, type HostToMain } from '@orquestra/shared';
-import { afterEach, describe, expect, it } from 'vitest';
+import { call, defaultFlowNode, isRemoteAllowedEvent, type HostToMain } from '@orquestra/shared';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter } from '../../core/src/adapters/types.js';
 import { silentLogger } from '../../core/src/log.js';
 import { createFakeAdapter } from '../../core/test/helpers/fake-adapter.js';
@@ -19,7 +19,8 @@ afterEach(async () => {
 
 const readWorkspace = (dir: string) => JSON.parse(readFileSync(join(dir, '.orquestra', 'workspace.json'), 'utf8'));
 
-type SetupOptions = { outputIntervalMs?: number; saveDelayMs?: number; adapters?: Record<string, AgentAdapter>; claudeDir?: string; listPipes?: () => string[] };
+import type { HostBridgeOptions } from '../src/bridge.js';
+type SetupOptions = { outputIntervalMs?: number; saveDelayMs?: number; adapters?: Record<string, AgentAdapter>; claudeDir?: string; listPipes?: () => string[]; usageReaders?: HostBridgeOptions['usageReaders'] };
 
 async function setup(opts: SetupOptions = {}) {
   const sent: HostToMain[] = [];
@@ -60,6 +61,7 @@ async function setup(opts: SetupOptions = {}) {
     agentPidFile,
     claudeDir: opts.claudeDir,
     listPipes: opts.listPipes,
+    usageReaders: opts.usageReaders,
     backgroundJobPollMs: 30,
     modelCatalogDeps: {
       probeVersion: async () => null,
@@ -849,5 +851,200 @@ describe('modelo do terminal na ponte', () => {
     expect(readWorkspace(dir).terminals[0]).toMatchObject({ name: 'A', model: 'sonnet' });
     await command('m-reopen', 'project.open', { dir });
     expect(ptyHost.spawned.at(-1)!.spec.args).toEqual(expect.arrayContaining(['--model', 'sonnet']));
+  });
+});
+
+describe('BUG 2 — memória de posição e grupo ao remover e recriar terminal', () => {
+  it('regent.remove seguido de regent.new com mesmo nome reutiliza posição, tamanho e grupo', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'orq-bug2-'));
+    const { command, sent } = await setup();
+    await command('1', 'project.open', { dir });
+    await command('2', 'terminal.create', { name: 'R', agent: 'shell', regente: true });
+    const w1Created = await command('3', 'terminal.create', { name: 'W1', agent: 'shell' });
+    const w1Rect = { name: 'W1', x: 800, y: 240, width: 760, height: 480 };
+    await command('4', 'layout.update', { nodes: [{ name: 'R', x: 80, y: 80, width: 640, height: 400 }, w1Rect] });
+    const w1Id = (w1Created as { kind: 'response'; result: { id: string } }).result.id;
+    const createdGroup = await command('6', 'group.create', {
+      title: 'Equipe',
+      color: '#7aa7ff',
+      kind: 'agents',
+      position: { x: 780, y: 180 },
+      members: [{ kind: 'terminal', id: w1Id }],
+    });
+    expect(createdGroup).toMatchObject({ kind: 'response' });
+    const groupId = (createdGroup as { kind: 'response'; result: { groups: Array<{ id: string }> } }).result.groups[0]!.id;
+
+    await bridge!.dispatchForTest('regent.remove', { name: 'W1' }, { session: 'R' });
+    const beforeNew = sent.length;
+    await bridge!.dispatchForTest('regent.new', { name: 'W1', agent: 'shell' }, { session: 'R' });
+
+    const added = sent.slice(beforeNew).find((m) => m.kind === 'event' && m.event.type === 'terminal.added');
+    expect(added).toMatchObject({
+      kind: 'event',
+      event: {
+        type: 'terminal.added',
+        info: { name: 'W1' },
+        rect: { x: 800, y: 240, width: 760, height: 480 },
+      },
+    });
+    const layout = await command('7', 'group.layout', {});
+    const group = (layout as { kind: 'response'; result: { groups: Array<{ id: string; members: Array<{ kind: string; id: string }> }> } }).result.groups.find((g) => g.id === groupId);
+    expect(group?.members).toHaveLength(1);
+  });
+
+  it('terminal.remove pela UI também preserva posição para regent.new com mesmo nome', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'orq-bug2-ui-'));
+    const { command, sent } = await setup();
+    await command('1', 'project.open', { dir });
+    await command('2', 'terminal.create', { name: 'R', agent: 'shell', regente: true });
+    await command('3', 'terminal.create', { name: 'W1', agent: 'shell' });
+    await command('4', 'layout.update', { nodes: [{ name: 'W1', x: 910, y: 310, width: 700, height: 420 }] });
+    await command('5', 'terminal.remove', { name: 'W1' });
+    const beforeNew = sent.length;
+    await bridge!.dispatchForTest('regent.new', { name: 'W1', agent: 'shell' }, { session: 'R' });
+    const added = sent.slice(beforeNew).find((m) => m.kind === 'event' && m.event.type === 'terminal.added');
+    expect(added).toMatchObject({
+      event: { type: 'terminal.added', rect: { x: 910, y: 310, width: 700, height: 420 } },
+    });
+  });
+
+  it('cai para placeBeside quando outro nó ocupa a posição antiga, quando o nome difere ou após expirar 30 min', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'orq-bug2-fallback-'));
+    const { command, sent } = await setup();
+    await command('1', 'project.open', { dir });
+    await command('2', 'terminal.create', { name: 'R', agent: 'shell', regente: true });
+    await command('3', 'terminal.create', { name: 'W1', agent: 'shell' });
+    await command('4', 'terminal.create', { name: 'W2', agent: 'shell' });
+    await command('5', 'layout.update', {
+      nodes: [
+        { name: 'R', x: 80, y: 80, width: 640, height: 400 },
+        { name: 'W1', x: 1000, y: 500, width: 640, height: 400 },
+        { name: 'W2', x: 2000, y: 500, width: 640, height: 400 },
+      ],
+    });
+    // Colisão: remove W1, move W2 para cima da vaga de W1 e recria W1
+    await bridge!.dispatchForTest('regent.remove', { name: 'W1' }, { session: 'R' });
+    await command('6', 'layout.update', { nodes: [{ name: 'W2', x: 1000, y: 500, width: 640, height: 400 }] });
+    let mark = sent.length;
+    await bridge!.dispatchForTest('regent.new', { name: 'W1', agent: 'shell' }, { session: 'R' });
+    let added = sent.slice(mark).find((m) => m.kind === 'event' && m.event.type === 'terminal.added') as { event: { rect: { x: number; y: number } } } | undefined;
+    expect(added?.event.rect).toEqual({ x: 760, y: 80, width: 640, height: 400 });
+
+    // Nome diferente não herda posição de W2
+    await bridge!.dispatchForTest('regent.remove', { name: 'W2' }, { session: 'R' });
+    mark = sent.length;
+    await bridge!.dispatchForTest('regent.new', { name: 'W3', agent: 'shell' }, { session: 'R' });
+    added = sent.slice(mark).find((m) => m.kind === 'event' && m.event.type === 'terminal.added') as { event: { rect: { x: number; y: number } } } | undefined;
+    expect(added?.event.rect.x).not.toBe(1000);
+
+    // Expiração após 30 minutos ignora memória e usa placeBeside
+    const realNow = Date.now;
+    let now = realNow();
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      await command('7', 'layout.update', { nodes: [{ name: 'W3', x: 1500, y: 900, width: 640, height: 400 }] });
+      await bridge!.dispatchForTest('regent.remove', { name: 'W3' }, { session: 'R' });
+      now += 30 * 60_000 + 1;
+      mark = sent.length;
+      await bridge!.dispatchForTest('regent.new', { name: 'W3', agent: 'shell' }, { session: 'R' });
+      added = sent.slice(mark).find((m) => m.kind === 'event' && m.event.type === 'terminal.added') as { event: { rect: { x: number; y: number } } } | undefined;
+      expect(added?.event.rect.x).not.toBe(1500);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('achado 4: falha no regent.new preserva memória, rename/create limpam memória obsoleta e fallback evita nó de fluxo', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'orq-bug2-a4-'));
+    const { command, sent } = await setup();
+    await command('1', 'project.open', { dir });
+    await command('2', 'terminal.create', { name: 'R', agent: 'shell', regente: true });
+    await command('3', 'layout.update', { nodes: [{ name: 'R', x: 80, y: 80, width: 640, height: 400 }] });
+    await command('4', 'terminal.create', { name: 'W1', agent: 'shell' });
+    await command('5', 'layout.update', { nodes: [{ name: 'W1', x: 1400, y: 600, width: 700, height: 420 }] });
+
+    await bridge!.dispatchForTest('regent.remove', { name: 'W1' }, { session: 'R' });
+    // Falha ao recriar (cwd inexistente) NÃO apaga memória
+    await expect(bridge!.dispatchForTest('regent.new', { name: 'W1', agent: 'shell', cwd: join(dir, 'nao-existe') }, { session: 'R' })).rejects.toThrow();
+    let mark = sent.length;
+    await bridge!.dispatchForTest('regent.new', { name: 'W1', agent: 'shell' }, { session: 'R' });
+    let added = sent.slice(mark).find((m) => m.kind === 'event' && m.event.type === 'terminal.added') as { event: { rect: { x: number; y: number; width: number; height: number } } } | undefined;
+    expect(added?.event.rect).toEqual({ x: 1400, y: 600, width: 700, height: 420 });
+
+    // Remove W1 em (1400, 600); cria W1 manualmente via UI e renomeia para W2 -> memória antiga de W1 foi limpa
+    await bridge!.dispatchForTest('regent.remove', { name: 'W1' }, { session: 'R' });
+    await command('6', 'terminal.create', { name: 'W1', agent: 'shell' });
+    await command('7', 'terminal.rename', { name: 'W1', newName: 'W2' });
+    // Nó de fluxo ocupa tanto (1400, 600) quanto a primeira posição placeBeside (760, 80) -> fallback evita nó de fluxo
+    const flow1 = defaultFlowNode('code', randomUUID());
+    flow1.position = { x: 1400, y: 600 };
+    flow1.size = { width: 280, height: 220 };
+    const flow2 = defaultFlowNode('code', randomUUID());
+    flow2.position = { x: 760, y: 80 };
+    flow2.size = { width: 280, height: 220 };
+    await command('8', 'flow.save', { node: flow1 });
+    await command('9', 'flow.save', { node: flow2 });
+
+    mark = sent.length;
+    await bridge!.dispatchForTest('regent.new', { name: 'W1', agent: 'shell' }, { session: 'R' });
+    added = sent.slice(mark).find((m) => m.kind === 'event' && m.event.type === 'terminal.added') as { event: { rect: { x: number; y: number; width: number; height: number } } } | undefined;
+    expect(added?.event.rect).not.toEqual({ x: 1400, y: 600, width: 700, height: 420 });
+    expect(added?.event.rect.y).toBeGreaterThanOrEqual(80 + 400);
+  });
+});
+
+describe('BUG 3 — sincronização global de uso das assinaturas', () => {
+  it('emite usage.updated em consulta nova (incl. cache skip e falha silenciosa) e libera no remoto', async () => {
+    expect(isRemoteAllowedEvent('usage.updated')).toBe(true);
+    let agyCount = 0;
+    let shouldFail = false;
+    const sampleUsage = (usedPercent: number) => ({
+      checkedAt: `2026-11-18T00:00:0${usedPercent}Z`,
+      windows: [{ label: 'Gemini · 7 dias', usedPercent, resetsAt: null }],
+      credits: '42',
+      details: [],
+    });
+    const { command, sent } = await setup({
+      usageReaders: {
+        agy: async () => {
+          if (shouldFail) throw new Error('agy indisponível');
+          agyCount += 1;
+          return sampleUsage(35);
+        },
+        codex: async () => sampleUsage(20),
+      },
+    });
+    const dir = mkdtempSync(join(tmpdir(), 'orq-bug3-'));
+    await command('1', 'project.open', { dir });
+
+    await command('2', 'usage.agy', {});
+    const eventsAfterFirst = sent.filter((m) => m.kind === 'event' && m.event.type === 'usage.updated');
+    expect(eventsAfterFirst).toEqual([
+      { kind: 'event', event: { type: 'usage.updated', provider: 'agy', usage: expect.objectContaining({ credits: '42' }) } },
+    ]);
+
+    // Hit no cache não reemite evento nem chama reader novamente
+    await command('3', 'usage.agy', {});
+    expect(agyCount).toBe(1);
+    expect(sent.filter((m) => m.kind === 'event' && m.event.type === 'usage.updated')).toHaveLength(1);
+
+    // Também emite quando consultado pelo orq usage do agente (codex)
+    await command('4', 'terminal.create', { name: 'R', agent: 'shell', regente: true });
+    await bridge!.dispatchForTest('usage', { provider: 'codex' }, { session: 'R' });
+    expect(sent).toContainEqual({
+      kind: 'event',
+      event: { type: 'usage.updated', provider: 'codex', usage: expect.objectContaining({ windows: [expect.objectContaining({ usedPercent: 20 })] }) },
+    });
+  });
+
+  it('não emite usage.updated quando o leitor do provedor falha', async () => {
+    const { command, sent } = await setup({
+      usageReaders: {
+        claude: async () => { throw new Error('falha auth'); },
+      },
+    });
+    const res = await command('1', 'usage.claude', {});
+    expect(res).toMatchObject({ kind: 'response-error' });
+    expect(sent.filter((m) => m.kind === 'event' && m.event.type === 'usage.updated')).toEqual([]);
   });
 });

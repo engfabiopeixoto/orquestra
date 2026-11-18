@@ -9,8 +9,13 @@ export * from './usage-schema.js';
 
 export const PROTOCOL_VERSION = 1;
 
-export const sessionStateSchema = z.enum(['starting', 'idle', 'busy', 'waiting', 'exited']);
+export const sessionStateSchema = z.enum(['starting', 'idle', 'background', 'busy', 'waiting', 'exited']);
 export type SessionState = z.infer<typeof sessionStateSchema>;
+
+/** Indica se o terminal está ocioso e pronto para receber comandos ou novos turnos. */
+export function isReadySessionState(state: SessionState): boolean {
+  return state === 'idle' || state === 'background';
+}
 
 const empty = z.object({});
 const answered = z.object({ status: z.literal('answered'), askId: z.string(), answer: z.string() });

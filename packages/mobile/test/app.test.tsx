@@ -459,6 +459,29 @@ describe('App', () => {
       Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
     }
   });
+
+  it('sincroniza uso das assinaturas quando recebe evento global usage.updated do desktop ou CLI', async () => {
+    storeAuth();
+    setupHost((method) => {
+      if (method === 'usage.codex') return { checkedAt: 'x', windows: [{ label: '5h', usedPercent: 10, resetsAt: null }], credits: null, details: [] };
+      if (method === 'usage.claude') return { checkedAt: 'x', windows: [{ label: '7 dias', usedPercent: 20, resetsAt: null }], credits: null, details: [] };
+      return undefined;
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByTestId('workspace-card-w1'));
+    await screen.findByTestId('active-workspace-title');
+    await waitFor(() => expect(screen.getByTestId('usage-summary').textContent).toBe('Claude 20% · Antigravity — · Codex 10%'));
+
+    lastSocket().event({
+      type: 'usage.updated',
+      provider: 'agy',
+      usage: { checkedAt: '2026-11-18T03:10:00Z', windows: [{ label: 'Gemini · 7 dias', usedPercent: 77, resetsAt: null }], credits: '99', details: [] },
+    } as HostEvent);
+
+    await waitFor(() => expect(screen.getByTestId('usage-summary').textContent).toBe('Claude 20% · Antigravity 77% · Codex 10%'));
+    fireEvent.click(screen.getByTestId('usage-toggle'));
+    expect(await screen.findByTestId('usage-credits-agy')).toBeTruthy();
+  });
 });
 
 describe('UsageSection', () => {

@@ -58,8 +58,8 @@ const groupNamed = z.object({ id: z.string().uuid() });
 const groupAssignmentSchema = z.object({ member: groupMemberSchema, groupId: z.string().uuid().nullable() });
 export const groupLayoutSchema = z.object({ groups: z.array(canvasGroupSchema), layout: z.record(rectSchema) });
 export type GroupLayout = z.infer<typeof groupLayoutSchema>;
-import { subscriptionUsageSchema, type SubscriptionUsage } from './usage-schema.js';
-export { subscriptionUsageSchema, type SubscriptionUsage };
+import { subscriptionUsageSchema, usageProviderSchema, type SubscriptionUsage } from './usage-schema.js';
+export { subscriptionUsageSchema, usageProviderSchema, type SubscriptionUsage, type UsageProvider } from './usage-schema.js';
 export const projectFileSchema = z.object({
   name: z.string(), path: z.string(), kind: z.enum(['directory', 'file', 'link']),
   change: z.enum(['none', 'added', 'modified', 'removed']),
@@ -290,6 +290,7 @@ export const hostEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('terminal.notice'), name: z.string(), message: z.string() }),
   z.object({ type: z.literal('terminal.model'), name: z.string(), model: terminalModelSchema }),
   z.object({ type: z.literal('models.catalog'), catalog: modelCatalogSchema }),
+  z.object({ type: z.literal('usage.updated'), provider: usageProviderSchema, usage: subscriptionUsageSchema }),
   z.object({ type: z.literal('notice'), level: z.enum(['info', 'warn', 'error']), message: z.string() }),
   // connectedTo e rect vêm preenchidos quando a nota nasceu de um agente.
   z.object({ type: z.literal('note.changed'), note: noteInfoSchema, connectedTo: z.string().nullable(), rect: rectSchema.nullable(), renamedFrom: z.string().optional() }),

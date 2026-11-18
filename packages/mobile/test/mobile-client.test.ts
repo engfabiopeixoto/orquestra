@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TerminalInfo } from '@orquestra/shared/host-protocol';
-import { sortTerminalsForMobile } from '../src/terminals.js';
+import { sortTerminalsForMobile, terminalStateLabel } from '../src/terminals.js';
 import { calculateBackoffMs, RemoteWsClient, type ConnectionStatus, type SocketLike } from '../src/ws-client.js';
 
 class FakeSocket implements SocketLike {
@@ -52,6 +52,7 @@ describe('cliente mobile', () => {
   it('ordena terminais colocando "esperando você" no topo', () => {
     const ordered = sortTerminalsForMobile([
       terminal({ name: 'shell-idle', agent: 'shell', state: 'idle' }),
+      terminal({ name: 'claude-bg', agent: 'claude', state: 'background' as never }),
       terminal({ name: 'codex-exited', agent: 'codex', state: 'exited' }),
       terminal({ name: 'agy-busy', agent: 'agy', state: 'busy' }),
       terminal({ name: 'claude-wait-2', state: 'waiting' }),
@@ -64,9 +65,11 @@ describe('cliente mobile', () => {
       'claude-wait-2',
       'agy-busy',
       'queued-idle',
+      'claude-bg',
       'shell-idle',
       'codex-exited',
     ]);
+    expect(terminalStateLabel(terminal({ name: 'claude-bg', state: 'background' as never }))).toBe('Em segundo plano');
   });
 
   it('calcula backoff exponencial limitado', () => {

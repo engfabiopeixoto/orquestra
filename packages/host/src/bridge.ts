@@ -55,12 +55,12 @@ import {
   type Session,
 } from '@orquestra/core';
 import { OutputBatcher } from './output-batcher.js';
-import { NOTE_SIZE, placeBeside, TERMINAL_SIZE } from './placement.js';
+import { NOTE_SIZE, overlaps, placeBeside, TERMINAL_SIZE, type Rect } from './placement.js';
 import { WorkspaceState } from './workspace-state.js';
 import { readAgyUsageIsolated } from './usage-worker.js';
 import { FlowEngine } from './flow-engine.js';
 import { FlowWorkerPool } from './flow-workers.js';
-import { browserMethodSchemas, type BrowserHandler, type BrowserMethod } from '@orquestra/shared';
+import { browserMethodSchemas, isReadySessionState, type BrowserHandler, type BrowserMethod } from '@orquestra/shared';
 
 export type HostBridgeOptions = {
   send: (message: HostToMain) => void;
@@ -99,6 +99,8 @@ export type HostBridgeOptions = {
   listPipes?: () => string[];
   /** Intervalo da verificação dos jobs em segundo plano (padrão 5 s). */
   backgroundJobPollMs?: number;
+  /** Leitores de uso das assinaturas injetáveis nos testes. */
+  usageReaders?: Partial<Record<'claude' | 'codex' | 'agy', () => Promise<SubscriptionUsage>>>;
 };
 
 export type HostBridge = {
@@ -123,6 +125,33 @@ export type UsageState = {
 export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBridge> {
   let orquestra: Orquestra;
   let project: OpenProject | null = null;
+  const REMOVED_TERMINAL_TTL_MS = 30 * 60_000;
+  const removedTerminals = new Map<string, { rect: Rect; groupId: string | null; expiresAt: number }>();
+
+  function rememberRemovedTerminal(name: string): void {
+    if (!project) return;
+    const now = Date.now();
+    for (const [key, entry] of removedTerminals) {
+      if (entry.expiresAt <= now) removedTerminals.delete(key);
+    }
+    const rect = project.state.rectOf(name);
+    if (!rect) return;
+    const elementId = project.state.elementIdOf(name);
+    const groupId = elementId
+      ? project.state.grouping.list().find((group) => group.members.some((member) => member.kind === 'terminal' && member.id === elementId))?.id ?? null
+      : null;
+    removedTerminals.set(name, { rect: { ...rect }, groupId, expiresAt: now + REMOVED_TERMINAL_TTL_MS });
+  }
+
+  function peekRememberedTerminal(name: string): { rect: Rect; groupId: string | null } | null {
+    const entry = removedTerminals.get(name);
+    if (!entry) return null;
+    if (entry.expiresAt <= Date.now()) {
+      removedTerminals.delete(name);
+      return null;
+    }
+    return { rect: entry.rect, groupId: entry.groupId };
+  }
   let fileExplorer: { dir: string; files: ProjectFiles } | null = null;
   const batcher = new OutputBatcher(
     (name, data) => opts.send({ kind: 'event', event: { type: 'terminal.output', name, data } }),
@@ -161,7 +190,11 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
     : () => {};
   const usagePending = opts.usageState?.pending ?? new Map<string, Promise<SubscriptionUsage>>();
   const usageFailures = opts.usageState?.failures ?? new Map<string, { retryAt: number; message: string }>();
-  async function consultUsage(provider: string, read: () => Promise<SubscriptionUsage>): Promise<SubscriptionUsage> {
+  async function consultUsage(
+    provider: string,
+    read: () => Promise<SubscriptionUsage>,
+    usageProvider: 'claude' | 'codex' | 'agy',
+  ): Promise<SubscriptionUsage> {
     const cached = usageCache.get(provider);
     if (cached && cached.expiresAt > Date.now()) return cached.value;
     const failure = usageFailures.get(provider);
@@ -173,6 +206,7 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
         const value = await read();
         usageCache.set(provider, { expiresAt: Date.now() + (provider === 'claude' ? 300000 : 60000), value });
         usageFailures.delete(provider);
+        opts.send({ kind: 'event', event: { type: 'usage.updated', provider: usageProvider, usage: value } });
         return value;
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Consulta de uso indisponível.';
@@ -325,8 +359,18 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
         throw new OrqError('USAGE', 'O shell não recebe funções.');
       }
       const resolvedPersona = params.persona ? resolvePersona(params.persona) : undefined;
+      const remembered = peekRememberedTerminal(params.name);
+      const existingRects = [
+        ...Object.values(current.state.layout()),
+        ...requireFlow().snapshot().graph.nodes
+          .filter((node) => node.kind !== 'agent')
+          .map((node) => ({ ...node.position, ...node.size })),
+      ];
+      const canReuseRect = Boolean(remembered && !existingRects.some((other) => overlaps(remembered.rect, other)));
       const authorRect = current.state.rectOf(caller) ?? { x: 80, y: 80, ...TERMINAL_SIZE };
-      const rect = { ...placeBeside(authorRect, Object.values(current.state.layout()), TERMINAL_SIZE), ...TERMINAL_SIZE };
+      const rect = canReuseRect
+        ? { ...remembered!.rect }
+        : { ...placeBeside(authorRect, existingRects, TERMINAL_SIZE), ...TERMINAL_SIZE };
       const session = await createTerminalFor({
         name: params.name,
         agent: params.agent,
@@ -337,6 +381,7 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
         regente: false,
         persona: params.persona,
       });
+      removedTerminals.delete(params.name);
       current.state.place(params.name, rect);
       orquestra.connect(caller, params.name);
       if (resolvedPersona) {
@@ -351,6 +396,14 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
           connectedTo: caller,
         },
       });
+      if (remembered?.groupId && current.state.grouping.list().some((group) => group.id === remembered.groupId)) {
+        try {
+          current.state.grouping.assign(remembered.groupId, [{ kind: 'terminal', id: session.id }], groupElements());
+          emitGroupLayout();
+        } catch {
+          // Se o grupo estiver bloqueado e não comportar o nó, mantém o terminal fora dele.
+        }
+      }
       opts.send({ kind: 'event', event: { type: 'notice', level: 'info', message: `${caller} criou ${params.name}.` } });
       return { name: session.name };
     },
@@ -401,8 +454,8 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
       if (descriptor?.unloaded) return { name: params.name };
 
       const queued = orquestra.broker.queued(params.name);
-      if (session.state !== 'idle' || queued > 0) {
-        const stateLabel = ({ starting: 'iniciando', idle: 'ocioso', busy: 'ocupado', waiting: 'aguardando', exited: 'encerrado' } as const)[session.state];
+      if (!isReadySessionState(session.state) || queued > 0) {
+        const stateLabel = ({ starting: 'iniciando', idle: 'ocioso', background: 'em segundo plano', busy: 'ocupado', waiting: 'aguardando', exited: 'encerrado' } as const)[session.state];
         throw new OrqError('USAGE', `Não é possível descarregar ${params.name}: estado ${stateLabel}, ${queued} pedido(s) na fila. Espere ficar ocioso e a fila esvaziar; se estiver travado, use orq restart ${params.name}.`);
       }
 
@@ -506,14 +559,14 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
   };
 
   const getProviderUsage = async (provider: 'claude' | 'codex' | 'agy'): Promise<SubscriptionUsage> => {
-    if (provider === 'codex') return consultUsage('codex', readCodexUsage);
-    if (provider === 'claude') return consultUsage('claude', readClaudeUsage);
+    if (provider === 'codex') return consultUsage('codex', opts.usageReaders?.codex ?? readCodexUsage, 'codex');
+    if (provider === 'claude') return consultUsage('claude', opts.usageReaders?.claude ?? readClaudeUsage, 'claude');
     const cwd = orquestra?.sessions().find((session) => session.adapter.kind === 'agy')?.cwd ?? project?.dir ?? homedir();
-    return consultUsage(`agy:${cwd}`, () => readAgyUsageIsolated({
+    return consultUsage(`agy:${cwd}`, opts.usageReaders?.agy ?? (() => readAgyUsageIsolated({
       script: process.argv[1]!, cwd, signal: usageAbort.signal,
       onStart: (pid) => { usagePids.add(pid); recordPids(); },
       onExit: (pid) => { usagePids.delete(pid); recordPids(); },
-    }));
+    })), 'agy');
   };
 
   orquestra = await createOrquestra({
@@ -549,6 +602,7 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
       }
       if (event.type === 'note') return onAgentNote(event.note, event.createdBy, event.renamedFrom);
       if (event.type === 'removed') {
+        rememberRemovedTerminal(event.name);
         batcher.drop(event.name);
         recordPids();
         project?.state.forget(event.name);
@@ -594,6 +648,7 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
     project.saver.dispose();
     project = null;
     fileExplorer = null;
+    removedTerminals.clear();
   }
 
   async function closeProject(): Promise<void> {
@@ -820,6 +875,7 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
       const resolvedPersona = persona ? resolvePersona(persona) : undefined;
       const placement = groupId ? prepareGroupedNode(groupId, 'terminal', name) : undefined;
       const session = await createTerminalFor({ id: placement?.id, name, agent, cwd, resume, args, regente, persona, monitor });
+      removedTerminals.delete(name);
       if (placement && groupId) {
         requireProject().state.place(name, placement.rect);
         requireProject().state.grouping.assign(groupId, [{ kind: 'terminal', id: session.id }], groupElements());
@@ -847,7 +903,11 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
       opts.log.info({ terminal: name, method: 'terminal.update', keys: Object.keys(changes) }, 'comando da interface');
       const before = orquestra.describeTerminals().find((terminal) => terminal.name === name);
       const session = await orquestra.updateTerminal(name, changes);
-      if (changes.newName && changes.newName !== name) project?.state.rename(name, changes.newName);
+      removedTerminals.delete(name);
+      if (changes.newName && changes.newName !== name) {
+        removedTerminals.delete(changes.newName);
+        project?.state.rename(name, changes.newName);
+      }
       syncFlowAgents();
       if (changes.regente === true && !before?.regente && session.adapter.acceptsPrompts) {
         orquestra.brief(session.name, 'Orquestra', regentGuide());
@@ -900,6 +960,7 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
         if (!orquestra.topology.kindOf(newName)) break;
       }
       const session = await createTerminalFor({ name: newName, agent: source.agent as HostAgent, cwd: source.cwd, args: [...source.args], resume: source.resume, regente: source.regente, persona: source.persona ?? undefined, monitor: source.monitor, model: source.model });
+      removedTerminals.delete(newName);
       const origin = current.state.rectOf(name) ?? { x: 80, y: 80, ...TERMINAL_SIZE };
       const size = { width: origin.width, height: origin.height };
       const rect = { ...placeBeside(origin, Object.values(current.state.layout()), size), ...size };
@@ -918,6 +979,8 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
     },
     'terminal.rename': async ({ name, newName }) => {
       const session = orquestra.renameTerminal(name, newName);
+      removedTerminals.delete(name);
+      removedTerminals.delete(newName);
       project?.state.rename(name, newName);
       changed();
       const terminalInfo = info(session);

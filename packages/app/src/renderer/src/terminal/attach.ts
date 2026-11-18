@@ -4,7 +4,7 @@ import { outputKey } from '../workspace-context';
 
 export type TermLike = {
   reset(): void;
-  write(data: string): void;
+  write(data: string, callback?: () => void): void;
   onData(listener: (data: string) => void): { dispose(): void };
   readonly cols: number;
   readonly rows: number;
@@ -34,12 +34,23 @@ export async function attachTerminal(deps: {
     throw error;
   });
   deps.term.reset();
-  deps.term.write(snapshot.data);
+  let input: { dispose(): void } | undefined;
+  let detached = false;
+  const attachInput = () => {
+    if (detached || input) return;
+    input = deps.term.onData((data) => void deps.api.command('terminal.input', { name: deps.name, data }).catch(() => {}));
+  };
+  if (deps.term.write.length >= 2) {
+    deps.term.write(snapshot.data, attachInput);
+  } else {
+    deps.term.write(snapshot.data);
+    attachInput();
+  }
   live = true;
-  const input = deps.term.onData((data) => void deps.api.command('terminal.input', { name: deps.name, data }).catch(() => {}));
   return () => {
+    detached = true;
     unsubscribe();
-    input.dispose();
+    input?.dispose();
   };
 }
 

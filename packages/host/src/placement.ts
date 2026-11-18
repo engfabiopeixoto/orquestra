@@ -6,7 +6,7 @@ export const TERMINAL_SIZE: Size = { width: 640, height: 400 };
 export const NOTE_SIZE: Size = { width: 320, height: 240 };
 export const GAP = 40;
 
-const overlaps = (a: Rect, b: Rect) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+export const overlaps = (a: Rect, b: Rect) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 
 /** Spec, seção 5: nota criada por um agente nasce à direita dele, no primeiro espaço livre (descendo). */
 export function placeBeside(author: Rect, others: Rect[], size: Size): Position {

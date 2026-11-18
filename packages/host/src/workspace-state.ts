@@ -57,6 +57,10 @@ export class WorkspaceState {
     return this.rects.get(name);
   }
 
+  elementIdOf(name: string): string | undefined {
+    return this.elementIds.get(name);
+  }
+
   rename(oldName: string, newName: string): void {
     const id = this.elementIds.get(oldName);
     this.elementIds.delete(oldName);

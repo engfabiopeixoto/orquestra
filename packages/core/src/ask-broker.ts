@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { OrqError, type QueueEntry, type SessionState } from '@orquestra/shared';
+import { isReadySessionState, OrqError, type QueueEntry, type SessionState } from '@orquestra/shared';
 import { backgroundJobError, type BackgroundJob } from './background-job.js';
 import type { Logger } from './log.js';
 
@@ -127,7 +127,8 @@ export class AskBroker {
     const item = this.items.get(askId);
     if (!item) return { cancelled: false, terminalBusy: false };
     if (item.status.status === 'failed' && item.status.reason === 'cancelado' && this.inFlight.get(item.target) === item) {
-      if (this.opts.resolveTarget(item.target)?.state !== 'idle') return { cancelled: false, terminalBusy: true };
+      const targetState = this.opts.resolveTarget(item.target)?.state;
+      if (!targetState || !isReadySessionState(targetState)) return { cancelled: false, terminalBusy: true };
       this.inFlight.delete(item.target);
       this.notify(item.target, 'cancelled-idle');
       this.pump(item.target);
@@ -142,7 +143,8 @@ export class AskBroker {
     }
     // Em curso: o agente segue até o fim; o fim do turno libera a fila (não injetamos com ele ocupado).
     this.fail(item, 'cancelado');
-    if (this.inFlight.get(item.target) === item && this.opts.resolveTarget(item.target)?.state === 'idle') {
+    const targetState = this.opts.resolveTarget(item.target)?.state;
+    if (this.inFlight.get(item.target) === item && targetState && isReadySessionState(targetState)) {
       this.inFlight.delete(item.target);
       this.notify(item.target, 'cancelled-idle');
       this.pump(item.target);
@@ -275,7 +277,7 @@ export class AskBroker {
     const target = this.opts.resolveTarget(name);
     if (target?.backgroundJob) return this.failQueue(name, `a conversa está em segundo plano; rode \`claude stop ${target.backgroundJob.id8}\` e reinicie o terminal`);
     if (!target || target.state === 'exited') return this.failQueue(name, 'o terminal foi encerrado');
-    if (target.state !== 'idle') {
+    if (!isReadySessionState(target.state)) {
       this.blocked(name, target.state);
       // Recupera uma notificação de idle perdida; nunca força o fim de um turno.
       this.retryLater(name, 1000);

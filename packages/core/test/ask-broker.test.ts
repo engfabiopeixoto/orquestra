@@ -407,4 +407,13 @@ describe('AskBroker', () => {
     broker.sessionRemoved('B', 'removido por R');
     await expect(pending).rejects.toThrow(/removido por R/);
   });
+
+  it('entrega pedido normalmente quando o destino está no estado background', async () => {
+    const { broker, t, finish } = setup();
+    t('B').state = 'background';
+    const outcome = broker.submit({ asker: 'A', target: 'B', text: 'tudo bem?', timeoutMs: 60_000 });
+    expect(t('B').injected).toEqual([{ text: 'tudo bem?', askId: expect.any(String) }]);
+    finish('B', 'sim');
+    await expect(outcome).resolves.toMatchObject({ status: 'answered', answer: 'sim' });
+  });
 });

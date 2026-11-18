@@ -1,10 +1,17 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
+import type { HostEvent } from '@orquestra/shared/host-protocol';
 import type { CommandApi } from '../src/renderer/src/api';
 import { SubscriptionUsage } from '../src/renderer/src/components/SubscriptionUsage';
+import { routeEvent } from '../src/renderer/src/events';
+import { OutputBus } from '../src/renderer/src/output-bus';
+import { appStore } from '../src/renderer/src/store';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  appStore.setState({ usage: {} } as never);
+});
 it('consulta sem inferência, mostra limites e abre a assinatura selecionada', async () => {
   const openSubscription = vi.fn();
   Object.assign(window, { orquestra: { openSubscription } });
@@ -44,4 +51,32 @@ it('só consulta o Antigravity quando pedem, porque cada consulta abre o agy e o
     await waitFor(() => expect(screen.getByTestId('usage-summary-agy-7d').textContent).toBe('G 40%'));
     expect(command.mock.calls.filter(([method]) => method === 'usage.agy')).toHaveLength(1);
   } finally { vi.useRealTimers(); }
+});
+
+it('atualiza resumo e detalhes ao receber usage.updated remoto (ex.: consulta do celular ou orq usage)', async () => {
+  const command = vi.fn().mockImplementation(async () => ({ checkedAt: new Date().toISOString(), windows: [{ label: '7 dias', usedPercent: 10, resetsAt: null }], credits: null, details: [] }));
+  render(<SubscriptionUsage api={{ command } as unknown as CommandApi} />);
+  await waitFor(() => expect(command).toHaveBeenCalledWith('usage.codex', {}));
+
+  act(() => {
+    routeEvent(
+      {
+        type: 'usage.updated',
+        provider: 'agy',
+        usage: {
+          checkedAt: '2026-11-18T03:00:00Z',
+          windows: [{ label: 'Gemini · 7 dias', usedPercent: 64, resetsAt: null }],
+          credits: '150',
+          details: [],
+        },
+      } as HostEvent,
+      { store: appStore.getState(), bus: new OutputBus() },
+    );
+  });
+
+  await waitFor(() => expect(screen.getByTestId('usage-summary-agy-7d').textContent).toBe('G 64%'));
+  fireEvent.click(screen.getByRole('button', { name: /Uso das assinaturas/ }));
+  const agy = within(screen.getByRole('region', { name: 'Assinatura Antigravity' }));
+  expect(agy.getByText('64% usado')).toBeDefined();
+  expect(agy.getByText('Créditos: 150')).toBeDefined();
 });

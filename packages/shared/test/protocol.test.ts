@@ -2,12 +2,25 @@ import { describe, expect, it } from 'vitest';
 import {
   exitCodeFor,
   isMethodName,
+  isReadySessionState,
   OrqError,
   parseParams,
   parseResult,
   requestSchema,
   responseSchema,
+  sessionStateSchema,
 } from '../src/index.js';
+
+describe('sessionStateSchema', () => {
+  it('inclui estado background e considera idle/background como prontos', () => {
+    expect(sessionStateSchema.parse('background')).toBe('background');
+    expect(isReadySessionState('idle')).toBe(true);
+    expect(isReadySessionState('background')).toBe(true);
+    expect(isReadySessionState('busy')).toBe(false);
+    expect(isReadySessionState('waiting')).toBe(false);
+    expect(isReadySessionState('exited')).toBe(false);
+  });
+});
 
 describe('exitCodeFor', () => {
   it('mapeia cada código para o código de saída da spec', () => {

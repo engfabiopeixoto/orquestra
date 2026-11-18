@@ -14,10 +14,10 @@ import { startWorkspaceManager } from '../src/workspace-manager.js';
 const managers: HostBridge[] = [];
 afterEach(async () => { await Promise.all(managers.splice(0).map((manager) => manager.close())); });
 
-async function setup(dataDir = mkdtempSync(join(tmpdir(), 'orq-multi-'))) {
+async function setup(dataDir = mkdtempSync(join(tmpdir(), 'orq-multi-')), adapters?: Record<string, ReturnType<typeof createFakeAdapter>>) {
   const sent: HostToMain[] = [];
   const ptyHost = new FakePtyHost();
-  const manager = await startWorkspaceManager({ send: (message) => sent.push(message), adapters: { shell: createFakeAdapter(), agy: createFakeAdapter() }, cliScript: 'C:/orq/bin/orq.mjs', pipePath: `\\\\.\\pipe\\orq-multi-${randomUUID()}`, dataDir, recentFile: join(dataDir, 'recent.json'), settingsFile: join(dataDir, 'settings.json'), personasFile: join(dataDir, 'personas.json'), agentPidFile: join(dataDir, 'pids.json'), agyHooksFile: join(dataDir, 'test-agy-hooks.json'), log: silentLogger(), ptyHost, readyQuietMs: 10, outputIntervalMs: 5, modelCatalogDeps: { probeVersion: async () => null, probeClaudeCatalogMtime: () => null, discover: async (agent) => { throw new Error(`${agent} desativado nos testes de unidade`); } } });
+  const manager = await startWorkspaceManager({ send: (message) => sent.push(message), adapters: adapters ?? { shell: createFakeAdapter(), agy: createFakeAdapter() }, cliScript: 'C:/orq/bin/orq.mjs', pipePath: `\\\\.\\pipe\\orq-multi-${randomUUID()}`, dataDir, recentFile: join(dataDir, 'recent.json'), settingsFile: join(dataDir, 'settings.json'), personasFile: join(dataDir, 'personas.json'), agentPidFile: join(dataDir, 'pids.json'), agyHooksFile: join(dataDir, 'test-agy-hooks.json'), log: silentLogger(), ptyHost, readyQuietMs: 10, outputIntervalMs: 5, modelCatalogDeps: { probeVersion: async () => null, probeClaudeCatalogMtime: () => null, discover: async (agent) => { throw new Error(`${agent} desativado nos testes de unidade`); } } });
   managers.push(manager);
   async function command(method: string, params: unknown = {}, workspaceId?: string) {
     const id = randomUUID();
@@ -195,5 +195,68 @@ describe('até três workspaces isolados', () => {
     const { command, ptyHost } = await setup(dataDir);
     expect((await command('workspace.list')).workspaces).toEqual([]);
     expect(ptyHost.spawned).toEqual([]);
+  });
+
+  it('reativar workspace que recebeu relatórios de terminal ainda permite terminal.model', async () => {
+    const claude = { ...createFakeAdapter(), kind: 'claude' };
+    const first = await setup(undefined, { shell: createFakeAdapter(), agy: createFakeAdapter(), claude });
+    const a = await first.open();
+    await first.command('terminal.create', { name: 'C', agent: 'claude' }, a.workspaceId);
+    first.ptyHost.spawned[0]!.pty.emitData('pronto> ');
+    await waitFor(() => first.sent.some((m) => m.kind === 'event' && m.event.type === 'terminal.state' && m.event.workspaceId === a.workspaceId && m.event.name === 'C' && m.event.state === 'idle'));
+
+    await first.manager.close();
+    managers.splice(managers.indexOf(first.manager), 1);
+
+    const second = await setup(first.dataDir, { shell: createFakeAdapter(), agy: createFakeAdapter(), claude });
+    await second.command('workspace.activate', { id: a.workspaceId });
+    const reactivatedPty = second.ptyHost.spawned.at(-1)!.pty;
+    reactivatedPty.emitData('pronto> ');
+    await waitFor(() => second.sent.some((m) => m.kind === 'event' && m.event.type === 'terminal.state' && m.event.workspaceId === a.workspaceId && m.event.name === 'C' && m.event.state === 'idle'));
+
+    // Simula xterm do renderer reidratando snapshot e respondendo consultas de terminal ao focar/anexar
+    await second.command('terminal.input', { name: 'C', data: '\x1b]10;rgb:d6d6/dada/e2e2\x1b\\\x1b[>0;276;0c\x1b[?2004;2$y' }, a.workspaceId);
+
+    const modelCmd = second.command('terminal.model', { name: 'C', model: 'sonnet' }, a.workspaceId);
+    await expect(modelCmd).resolves.toMatchObject({ name: 'C', model: { chosen: 'sonnet' } });
+  });
+
+  it('usage.updated de um workspace é encaminhado globalmente sem workspaceId', async () => {
+    const sent: HostToMain[] = [];
+    const ptyHost = new FakePtyHost();
+    const dataDir = mkdtempSync(join(tmpdir(), 'orq-multi-'));
+    const manager = await startWorkspaceManager({
+      send: (message) => sent.push(message),
+      adapters: { shell: createFakeAdapter(), agy: createFakeAdapter() },
+      cliScript: 'C:/orq/bin/orq.mjs',
+      pipePath: `\\\\.\\pipe\\orq-multi-${randomUUID()}`,
+      dataDir,
+      recentFile: join(dataDir, 'recent.json'),
+      settingsFile: join(dataDir, 'settings.json'),
+      personasFile: join(dataDir, 'personas.json'),
+      agentPidFile: join(dataDir, 'pids.json'),
+      agyHooksFile: join(dataDir, 'test-agy-hooks.json'),
+      log: silentLogger(),
+      ptyHost,
+      readyQuietMs: 10,
+      outputIntervalMs: 5,
+      modelCatalogDeps: { probeVersion: async () => null, probeClaudeCatalogMtime: () => null, discover: async (agent) => { throw new Error(`${agent} desativado nos testes de unidade`); } },
+      usageReaders: { codex: async () => ({ checkedAt: '2026-11-18T00:00:00Z', windows: [{ label: '5h', usedPercent: 15, resetsAt: null }], credits: null, details: [] }) },
+    });
+    managers.push(manager);
+    const callMgr = async (method: string, params: unknown = {}, workspaceId?: string) => {
+      const id = randomUUID();
+      await manager.handle({ kind: 'command', id, method, params, workspaceId });
+      return (sent.find((m) => m.kind === 'response' && m.id === id) as { kind: 'response'; result: any }).result;
+    };
+    const a = await callMgr('project.open', { dir: mkdtempSync(join(tmpdir(), 'orq-project-')) });
+    await callMgr('terminal.create', { name: 'R', agent: 'shell', regente: true }, a.workspaceId);
+    const before = sent.length;
+    const env = ptyHost.spawned[0]!.spec.env;
+    await call({ pipePath: env.ORQ_PIPE!, token: env.ORQ_TOKEN! }, 'usage', { provider: 'codex' });
+    const usageEvents = sent.slice(before).filter((m) => m.kind === 'event' && m.event.type === 'usage.updated');
+    expect(usageEvents).toHaveLength(1);
+    expect(usageEvents[0]).toMatchObject({ kind: 'event', event: { type: 'usage.updated', provider: 'codex' } });
+    expect((usageEvents[0] as { event: { workspaceId?: string } }).event.workspaceId).toBeUndefined();
   });
 });

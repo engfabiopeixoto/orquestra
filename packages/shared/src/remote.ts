@@ -56,6 +56,7 @@ export const REMOTE_ALLOWED_EVENTS = [
   'notice',
   'workspace.activated',
   'models.catalog',
+  'usage.updated',
   'terminal.output',
 ] as const;
 

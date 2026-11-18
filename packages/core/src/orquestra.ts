@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { defaultMonitor, isModelAgent, modelCommand, modelNameSchema, OrqError, reservedArgError, terminalModel, terminalNameSchema, type ModelObservation, type ModelOption, type QueueEntry, type SessionState, type TerminalModel } from '@orquestra/shared';
+import { defaultMonitor, isModelAgent, isReadySessionState, modelCommand, modelNameSchema, OrqError, reservedArgError, terminalModel, terminalNameSchema, type ModelObservation, type ModelOption, type QueueEntry, type SessionState, type TerminalModel } from '@orquestra/shared';
 import { findClaudeTranscript, readClaudeModel, readCodexModel, startupModel } from './agent-model.js';
 import type { AgentAdapter } from './adapters/types.js';
 import { AskBroker } from './ask-broker.js';
@@ -350,7 +350,7 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
       timer = setTimeout(() => void readFile(), opts.modelReadDelayMs ?? 1000);
     };
     const onHookModel = (model: string) => observe({ model, at: Date.now() });
-    const onState = (state: SessionState) => { if (state === 'idle') schedule(); };
+    const onState = (state: SessionState) => { if (isReadySessionState(state)) schedule(); };
     session.on('agentModel', onHookModel);
     if (kind !== 'agy') {
       session.on('state', onState);

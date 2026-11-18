@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { HostResult } from '@orquestra/shared/host-protocol';
 import type { CommandApi } from '../api';
+import { useApp } from '../store';
 
 type Provider = 'codex' | 'claude' | 'agy';
 type Usage = HostResult<'usage.codex'>;
@@ -18,12 +19,20 @@ function windowSummary(usage: Usage | undefined, period: '5h' | '7d'): string {
   return windows.map((window) => `${window.label.startsWith('Gemini') ? 'G ' : window.label.startsWith('Claude / GPT') ? 'C/G ' : ''}${window.usedPercent}%`).join(' · ');
 }
 
-function ProviderUsage({ id, title, automatic, api, onUsage }: { id: Provider; title: string; automatic: boolean; api: CommandApi; onUsage(id: Provider, usage: Usage): void }) {
-  const [usage, setUsage] = useState<Usage | null>(null);
+function ProviderUsage({ id, title, automatic, api, externalUsage, onUsage }: { id: Provider; title: string; automatic: boolean; api: CommandApi; externalUsage?: Usage; onUsage(id: Provider, usage: Usage): void }) {
+  const [usage, setUsage] = useState<Usage | null>(externalUsage ?? null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pending = useRef(false);
   const mounted = useRef(true);
+  const lastExternal = useRef<Usage | undefined>(undefined);
+  useEffect(() => {
+    if (!externalUsage || lastExternal.current === externalUsage) return;
+    lastExternal.current = externalUsage;
+    setError(null);
+    setUsage(externalUsage);
+    onUsage(id, externalUsage);
+  }, [externalUsage, id, onUsage]);
   const refresh = async () => {
     if (pending.current) return;
     pending.current = true;
@@ -66,7 +75,8 @@ function ProviderUsage({ id, title, automatic, api, onUsage }: { id: Provider; t
 export function SubscriptionUsage({ api }: { api: CommandApi }) {
   const [open, setOpen] = useState(false);
   const [summary, setSummary] = useState<Partial<Record<Provider, Usage>>>({});
-  const onUsage = (id: Provider, usage: Usage) => setSummary((previous) => ({ ...previous, [id]: usage }));
+  const sharedUsage = useApp((state) => state.usage);
+  const onUsage = (id: Provider, usage: Usage) => setSummary((previous) => (previous[id] === usage ? previous : { ...previous, [id]: usage }));
   return <aside className="subscription-usage nodrag nopan" aria-label="Uso das assinaturas">
     <button className="usage-toggle" aria-label="Uso das assinaturas" aria-expanded={open} aria-controls="subscription-details" onClick={() => setOpen(!open)}>
       <span className="usage-summary-title">◔ <span>Uso das<br />assinaturas</span></span>
@@ -76,7 +86,7 @@ export function SubscriptionUsage({ api }: { api: CommandApi }) {
       </span>)}
     </button>
     <div id="subscription-details" className="usage-details" hidden={!open}>
-      {providers.map((provider) => <ProviderUsage key={provider.id} {...provider} api={api} onUsage={onUsage} />)}
+      {providers.map((provider) => <ProviderUsage key={provider.id} {...provider} api={api} externalUsage={sharedUsage[provider.id]} onUsage={onUsage} />)}
     </div>
   </aside>;
 }

@@ -107,9 +107,13 @@ describe('orq', () => {
 
   it('peers lista nome, tipo, estado e fila', async () => {
     const result = await cli(['peers'], async () => ({
-      peers: [{ name: 'B', agent: 'agy', state: 'busy', queued: 2 }, { name: 'C', agent: 'codex', state: 'exited', queued: 0, unloaded: true }],
+      peers: [
+        { name: 'B', agent: 'agy', state: 'busy', queued: 2 },
+        { name: 'C', agent: 'codex', state: 'exited', queued: 0, unloaded: true },
+        { name: 'D', agent: 'claude', state: 'background', queued: 0 },
+      ],
     }));
-    expect(result.stdout).toBe('B\tagy\tbusy\t2 na fila\nC\tcodex\tdescarregado\n');
+    expect(result.stdout).toBe('B\tagy\tbusy\t2 na fila\nC\tcodex\tdescarregado\nD\tclaude\tbackground\n');
   });
 
   it('--json imprime o resultado estruturado', async () => {
