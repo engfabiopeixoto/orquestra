@@ -11,9 +11,9 @@ describe('lista de modelos', () => {
       expect(new Set(ids).size).toBe(ids.length);
       for (const id of ids) expect(modelNameSchema.safeParse(id).success).toBe(true);
     }
-    expect(AGENT_MODELS.claude.map((option) => option.id)).toEqual(expect.arrayContaining(['opus', 'sonnet', 'haiku']));
+    expect(AGENT_MODELS.claude.map((option) => option.id)).toEqual(expect.arrayContaining(['fable', 'opus', 'sonnet', 'haiku', 'claude-fable-5-2']));
     expect(AGENT_MODELS.codex.map((option) => option.id)).toContain('gpt-6.1-sol');
-    expect(AGENT_MODELS.agy.map((option) => option.id)).toContain('gemini-3.8-flash-medium');
+    expect(AGENT_MODELS.agy.map((option) => option.id)).toEqual(expect.arrayContaining(['gemini-4-carbon-medium', 'gemini-3.8-flash-medium']));
   });
 
   it('só os agentes têm modelo; o shell não', () => {
@@ -38,6 +38,7 @@ describe('comparação do modelo', () => {
   it('nome igual, sufixo de data e maiúsculas contam como o mesmo modelo', () => {
     expect(sameModel('codex', 'gpt-6.1-sol', 'gpt-6.1-sol')).toBe(true);
     expect(sameModel('claude', 'claude-haiku-5-5', 'claude-haiku-5-5-20261001')).toBe(true);
+    expect(sameModel('claude', 'claude-fable-5-2', 'claude-fable-5-2-20261101')).toBe(true);
     expect(sameModel('agy', 'Gemini-3.8-Flash-High', 'gemini-3.8-flash-high')).toBe(true);
     expect(sameModel('codex', 'gpt-6', 'gpt-6-sol')).toBe(false);
     expect(sameModel('agy', 'gemini-3.8-flash-high', 'gemini-3.8-flash-low')).toBe(false);
@@ -46,19 +47,28 @@ describe('comparação do modelo', () => {
   it('alias do Claude corresponde ao id completo da família', () => {
     expect(sameModel('claude', 'opus', 'claude-opus-5-5')).toBe(true);
     expect(sameModel('claude', 'opus[1m]', 'claude-opus-5-5')).toBe(true);
+    expect(sameModel('claude', 'fable', 'claude-fable-5-2')).toBe(true);
+    expect(sameModel('claude', 'best', 'claude-fable-5-2')).toBe(true);
     expect(sameModel('claude', 'sonnet', 'claude-opus-5-5')).toBe(false);
     expect(sameModel('claude', 'opusplan', 'claude-sonnet-5-5')).toBe(true);
     // Alias só vale para o Claude: no agy o nome é o id exato.
-    expect(sameModel('agy', 'opus', 'claude-opus-5-5-high')).toBe(false);
+    expect(sameModel('agy', 'opus', 'claude-opus-4-6-thinking')).toBe(false);
   });
 
   it('agy: nome de exibição (settings do agy) e id (hook e flag) são o mesmo modelo', () => {
+    expect(agyModelId('Gemini 4 Carbon (Medium)')).toBe('gemini-4-carbon-medium');
     expect(agyModelId('Gemini 3.8 Flash (Medium)')).toBe('gemini-3.8-flash-medium');
-    expect(agyModelId('Claude Opus 5.5 (High)')).toBe('claude-opus-5-5-high');
+    expect(agyModelId('Orchestrator (Carbon)')).toBe('gemini-pro-orchestrator');
+    expect(agyModelId('Claude Opus 4.6 (Thinking)')).toBe('claude-opus-4-6-thinking');
+    expect(agyModelId('Claude Sonnet 4.6 (Thinking)')).toBe('claude-sonnet-4-6');
     expect(agyModelId('Modelo Novo (Low)')).toBe('Modelo Novo (Low)');
+    expect(sameModel('agy', 'gemini-4-carbon-medium', 'Gemini 4 Carbon (Medium)')).toBe(true);
+    expect(sameModel('agy', 'gemini-pro-orchestrator', 'Orchestrator (Carbon)')).toBe(true);
+    expect(sameModel('agy', 'claude-sonnet-4-6', 'Claude Sonnet 4.6 (Thinking)')).toBe(true);
     expect(sameModel('agy', 'gemini-3.8-flash-medium', 'Gemini 3.8 Flash (Medium)')).toBe(true);
     expect(sameModel('agy', 'gemini-5-flash-low', 'Gemini 5 Flash (Low)')).toBe(true);
     expect(sameModel('agy', 'gemini-3.8-flash-high', 'Gemini 3.8 Flash (Medium)')).toBe(false);
+    expect(sameModel('agy', 'gemini-pro-orchestrator', 'Orchestrator (Argon)')).toBe(false);
   });
 
   it('estado da tag: sem escolha, sem informação, pendente, confirmado e divergente', () => {
