@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { defaultMonitor, isModelAgent, modelCommand, modelNameSchema, OrqError, reservedArgError, terminalModel, terminalNameSchema, type ModelObservation, type QueueEntry, type SessionState, type TerminalModel } from '@orquestra/shared';
+import { defaultMonitor, isModelAgent, modelCommand, modelNameSchema, OrqError, reservedArgError, terminalModel, terminalNameSchema, type ModelObservation, type ModelOption, type QueueEntry, type SessionState, type TerminalModel } from '@orquestra/shared';
 import { findClaudeTranscript, readClaudeModel, readCodexModel, startupModel } from './agent-model.js';
 import type { AgentAdapter } from './adapters/types.js';
 import { AskBroker } from './ask-broker.js';
@@ -47,6 +47,8 @@ export type OrquestraOptions = {
   codexHome?: string;
   /** settings.json do agy, onde fica o modelo padrão. Padrão: ~/.gemini/antigravity-cli/settings.json. */
   agySettingsFile?: string;
+  /** Lista atual de modelos do agy no catálogo (getter em memória, sem ler disco em cada chamada). */
+  agyModels?: () => readonly ModelOption[];
   /** Espera depois do fim do turno antes de ler o modelo na transcrição, gravada de forma assíncrona (padrão 1 s). */
   modelReadDelayMs?: number;
   /** Intervalo da leitura do status da sessão do Claude enquanto há turno em curso (padrão 200 ms). */
@@ -276,7 +278,7 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
     const stopStatusWatcher = adapter.kind === 'claude' && !unloaded ? watchClaudeStatus(session, log) : () => {};
     // Codex e agy só informam o modelo no fim do turno: até lá vale o modelo com que o CLI começa.
     const launchedAt = Date.now();
-    const initialModel = isModelAgent(adapter.kind) && !unloaded ? startupModel(adapter.kind, { chosen: chosenModel, args, codexHome: opts.codexHome, agySettingsFile: opts.agySettingsFile }) : null;
+    const initialModel = isModelAgent(adapter.kind) && !unloaded ? startupModel(adapter.kind, { chosen: chosenModel, args, codexHome: opts.codexHome, agySettingsFile: opts.agySettingsFile, agyModels: opts.agyModels }) : null;
     const model: ModelTrack = { chosenAt: launchedAt, observed: initialModel ? { model: initialModel, at: launchedAt } : null };
     const stopModelWatcher = unloaded ? () => {} : watchModel(session, model);
     const stopWatcher = () => { stopJobWatcher(); stopStatusWatcher(); stopModelWatcher(); };
@@ -301,7 +303,7 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
     const entry = sessions.get(name);
     const config = configs.get(name);
     if (!entry || !config || !isModelAgent(config.agent)) return null;
-    return terminalModel(config.agent, config.model ?? null, entry.model.chosenAt, entry.model.observed);
+    return terminalModel(config.agent, config.model ?? null, entry.model.chosenAt, entry.model.observed, config.agent === 'agy' ? opts.agyModels?.() : undefined);
   }
 
   const emitModel = (name: string) => {

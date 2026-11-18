@@ -45,6 +45,7 @@ export function App() {
 
   useEffect(() => {
     void globalApi.command('settings.get', {}).then((settings) => setCanvasSettings({ ...emptySettings().canvas, ...settings.canvas })).catch(() => {});
+    void globalApi.command('models.catalog', {}).then((catalog) => appStore.getState().setModelCatalog(catalog)).catch(() => {});
   }, []);
   useEffect(() => { setCreating(false); setPersonasOpen(false); setCreatingGroup(undefined); setGroupDraft(null); setManagingGroup(null); }, [project?.workspaceId]);
 

@@ -17,7 +17,7 @@ afterEach(async () => { await Promise.all(managers.splice(0).map((manager) => ma
 async function setup(dataDir = mkdtempSync(join(tmpdir(), 'orq-multi-'))) {
   const sent: HostToMain[] = [];
   const ptyHost = new FakePtyHost();
-  const manager = await startWorkspaceManager({ send: (message) => sent.push(message), adapters: { shell: createFakeAdapter(), agy: createFakeAdapter() }, cliScript: 'C:/orq/bin/orq.mjs', pipePath: `\\\\.\\pipe\\orq-multi-${randomUUID()}`, dataDir, recentFile: join(dataDir, 'recent.json'), settingsFile: join(dataDir, 'settings.json'), personasFile: join(dataDir, 'personas.json'), agentPidFile: join(dataDir, 'pids.json'), agyHooksFile: join(dataDir, 'test-agy-hooks.json'), log: silentLogger(), ptyHost, readyQuietMs: 10, outputIntervalMs: 5 });
+  const manager = await startWorkspaceManager({ send: (message) => sent.push(message), adapters: { shell: createFakeAdapter(), agy: createFakeAdapter() }, cliScript: 'C:/orq/bin/orq.mjs', pipePath: `\\\\.\\pipe\\orq-multi-${randomUUID()}`, dataDir, recentFile: join(dataDir, 'recent.json'), settingsFile: join(dataDir, 'settings.json'), personasFile: join(dataDir, 'personas.json'), agentPidFile: join(dataDir, 'pids.json'), agyHooksFile: join(dataDir, 'test-agy-hooks.json'), log: silentLogger(), ptyHost, readyQuietMs: 10, outputIntervalMs: 5, modelCatalogDeps: { probeVersion: async () => null, probeClaudeCatalogMtime: () => null, discover: async (agent) => { throw new Error(`${agent} desativado nos testes de unidade`); } } });
   managers.push(manager);
   async function command(method: string, params: unknown = {}, workspaceId?: string) {
     const id = randomUUID();

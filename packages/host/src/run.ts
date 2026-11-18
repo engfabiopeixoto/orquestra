@@ -1,11 +1,11 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { AGENT_PID_FILE, defaultPipePath, HOST_EXIT_PIPE_BUSY, mainToHostSchema, type HostToMain } from '@orquestra/shared';
-import { createLogger, DEFAULT_BIN_DIR, installCli, type AgentAdapter } from '@orquestra/core';
+import { createLogger, DEFAULT_BIN_DIR, installCli, type AgentAdapter, type ModelCatalogStoreDeps } from '@orquestra/core';
 import { type HostBridge } from './bridge.js';
 import { startWorkspaceManager } from './workspace-manager.js';
 
-export async function runHost(opts: { adapters: Record<string, AgentAdapter> }): Promise<void> {
+export async function runHost(opts: { adapters: Record<string, AgentAdapter>; modelCatalogDeps?: ModelCatalogStoreDeps }): Promise<void> {
   const cliScript = process.env.ORQ_CLI_SCRIPT;
   if (!cliScript) {
     console.error('ORQ_CLI_SCRIPT ausente. O processo do núcleo precisa ser iniciado pelo app.');
@@ -34,6 +34,7 @@ export async function runHost(opts: { adapters: Record<string, AgentAdapter> }):
       settingsFile: join(dataDir, 'settings.json'),
       personasFile: join(dataDir, 'personas.json'),
       agyHooksFile: process.env.ORQ_AGY_HOOKS_FILE,
+      modelCatalogDeps: opts.modelCatalogDeps,
     });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') {

@@ -2,4 +2,13 @@
 import { createFakeAdapter } from '../../../core/test/helpers/fake-adapter.js';
 import { runHost } from '../../src/run.js';
 
-await runHost({ adapters: { shell: createFakeAdapter() } });
+await runHost({
+  adapters: { shell: createFakeAdapter() },
+  modelCatalogDeps: {
+    probeVersion: async () => null,
+    probeClaudeCatalogMtime: () => null,
+    discover: async (agent) => {
+      throw new Error(`${agent} desativado no host de teste`);
+    },
+  },
+});

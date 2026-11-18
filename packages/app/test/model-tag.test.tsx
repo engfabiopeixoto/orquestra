@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { AGENT_MODELS, type TerminalModel } from '@orquestra/shared/models';
+import { AGENT_MODELS, builtinModelCatalog, type ModelCatalog, type TerminalModel } from '@orquestra/shared/models';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CommandApi } from '../src/renderer/src/api';
 import { appStore } from '../src/renderer/src/store';
@@ -24,6 +24,7 @@ function fakeApi(result: unknown, fail?: string) {
 }
 
 beforeEach(() => {
+  appStore.getState().setModelCatalog?.(builtinModelCatalog());
   appStore.getState().loadProject({ dir: 'C:/p', name: 'p', terminals: [info()], notes: [], edges: [], layout: {}, viewport: { x: 0, y: 0, zoom: 1 } });
 });
 afterEach(cleanup);
@@ -100,5 +101,57 @@ describe('ModelTag', () => {
   it('o evento terminal.model do núcleo atualiza a tag no store', () => {
     appStore.getState().applyEvent({ type: 'terminal.model', name: 'A', model: mismatch });
     expect(appStore.getState().terminals.A?.model).toEqual(mismatch);
+  });
+
+  it('mostra os modelos do catálogo da store, exibe rodapé da fonte e o botão Atualizar lista chama models.refresh', async () => {
+    let resolveRefresh!: (catalog: ModelCatalog) => void;
+    const calls: Array<[string, unknown]> = [];
+    const api: CommandApi = {
+      command: (async (method: string, params: unknown) => {
+        calls.push([method, params]);
+        if (method === 'models.refresh') {
+          return new Promise<ModelCatalog>((resolve) => {
+            resolveRefresh = resolve;
+          });
+        }
+        return {};
+      }) as CommandApi['command'],
+    };
+
+    render(<ModelTag name="A" agent="claude" model={undefined} api={api} />);
+    fireEvent.click(screen.getByTestId('terminal-model-A'));
+    expect(screen.getByText('Lista interna do Orquestra')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Atualizar lista' }));
+    expect(screen.getByRole('button', { name: 'Atualizando…' }).hasAttribute('disabled')).toBe(true);
+    expect(calls).toEqual([['models.refresh', { agent: 'claude' }]]);
+
+    const updated: ModelCatalog = {
+      ...builtinModelCatalog(),
+      claude: {
+        agent: 'claude',
+        source: 'cli',
+        cliVersion: '2.1.400',
+        fetchedAt: '2026-11-17T21:30:00.000Z',
+        models: [
+          { id: 'opus', label: 'Opus (mais recente)' },
+          { id: 'claude-opus-6-0', label: 'Opus 6.0' },
+        ],
+      },
+    };
+    resolveRefresh(updated);
+
+    await waitFor(() => expect(screen.getByText('Opus 6.0')).toBeTruthy());
+    expect(screen.getByText(/Lista do claude 2\.1\.400, atualizada /)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Atualizar lista' }).hasAttribute('disabled')).toBe(false);
+  });
+
+  it('exibe erro em pt-BR no menu quando models.refresh falha', async () => {
+    const { api } = fakeApi(null, 'Não foi possível atualizar a lista de modelos do claude.');
+    render(<ModelTag name="A" agent="claude" model={undefined} api={api} />);
+    fireEvent.click(screen.getByTestId('terminal-model-A'));
+    fireEvent.click(screen.getByRole('button', { name: 'Atualizar lista' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('Não foi possível atualizar a lista de modelos do claude.');
+    expect(screen.getByTestId('terminal-model-menu-A')).toBeTruthy();
   });
 });

@@ -61,6 +61,13 @@ async function setup(opts: SetupOptions = {}) {
     claudeDir: opts.claudeDir,
     listPipes: opts.listPipes,
     backgroundJobPollMs: 30,
+    modelCatalogDeps: {
+      probeVersion: async () => null,
+      probeClaudeCatalogMtime: () => null,
+      discover: async (agent: string) => {
+        throw new Error(`${agent} desativado nos testes de unidade`);
+      },
+    },
   } as any);
   const command = async (id: string, method: string, params: unknown) => {
     await bridge!.handle({ kind: 'command', id, method, params });

@@ -186,4 +186,33 @@ describe('modelo do terminal', () => {
     orq.createTerminal({ name: 'B', agent: 'codex', cwd: tmpdir(), model: 'gpt-6-luna' });
     expect(orq.modelOf('B')).toEqual({ chosen: 'gpt-6-luna', effective: 'gpt-6-luna', status: 'match' });
   });
+
+  it('agy: usa o getter da lista do catálogo atual para reconhecer modelo novo fora de AGENT_MODELS', async () => {
+    const agySettingsFile = join(mkdtempSync(join(tmpdir(), 'orq-agy-cat-')), 'settings.json');
+    writeFileSync(agySettingsFile, JSON.stringify({ model: 'Orchestrator (Neon)' }));
+    let catalogOptions = [{ id: 'gemini-pro-orchestrator-neon', label: 'Orchestrator (Neon)' }];
+    let getterCalls = 0;
+    const { orq, host } = await setup({ agy: modelAdapter('agy') }, undefined, {
+      agySettingsFile,
+      agyModels: () => {
+        getterCalls++;
+        return catalogOptions;
+      },
+    });
+    const session = orq.createTerminal({ name: 'A', agent: 'agy', cwd: tmpdir() });
+    expect(getterCalls).toBeGreaterThan(0);
+    expect(orq.modelOf('A')).toEqual({ chosen: null, effective: 'gemini-pro-orchestrator-neon', status: 'unset' });
+
+    const sessionB = orq.createTerminal({ name: 'B', agent: 'agy', cwd: tmpdir(), model: 'gemini-pro-orchestrator-neon' });
+    host.last().emitData('pronto> ');
+    await waitFor(() => sessionB.state === 'idle');
+    sessionB.userInput('oi\r');
+    await sessionB.handleHook('Stop', { modelName: 'Orchestrator (Neon)' });
+    expect(orq.modelOf('B')).toEqual({
+      chosen: 'gemini-pro-orchestrator-neon',
+      effective: 'Orchestrator (Neon)',
+      status: 'match',
+    });
+    void session;
+  });
 });

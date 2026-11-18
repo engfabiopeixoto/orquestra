@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { hostEventSchema, terminalInfoSchema } from '../src/host-protocol.js';
-import { AGENT_MODELS, agyModelId, isModelAgent, modelCommand, modelNameSchema, sameModel, terminalModel } from '../src/models.js';
+import {
+  AGENT_MODELS,
+  agentModelCatalogSchema,
+  agyModelId,
+  builtinModelCatalog,
+  isModelAgent,
+  modelCatalogSchema,
+  modelCommand,
+  modelNameSchema,
+  sameModel,
+  terminalModel,
+} from '../src/models.js';
 import { workspaceTerminalSchema } from '../src/workspace.js';
 
 describe('lista de modelos', () => {
@@ -71,6 +82,15 @@ describe('comparação do modelo', () => {
     expect(sameModel('agy', 'gemini-pro-orchestrator', 'Orchestrator (Argon)')).toBe(false);
   });
 
+  it('agyModelId, sameModel e terminalModel aceitam uma lista do catálogo para modelos fora de AGENT_MODELS', () => {
+    const customOptions = [{ id: 'gemini-pro-orchestrator-neon', label: 'Orchestrator (Neon)' }];
+    expect(agyModelId('Orchestrator (Neon)')).toBe('Orchestrator (Neon)');
+    expect(agyModelId('Orchestrator (Neon)', customOptions)).toBe('gemini-pro-orchestrator-neon');
+    expect(sameModel('agy', 'gemini-pro-orchestrator-neon', 'Orchestrator (Neon)')).toBe(false);
+    expect(sameModel('agy', 'gemini-pro-orchestrator-neon', 'Orchestrator (Neon)', customOptions)).toBe(true);
+    expect(terminalModel('agy', 'gemini-pro-orchestrator-neon', 1000, { model: 'Orchestrator (Neon)', at: 2000 }, customOptions)).toMatchObject({ status: 'match' });
+  });
+
   it('estado da tag: sem escolha, sem informação, pendente, confirmado e divergente', () => {
     const chosenAt = 1_000;
     expect(terminalModel('claude', null, chosenAt, { model: 'claude-opus-5-5', at: 2_000 })).toEqual({ chosen: null, effective: 'claude-opus-5-5', status: 'unset' });
@@ -97,5 +117,30 @@ describe('contrato', () => {
     expect(terminalInfoSchema.parse(info).model).toEqual(model);
     expect(hostEventSchema.parse({ type: 'terminal.model', name: 'A', model })).toMatchObject({ type: 'terminal.model', model });
     expect(hostEventSchema.safeParse({ type: 'terminal.model', name: 'A', model: { ...model, status: 'vermelho' } }).success).toBe(false);
+  });
+
+  it('catálogo de modelos embutido e validação de AgentModelCatalog e ModelCatalog', () => {
+    const builtin = builtinModelCatalog();
+    expect(modelCatalogSchema.parse(builtin)).toEqual(builtin);
+    for (const agent of ['claude', 'agy', 'codex'] as const) {
+      expect(builtin[agent]).toEqual({
+        agent,
+        source: 'builtin',
+        cliVersion: null,
+        fetchedAt: null,
+        models: AGENT_MODELS[agent],
+      });
+    }
+    const cliEntry = {
+      agent: 'claude' as const,
+      source: 'cli' as const,
+      cliVersion: '2.1.327',
+      fetchedAt: '2026-11-17T21:35:00.000Z',
+      models: [{ id: 'opus', label: 'Opus (mais recente)' }],
+    };
+    expect(agentModelCatalogSchema.parse(cliEntry)).toEqual(cliEntry);
+    expect(agentModelCatalogSchema.safeParse({ ...cliEntry, models: [] }).success).toBe(false);
+    expect(agentModelCatalogSchema.safeParse({ ...cliEntry, models: [{ id: 'com espaço', label: 'X' }] }).success).toBe(false);
+    expect(agentModelCatalogSchema.safeParse({ ...cliEntry, fetchedAt: 'ontem' }).success).toBe(false);
   });
 });

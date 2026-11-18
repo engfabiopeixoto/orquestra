@@ -1,0 +1,116 @@
+{
+  "version": 2,
+  "fetchedAt": 1794959709620,
+  "staleAt": 1794963348689,
+  "catalog": {
+    "surface": "cc",
+    "config": {
+      "id": "cc",
+      "models": [
+        {
+          "id": "claude-opus-5-5",
+          "name": "Opus 5.5",
+          "short_name": "Opus",
+          "description": "For complex work and everyday tasks",
+          "section": "main",
+          "quick_select": true,
+          "min_claude_code_version": "2.1.280"
+        },
+        {
+          "id": "claude-sonnet-5-5",
+          "name": "Sonnet 5.5",
+          "short_name": "Sonnet",
+          "description": "Most efficient for simpler tasks",
+          "section": "main",
+          "quick_select": true
+        },
+        {
+          "id": "claude-fable-5-2",
+          "name": "Fable 5.2",
+          "short_name": "Fable",
+          "description": "For your toughest challenges",
+          "section": "main",
+          "quick_select": true,
+          "min_claude_code_version": "2.1.290",
+          "billing": "usage_credits"
+        },
+        {
+          "id": "claude-haiku-5-5",
+          "name": "Haiku 5.5",
+          "short_name": "Haiku",
+          "description": "Fastest for quick answers",
+          "section": "main",
+          "quick_select": true
+        },
+        {
+          "id": "claude-fable-5-1",
+          "name": "Fable 5.1",
+          "short_name": "Fable",
+          "section": "overflow",
+          "min_claude_code_version": "2.1.251",
+          "billing": "usage_credits"
+        },
+        {
+          "id": "claude-haiku-4-5-20251001",
+          "name": "Haiku 4.5",
+          "short_name": "Haiku",
+          "section": "overflow"
+        },
+        {
+          "id": "claude-sonnet-5",
+          "name": "Sonnet 5",
+          "short_name": "Sonnet",
+          "section": "overflow"
+        },
+        {
+          "id": "claude-opus-5",
+          "name": "Opus 5",
+          "short_name": "Opus",
+          "section": "overflow"
+        },
+        {
+          "id": "claude-fable-5",
+          "name": "Fable 5",
+          "short_name": "Fable",
+          "section": "overflow",
+          "billing": "usage_credits"
+        },
+        {
+          "id": "claude-opus-4-8",
+          "name": "Opus 4.8",
+          "short_name": "Opus",
+          "section": "overflow"
+        },
+        {
+          "id": "claude-opus-4-7",
+          "name": "Opus 4.7",
+          "short_name": "Opus",
+          "section": "overflow"
+        },
+        {
+          "id": "claude-opus-4-6",
+          "name": "Opus 4.6",
+          "short_name": "Opus",
+          "section": "overflow"
+        },
+        {
+          "id": "claude-sonnet-4-6",
+          "name": "Sonnet 4.6",
+          "short_name": "Sonnet",
+          "section": "overflow"
+        }
+      ],
+      "provider_alias_targets": {
+        "fable": { "default": "claude-fable-5-2" },
+        "haiku": { "default": "claude-haiku-5-5" },
+        "opus": { "default": "claude-opus-5-5" },
+        "sonnet": { "default": "claude-sonnet-5-5" }
+      }
+    },
+    "state": {
+      "id": "cc",
+      "model": "claude-opus-5-5",
+      "selection_source": "user_setting"
+    }
+  }
+}

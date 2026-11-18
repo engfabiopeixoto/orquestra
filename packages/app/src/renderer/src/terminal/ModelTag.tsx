@@ -1,10 +1,10 @@
-import { AGENT_MODELS, isModelAgent, modelNameSchema, type TerminalModel } from '@orquestra/shared/models';
+import { isModelAgent, modelNameSchema, type AgentModelCatalog, type TerminalModel } from '@orquestra/shared/models';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { CommandApi } from '../api';
-import { appStore } from '../store';
+import { appStore, useApp } from '../store';
 
-const MENU_WIDTH = 240;
+const MENU_WIDTH = 260;
 
 /** Texto, dica e alerta da tag a partir do modelo escolhido e do modelo que o agente informou. */
 export function modelTagView(model: TerminalModel | undefined): { label: string; title: string; alert: boolean } {
@@ -27,13 +27,27 @@ export function modelTagView(model: TerminalModel | undefined): { label: string;
   }
 }
 
+export function catalogFooterText(catalog: AgentModelCatalog): string {
+  if (catalog.source === 'builtin') return 'Lista interna do Orquestra';
+  const version = catalog.cliVersion ? ` ${catalog.cliVersion}` : '';
+  const timestamp = catalog.fetchedAt ? new Date(catalog.fetchedAt) : null;
+  const formattedDate =
+    timestamp && Number.isFinite(timestamp.getTime())
+      ? `, atualizada ${timestamp.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}`
+      : '';
+  return `Lista do ${catalog.agent}${version}${formattedDate}`;
+}
+
 export function ModelTag({ name, agent, model, api }: { name: string; agent: string; model: TerminalModel | undefined; api: CommandApi }) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [custom, setCustom] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const agentCatalog = useApp((state) => (isModelAgent(agent) ? state.modelCatalog[agent] : null));
+
   useEffect(() => {
     if (!menu) return;
     const outside = (event: PointerEvent) => {
@@ -45,7 +59,7 @@ export function ModelTag({ name, agent, model, api }: { name: string; agent: str
     window.addEventListener('keydown', escape);
     return () => { document.removeEventListener('pointerdown', outside); window.removeEventListener('keydown', escape); };
   }, [menu]);
-  if (!isModelAgent(agent)) return null;
+  if (!isModelAgent(agent) || !agentCatalog) return null;
   const view = modelTagView(model);
 
   const toggle = (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -76,6 +90,19 @@ export function ModelTag({ name, agent, model, api }: { name: string; agent: str
     }
   };
 
+  const refresh = async () => {
+    setError(null);
+    setRefreshing(true);
+    try {
+      const next = await api.command('models.refresh', { agent });
+      appStore.getState().setModelCatalog(next);
+    } catch (failure) {
+      setError((failure as Error).message || 'Não foi possível atualizar a lista de modelos.');
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   return (
     <>
       <button
@@ -101,7 +128,7 @@ export function ModelTag({ name, agent, model, api }: { name: string; agent: str
           onPointerDown={(event) => event.stopPropagation()}
           onClick={(event) => event.stopPropagation()}
         >
-          {AGENT_MODELS[agent].map((option) => (
+          {agentCatalog.models.map((option) => (
             <button key={option.id} role="menuitemradio" aria-checked={model?.chosen === option.id} disabled={sending} title={option.id} onClick={() => void choose(option.id)}>
               {option.label}
             </button>
@@ -111,6 +138,12 @@ export function ModelTag({ name, agent, model, api }: { name: string; agent: str
             <button type="submit" disabled={sending || custom.trim() === ''}>Usar</button>
           </form>
           {error ? <p className="model-error" role="alert">{error}</p> : null}
+          <div className="model-footer">
+            <span className="model-source">{catalogFooterText(agentCatalog)}</span>
+            <button type="button" className="model-refresh" disabled={sending || refreshing} onClick={() => void refresh()}>
+              {refreshing ? 'Atualizando…' : 'Atualizar lista'}
+            </button>
+          </div>
         </div>,
         document.body,
       ) : null}

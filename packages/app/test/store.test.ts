@@ -1,3 +1,4 @@
+import { builtinModelCatalog } from '@orquestra/shared/models';
 import { describe, expect, it } from 'vitest';
 import { createAppStore } from '../src/renderer/src/store';
 
@@ -215,5 +216,24 @@ describe('estado da interface', () => {
     expect(store.getState().edges).toEqual([]);
     store.getState().applyEvent({ type: 'edge.added', a: 'S', b: 'R' });
     expect(store.getState().edges).toHaveLength(1);
+  });
+
+  it('guarda o catálogo de modelos na store, atualiza com evento models.catalog e preserva ao trocar projeto', () => {
+    const store = createAppStore();
+    expect(store.getState().modelCatalog).toEqual(builtinModelCatalog());
+    const next = {
+      ...builtinModelCatalog(),
+      claude: {
+        agent: 'claude' as const,
+        source: 'cli' as const,
+        cliVersion: '2.1.400',
+        fetchedAt: '2026-11-17T21:00:00.000Z',
+        models: [{ id: 'claude-opus-6', label: 'Opus 6' }],
+      },
+    };
+    store.getState().applyEvent({ type: 'models.catalog', catalog: next });
+    expect(store.getState().modelCatalog).toEqual(next);
+    store.getState().setProject({ dir: 'C:/outro', name: 'outro' });
+    expect(store.getState().modelCatalog).toEqual(next);
   });
 });

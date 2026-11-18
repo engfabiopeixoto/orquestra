@@ -1,4 +1,5 @@
 import type { GroupLayout, HostEvent, NoteInfo, ProjectSnapshot, QueueEntry, TerminalInfo } from '@orquestra/shared/host-protocol';
+import { builtinModelCatalog, modelCatalogSchema, type ModelCatalog } from '@orquestra/shared/models';
 import type { CanvasGroup, Position, Size, Viewport } from '@orquestra/shared/workspace';
 import { groupNodeId, inferredGroupKind } from '@orquestra/shared/group-layout';
 import { flowCanvasId, type FlowSnapshot } from '@orquestra/shared/flow';
@@ -56,10 +57,12 @@ export type AppState = {
   canvasViewport: Viewport | null;
   selectionMode: boolean;
   flow: FlowSnapshot;
+  modelCatalog: ModelCatalog;
 };
 
 export type AppActions = {
   setProject(project: AppState['project']): void;
+  setModelCatalog(catalog: ModelCatalog): void;
   loadProject(snapshot: ProjectSnapshot, selection?: { focusedTerminal: string | null; selectedNodes: string[] }): void;
   applyGroupLayout(layout: GroupLayout): void;
   applyFlow(snapshot: FlowSnapshot): void;
@@ -114,8 +117,13 @@ export function createAppStore() {
     canvasViewport: null,
     selectionMode: false,
     flow: { graph: { nodes: [], connections: [], autoRun: false }, run: null, tests: null },
+    modelCatalog: builtinModelCatalog(),
 
     setProject: (project) => set({ project, terminals: {}, notes: {}, edges: [], queues: {}, answers: [], focusedTerminal: null, editing: null, viewport: null, canvasViewport: null, groups: [], selectedNodes: [], connectMode: false, connectFrom: null, selectionMode: false, flow: { graph: { nodes: [], connections: [], autoRun: false }, run: null, tests: null } }),
+    setModelCatalog: (modelCatalog) => {
+      const parsed = modelCatalogSchema.safeParse(modelCatalog);
+      if (parsed.success) set({ modelCatalog: parsed.data });
+    },
 
     loadProject: (snapshot, selection) => {
       const rectOf = (name: string) => snapshot.layout[name];
@@ -209,6 +217,8 @@ export function createAppStore() {
       } else if (event.type === 'terminal.model') {
         const view = get().terminals[event.name];
         if (view) set({ terminals: { ...get().terminals, [event.name]: { ...view, model: event.model } } });
+      } else if (event.type === 'models.catalog') {
+        set({ modelCatalog: event.catalog });
       } else if (event.type === 'notice') {
         get().notify(event.level, event.message);
       } else if (event.type === 'note.changed') {

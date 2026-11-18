@@ -19,4 +19,6 @@ export * from './other-subscription-usage.js';
 export { childEnv } from './env.js';
 export * from './project-files.js';
 export * from './personas.js';
+export * from './model-catalog.js';
+export * from './agent-model.js';
 export type { Note } from './notes.js';

@@ -14,7 +14,27 @@ export const modelNameSchema = z
   .max(100, 'Use até 100 caracteres no nome do modelo.')
   .regex(/^[A-Za-z0-9][A-Za-z0-9._:/[\]-]*$/, 'Use só letras, números, ponto, hífen, dois-pontos, barra e colchetes no nome do modelo.');
 
-export type ModelOption = { id: string; label: string };
+export const modelOptionSchema = z.object({
+  id: modelNameSchema,
+  label: z.string().trim().min(1),
+});
+export type ModelOption = z.infer<typeof modelOptionSchema>;
+
+export const agentModelCatalogSchema = z.object({
+  agent: modelAgentSchema,
+  source: z.enum(['cli', 'builtin']),
+  cliVersion: z.string().min(1).nullable(),
+  fetchedAt: z.string().datetime({ offset: true }).nullable(),
+  models: z.array(modelOptionSchema).min(1),
+});
+export type AgentModelCatalog = z.infer<typeof agentModelCatalogSchema>;
+
+export const modelCatalogSchema = z.object({
+  claude: agentModelCatalogSchema.refine((entry) => entry.agent === 'claude', 'Agente inválido para claude.'),
+  agy: agentModelCatalogSchema.refine((entry) => entry.agent === 'agy', 'Agente inválido para agy.'),
+  codex: agentModelCatalogSchema.refine((entry) => entry.agent === 'codex', 'Agente inválido para codex.'),
+});
+export type ModelCatalog = Record<ModelAgent, AgentModelCatalog>;
 
 /**
  * Lista fixa mantida no Orquestra, conferida em 17/11/2026: `claude --help` e catálogo do `/model` (Claude Code 2.1.327),
@@ -63,6 +83,14 @@ export const AGENT_MODELS: Record<ModelAgent, readonly ModelOption[]> = {
   ],
 };
 
+export function builtinModelCatalog(): ModelCatalog {
+  return {
+    claude: { agent: 'claude', source: 'builtin', cliVersion: null, fetchedAt: null, models: AGENT_MODELS.claude.map((option) => ({ ...option })) },
+    agy: { agent: 'agy', source: 'builtin', cliVersion: null, fetchedAt: null, models: AGENT_MODELS.agy.map((option) => ({ ...option })) },
+    codex: { agent: 'codex', source: 'builtin', cliVersion: null, fetchedAt: null, models: AGENT_MODELS.codex.map((option) => ({ ...option })) },
+  };
+}
+
 /** Comando que troca o modelo sem reiniciar: os três CLIs aceitam o nome direto, sem abrir o seletor. */
 export const modelCommand = (model: string): string => `/model ${model}`;
 
@@ -80,19 +108,19 @@ const normalize = (model: string) => model.trim().toLowerCase().replace(/\[[^\]]
 const modelSlug = (model: string) => model.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 
 /** Id do agy para um nome de exibição da lista ("Gemini 3.8 Flash (Medium)"); nome desconhecido volta igual. */
-export function agyModelId(label: string): string {
+export function agyModelId(label: string, options: readonly ModelOption[] = AGENT_MODELS.agy): string {
   const wanted = modelSlug(label);
-  return AGENT_MODELS.agy.find((option) => modelSlug(option.label) === wanted || modelSlug(option.id) === wanted)?.id ?? label.trim();
+  return options.find((option) => modelSlug(option.label) === wanted || modelSlug(option.id) === wanted)?.id ?? label.trim();
 }
 
 /** O modelo que o agente informa corresponde ao escolhido? Aceita alias do Claude e sufixo de data no id. */
-export function sameModel(agent: ModelAgent, chosen: string, effective: string): boolean {
+export function sameModel(agent: ModelAgent, chosen: string, effective: string, agyOptions?: readonly ModelOption[]): boolean {
   const wanted = normalize(chosen);
   const used = normalize(effective);
   if (wanted === used) return true;
   if (used.startsWith(`${wanted}-`) && /^\d{8}$/.test(used.slice(wanted.length + 1))) return true;
   // O agy guarda o nome de exibição ("Gemini 4 Carbon (Medium)") e o hook e a flag usam o id (gemini-4-carbon-medium).
-  if (agent === 'agy') return modelSlug(agyModelId(chosen)) === modelSlug(agyModelId(effective));
+  if (agent === 'agy') return modelSlug(agyModelId(chosen, agyOptions)) === modelSlug(agyModelId(effective, agyOptions));
   if (agent !== 'claude') return false;
   if (wanted === 'default') return true;
   const families = CLAUDE_ALIASES[wanted];
@@ -115,10 +143,10 @@ export type TerminalModel = z.infer<typeof terminalModelSchema>;
 
 export type ModelObservation = { model: string; at: number };
 
-export function terminalModel(agent: ModelAgent, chosen: string | null, chosenAt: number, observed: ModelObservation | null): TerminalModel {
+export function terminalModel(agent: ModelAgent, chosen: string | null, chosenAt: number, observed: ModelObservation | null, agyOptions?: readonly ModelOption[]): TerminalModel {
   const effective = observed?.model ?? null;
   if (chosen === null) return { chosen, effective, status: 'unset' };
   if (!observed) return { chosen, effective, status: 'unknown' };
   if (observed.at < chosenAt) return { chosen, effective, status: 'pending' };
-  return { chosen, effective, status: sameModel(agent, chosen, observed.model) ? 'match' : 'mismatch' };
+  return { chosen, effective, status: sameModel(agent, chosen, observed.model, agyOptions) ? 'match' : 'mismatch' };
 }

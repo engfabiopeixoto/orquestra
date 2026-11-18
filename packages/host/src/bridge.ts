@@ -38,6 +38,7 @@ import {
   agyStopHookCommand,
   ensureAgyGlobalHook,
   loadWorkspace,
+  ModelCatalogStore,
   PersonaStore,
   RecentProjects,
   saveWorkspace,
@@ -45,6 +46,7 @@ import {
   WorkspaceSaver,
   type AgentAdapter,
   type Logger,
+  type ModelCatalogStoreDeps,
   type Note,
   type Orquestra,
   type PtyHost,
@@ -87,6 +89,12 @@ export type HostBridgeOptions = {
   saveDelayMs?: number;
   /** Pasta de configuração do Claude Code, onde ficam os jobs em segundo plano (padrão: CLAUDE_CONFIG_DIR ou ~/.claude). */
   claudeDir?: string;
+  /** settings.json do agy, injetável nos testes. */
+  agySettingsFile?: string;
+  /** Catálogo de modelos compartilhado entre workspaces (criado aqui quando ausente). */
+  modelCatalog?: ModelCatalogStore;
+  /** Dependências injetáveis para descoberta de modelos nos testes. */
+  modelCatalogDeps?: ModelCatalogStoreDeps;
   /** Lista os named pipes do sistema; o daemon abre um por conversa viva. Injetável nos testes. */
   listPipes?: () => string[];
   /** Intervalo da verificação dos jobs em segundo plano (padrão 5 s). */
@@ -126,8 +134,31 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
   const usageCache = opts.usageState?.cache ?? new Map<string, { expiresAt: number; value: SubscriptionUsage }>();
   const usageAbort = new AbortController();
   const usagePids = new Set<number>();
+  const catalogPids = new Set<number>();
   let flowPids: number[] = [];
   const flowWorkers = opts.flowWorkers ?? new FlowWorkerPool({ onPids: (pids) => { flowPids = pids; if (orquestra) recordPids(); } });
+  const ownsModelCatalog = !opts.modelCatalog;
+  const modelCatalog = opts.modelCatalog ?? new ModelCatalogStore({
+    dataDir: opts.dataDir,
+    log: opts.log.child({ component: 'model-catalog' }),
+    deps: {
+      ...opts.modelCatalogDeps,
+      claudeDir: opts.modelCatalogDeps?.claudeDir ?? opts.claudeDir,
+      onSpawnPid: (pid) => {
+        catalogPids.add(pid);
+        opts.modelCatalogDeps?.onSpawnPid?.(pid);
+        if (orquestra) recordPids();
+      },
+      onExitPid: (pid) => {
+        catalogPids.delete(pid);
+        opts.modelCatalogDeps?.onExitPid?.(pid);
+        if (orquestra) recordPids();
+      },
+    },
+  });
+  const unsubscribeModelCatalog = ownsModelCatalog
+    ? modelCatalog.subscribe((catalog) => opts.send({ kind: 'event', event: { type: 'models.catalog', catalog } }))
+    : () => {};
   const usagePending = opts.usageState?.pending ?? new Map<string, Promise<SubscriptionUsage>>();
   const usageFailures = opts.usageState?.failures ?? new Map<string, { retryAt: number; message: string }>();
   async function consultUsage(provider: string, read: () => Promise<SubscriptionUsage>): Promise<SubscriptionUsage> {
@@ -176,7 +207,7 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
   }
 
   function recordPids(): void {
-    const pids = [...orquestra.sessions().filter((session) => session.pid > 0 && session.state !== 'exited').map((session) => session.pid), ...usagePids, ...flowPids];
+    const pids = [...orquestra.sessions().filter((session) => session.pid > 0 && session.state !== 'exited').map((session) => session.pid), ...usagePids, ...catalogPids, ...flowPids];
     opts.onPids?.(pids);
     if (!opts.agentPidFile) return;
     try {
@@ -494,6 +525,8 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
     ptyHost: opts.ptyHost,
     readyQuietMs: opts.readyQuietMs,
     claudeDir: opts.claudeDir,
+    agySettingsFile: opts.agySettingsFile,
+    agyModels: () => modelCatalog.get().agy.models,
     listPipes: opts.listPipes,
     backgroundJobPollMs: opts.backgroundJobPollMs,
     regent,
@@ -530,6 +563,12 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
       opts.log.warn({ event: unexpected }, 'evento do núcleo desconhecido; ignorado');
     },
   });
+
+  if (ownsModelCatalog) {
+    void modelCatalog.refreshIfNeeded().catch((err) => {
+      opts.log.warn({ err }, 'falha na atualização inicial do catálogo de modelos');
+    });
+  }
 
   const snapshot = (current: OpenProject): ProjectSnapshot => ({
     ...(opts.eventSequence ? { eventSequence: opts.eventSequence() } : {}),
@@ -735,6 +774,8 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
     'usage.codex': async () => getProviderUsage('codex'),
     'usage.claude': async () => getProviderUsage('claude'),
     'usage.agy': async () => getProviderUsage('agy'),
+    'models.catalog': async () => modelCatalog.get(),
+    'models.refresh': async ({ agent }) => modelCatalog.refresh(agent),
     'project.open': async ({ dir }) => {
       if (!existsSync(dir) || !statSync(dir).isDirectory()) {
         throw new OrqError('USAGE', `A pasta ${dir} não existe. Escolha outra pasta de projeto.`);
@@ -1018,6 +1059,8 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
       for (const [id, pending] of [...portalCalls]) { opts.send({ kind: 'portal-cancel', id }); pending.reject(new OrqError('APP_UNAVAILABLE', 'Workspace encerrado.')); }
       await project?.flow?.close();
       if (!opts.flowWorkers) await flowWorkers.close();
+      unsubscribeModelCatalog();
+      if (ownsModelCatalog) await modelCatalog.close();
       usageAbort.abort();
       for (const resolve of confirms.values()) resolve(false);
       confirms.clear();

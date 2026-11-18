@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  builtinModelCatalog,
   hostEventSchema,
   hostToMainSchema,
   isHostMethod,
@@ -32,7 +33,13 @@ describe('métodos do núcleo', () => {
 
   it('reconhece só os métodos do contrato', () => {
     expect(isHostMethod('prompt.cancel')).toBe(true);
+    expect(isHostMethod('models.catalog')).toBe(true);
+    expect(isHostMethod('models.refresh')).toBe(true);
     expect(isHostMethod('terminal.kill')).toBe(false);
+    expect(parseHostParams('models.catalog', {})).toEqual({});
+    expect(parseHostParams('models.refresh', {})).toEqual({});
+    expect(parseHostParams('models.refresh', { agent: 'claude' })).toEqual({ agent: 'claude' });
+    expect(() => parseHostParams('models.refresh', { agent: 'shell' })).toThrow(expect.objectContaining({ code: 'USAGE' }));
   });
 });
 
@@ -73,6 +80,12 @@ describe('mensagens', () => {
     const event = { type: 'terminal.turn', name: 'A', owner: 'user', outcome: 'ended' };
     expect(hostEventSchema.parse(event)).toEqual(event);
     expect(hostEventSchema.safeParse({ ...event, owner: 'outro' }).success).toBe(false);
+  });
+
+  it('evento models.catalog valida o catálogo completo', () => {
+    const catalog = builtinModelCatalog();
+    expect(hostEventSchema.parse({ type: 'models.catalog', catalog })).toEqual({ type: 'models.catalog', catalog });
+    expect(parseHostResult('models.catalog', catalog)).toEqual(catalog);
   });
 
   it('principal → núcleo e núcleo → principal', () => {

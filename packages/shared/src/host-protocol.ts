@@ -7,7 +7,7 @@ import { personaScopeSchema } from './regent.js';
 import { canvasGroupSchema, groupColorSchema, groupKindSchema, groupMemberSchema, positionSchema, sizeSchema, viewportSchema } from './workspace.js';
 import { flowGraphSchema, flowNodeSchema, flowRunSchema, flowNodeResultSchema, flowSnapshotSchema, flowTestReportSchema, jsonValueSchema } from './flow.js';
 import { browserNodeSchema, browserMethodSchemas } from './browser.js';
-import { modelNameSchema, terminalModelSchema } from './models.js';
+import { modelAgentSchema, modelCatalogSchema, modelNameSchema, terminalModelSchema } from './models.js';
 
 export { terminalNameSchema } from './names.js';
 
@@ -135,6 +135,8 @@ export const hostMethodSchemas = {
   },
   'usage.claude': { params: empty, result: subscriptionUsageSchema },
   'usage.agy': { params: empty, result: subscriptionUsageSchema },
+  'models.catalog': { params: empty, result: modelCatalogSchema },
+  'models.refresh': { params: z.object({ agent: modelAgentSchema.optional() }), result: modelCatalogSchema },
   'project.open': { params: z.object({ dir: z.string().min(1) }), result: projectSnapshotSchema },
   'project.close': { params: empty, result: empty },
   'terminal.create': {
@@ -258,6 +260,7 @@ export const hostEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('terminal.removed'), name: z.string() }),
   z.object({ type: z.literal('terminal.notice'), name: z.string(), message: z.string() }),
   z.object({ type: z.literal('terminal.model'), name: z.string(), model: terminalModelSchema }),
+  z.object({ type: z.literal('models.catalog'), catalog: modelCatalogSchema }),
   z.object({ type: z.literal('notice'), level: z.enum(['info', 'warn', 'error']), message: z.string() }),
   // connectedTo e rect vêm preenchidos quando a nota nasceu de um agente.
   z.object({ type: z.literal('note.changed'), note: noteInfoSchema, connectedTo: z.string().nullable(), rect: rectSchema.nullable(), renamedFrom: z.string().optional() }),

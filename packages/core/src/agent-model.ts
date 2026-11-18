@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { agyModelId, type ModelAgent, type ModelObservation } from '@orquestra/shared';
+import { agyModelId, type ModelAgent, type ModelObservation, type ModelOption } from '@orquestra/shared';
 import { z } from 'zod';
 
 export type { ModelObservation };
@@ -101,11 +101,13 @@ export const DEFAULT_AGY_SETTINGS_FILE = join(homedir(), '.gemini', 'antigravity
 
 const agySettings = z.object({ model: z.string().trim().min(1) });
 
+export type AgyModelsGetter = () => readonly ModelOption[];
+
 /** Modelo padrão do agy, já como id ("Gemini 3.8 Flash (Medium)" -> gemini-3.8-flash-medium). */
-export function readAgySettingsModel(file = DEFAULT_AGY_SETTINGS_FILE): string | null {
+export function readAgySettingsModel(file = DEFAULT_AGY_SETTINGS_FILE, getAgyModels?: AgyModelsGetter): string | null {
   try {
     const parsed = agySettings.safeParse(JSON.parse(readFileSync(file, 'utf8')));
-    return parsed.success ? agyModelId(parsed.data.model) : null;
+    return parsed.success ? agyModelId(parsed.data.model, getAgyModels?.()) : null;
   } catch {
     return null;
   }
@@ -161,10 +163,10 @@ export function modelFromArgs(agent: ModelAgent, args: string[]): { model: strin
  * Modelo com que o CLI começa, antes do primeiro turno: os argumentos extras vêm depois da flag da tag e vencem;
  * sem flag, vale o padrão do CLI (config.toml do Codex, settings.json do agy). O Claude informa no SessionStart.
  */
-export function startupModel(agent: ModelAgent, input: { chosen: string | null; args: string[]; codexHome?: string; agySettingsFile?: string }): string | null {
+export function startupModel(agent: ModelAgent, input: { chosen: string | null; args: string[]; codexHome?: string; agySettingsFile?: string; agyModels?: AgyModelsGetter }): string | null {
   if (agent === 'claude') return null;
   const fromArgs = modelFromArgs(agent, input.args);
   const flagged = fromArgs.model ?? input.chosen;
-  if (flagged) return agent === 'agy' ? agyModelId(flagged) : flagged;
-  return agent === 'codex' ? readCodexConfigModel(input.codexHome, fromArgs.profile) : readAgySettingsModel(input.agySettingsFile);
+  if (flagged) return agent === 'agy' ? agyModelId(flagged, input.agyModels?.()) : flagged;
+  return agent === 'codex' ? readCodexConfigModel(input.codexHome, fromArgs.profile) : readAgySettingsModel(input.agySettingsFile, input.agyModels);
 }
