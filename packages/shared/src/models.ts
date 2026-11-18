@@ -17,15 +17,16 @@ export const modelNameSchema = z
 export type ModelOption = { id: string; label: string };
 
 /**
- * Lista fixa mantida no Orquestra, conferida em 08/11/2026: `claude --help` (aliases), ~/.codex/models_cache.json
- * (modelos visíveis do codex-cli 0.167.0) e `agy models` (agy 1.5.3). Outro nome pode ser digitado no menu.
+ * Lista fixa mantida no Orquestra, conferida em 17/11/2026: `claude --help` e catálogo do `/model` (Claude Code 2.1.327),
+ * ~/.codex/models_cache.json (modelos visíveis do codex-cli 0.167.0) e `agy models` (agy 1.5.10). Outro nome pode ser digitado no menu.
  */
 export const AGENT_MODELS: Record<ModelAgent, readonly ModelOption[]> = {
   claude: [
+    { id: 'fable', label: 'Fable (mais recente)' },
     { id: 'opus', label: 'Opus (mais recente)' },
     { id: 'sonnet', label: 'Sonnet (mais recente)' },
     { id: 'haiku', label: 'Haiku (mais recente)' },
-    { id: 'fable', label: 'Fable (mais recente)' },
+    { id: 'claude-fable-5-2', label: 'Claude Fable 5.2' },
     { id: 'claude-opus-5-5', label: 'Claude Opus 5.5' },
     { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5' },
     { id: 'claude-haiku-5-5', label: 'Claude Haiku 5.5' },
@@ -41,18 +42,23 @@ export const AGENT_MODELS: Record<ModelAgent, readonly ModelOption[]> = {
     { id: 'gpt-5.6-luna', label: 'GPT-5.6-Luna' },
   ],
   agy: [
+    { id: 'gemini-4-carbon-high', label: 'Gemini 4 Carbon (High)' },
+    { id: 'gemini-4-carbon-medium', label: 'Gemini 4 Carbon (Medium)' },
+    { id: 'gemini-4-carbon-low', label: 'Gemini 4 Carbon (Low)' },
     { id: 'gemini-4-argon-high', label: 'Gemini 4 Argon (High)' },
     { id: 'gemini-4-argon-medium', label: 'Gemini 4 Argon (Medium)' },
     { id: 'gemini-4-argon-low', label: 'Gemini 4 Argon (Low)' },
+    { id: 'gemini-4-hydrogen-xhigh', label: 'Gemini 4 Hydrogen (XHigh)' },
+    { id: 'gemini-4-hydrogen-high', label: 'Gemini 4 Hydrogen (High)' },
+    { id: 'gemini-4-hydrogen-medium', label: 'Gemini 4 Hydrogen (Medium)' },
+    { id: 'gemini-4-hydrogen-low', label: 'Gemini 4 Hydrogen (Low)' },
+    { id: 'gemini-pro-orchestrator', label: 'Orchestrator (Carbon)' },
+    { id: 'gemini-pro-orchestrator-argon', label: 'Orchestrator (Argon)' },
     { id: 'gemini-3.8-flash-high', label: 'Gemini 3.8 Flash (High)' },
     { id: 'gemini-3.8-flash-medium', label: 'Gemini 3.8 Flash (Medium)' },
     { id: 'gemini-3.8-flash-low', label: 'Gemini 3.8 Flash (Low)' },
-    { id: 'claude-opus-5-5-high', label: 'Claude Opus 5.5 (High)' },
-    { id: 'claude-opus-5-5-medium', label: 'Claude Opus 5.5 (Medium)' },
-    { id: 'claude-opus-5-5-low', label: 'Claude Opus 5.5 (Low)' },
-    { id: 'claude-sonnet-5-5-high', label: 'Claude Sonnet 5.5 (High)' },
-    { id: 'claude-sonnet-5-5-medium', label: 'Claude Sonnet 5.5 (Medium)' },
-    { id: 'claude-sonnet-5-5-low', label: 'Claude Sonnet 5.5 (Low)' },
+    { id: 'claude-opus-4-6-thinking', label: 'Claude Opus 4.6 (Thinking)' },
+    { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (Thinking)' },
     { id: 'gpt-oss-120b-medium', label: 'GPT-OSS 120B (Medium)' },
   ],
 };
@@ -61,7 +67,14 @@ export const AGENT_MODELS: Record<ModelAgent, readonly ModelOption[]> = {
 export const modelCommand = (model: string): string => `/model ${model}`;
 
 // Alias do Claude Code -> famílias do id completo que ele pode resolver.
-const CLAUDE_ALIASES: Record<string, string[]> = { opus: ['opus'], sonnet: ['sonnet'], haiku: ['haiku'], fable: ['fable'], opusplan: ['opus', 'sonnet'] };
+const CLAUDE_ALIASES: Record<string, string[]> = {
+  opus: ['opus'],
+  sonnet: ['sonnet'],
+  haiku: ['haiku'],
+  fable: ['fable'],
+  opusplan: ['opus', 'sonnet'],
+  best: ['fable', 'opus'],
+};
 
 const normalize = (model: string) => model.trim().toLowerCase().replace(/\[[^\]]*\]$/, '');
 const modelSlug = (model: string) => model.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
@@ -78,8 +91,8 @@ export function sameModel(agent: ModelAgent, chosen: string, effective: string):
   const used = normalize(effective);
   if (wanted === used) return true;
   if (used.startsWith(`${wanted}-`) && /^\d{8}$/.test(used.slice(wanted.length + 1))) return true;
-  // O agy guarda o nome de exibição ("Gemini 3.8 Flash (Medium)") e o hook e a flag usam o id (gemini-3.8-flash-medium).
-  if (agent === 'agy') return modelSlug(chosen) === modelSlug(effective);
+  // O agy guarda o nome de exibição ("Gemini 4 Carbon (Medium)") e o hook e a flag usam o id (gemini-4-carbon-medium).
+  if (agent === 'agy') return modelSlug(agyModelId(chosen)) === modelSlug(agyModelId(effective));
   if (agent !== 'claude') return false;
   if (wanted === 'default') return true;
   const families = CLAUDE_ALIASES[wanted];

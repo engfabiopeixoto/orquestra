@@ -81,6 +81,8 @@ describe('modelo no início, antes do primeiro turno', () => {
   });
 
   it('agy: settings.json guarda o nome de exibição; vira o id da lista', () => {
+    expect(readAgySettingsModel(agySettings({ model: 'Gemini 4 Carbon (Medium)', permissions: {} }))).toBe('gemini-4-carbon-medium');
+    expect(readAgySettingsModel(agySettings({ model: 'Orchestrator (Carbon)', permissions: {} }))).toBe('gemini-pro-orchestrator');
     expect(readAgySettingsModel(agySettings({ model: 'Gemini 3.8 Flash (Medium)', permissions: {} }))).toBe('gemini-3.8-flash-medium');
     expect(readAgySettingsModel(agySettings({ permissions: {} }))).toBeNull();
     expect(readAgySettingsModel(agySettings('{ quebrado'))).toBeNull();
@@ -89,6 +91,7 @@ describe('modelo no início, antes do primeiro turno', () => {
   it('argumentos extras: --model, -m, --model=, -c model= e --profile', () => {
     expect(modelFromArgs('codex', ['-m', 'gpt-6-sol'])).toEqual({ model: 'gpt-6-sol', profile: null });
     expect(modelFromArgs('codex', ['-c', 'model="gpt-6-astra"', '--profile', 'rapido'])).toEqual({ model: 'gpt-6-astra', profile: 'rapido' });
+    expect(modelFromArgs('claude', ['--model', 'claude-fable-5-2'])).toEqual({ model: 'claude-fable-5-2', profile: null });
     expect(modelFromArgs('agy', ['--model=gemini-4-argon-high', '--mode', 'plan'])).toEqual({ model: 'gemini-4-argon-high', profile: null });
     expect(modelFromArgs('agy', ['--mode', 'plan'])).toEqual({ model: null, profile: null });
   });
