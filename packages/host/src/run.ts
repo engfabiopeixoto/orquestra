@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { AGENT_PID_FILE, defaultPipePath, HOST_EXIT_PIPE_BUSY, mainToHostSchema, type HostToMain } from '@orquestra/shared';
 import { createLogger, DEFAULT_BIN_DIR, installCli, type AgentAdapter, type ModelCatalogStoreDeps } from '@orquestra/core';
 import { type HostBridge } from './bridge.js';
+import { RemoteGateway } from './remote/index.js';
 import { startWorkspaceManager } from './workspace-manager.js';
 
 export async function runHost(opts: { adapters: Record<string, AgentAdapter>; modelCatalogDeps?: ModelCatalogStoreDeps }): Promise<void> {
@@ -20,10 +21,18 @@ export async function runHost(opts: { adapters: Record<string, AgentAdapter>; mo
   const { log, close: closeLog } = createLogger({ dir: join(dataDir, 'logs'), name: 'orquestra' });
   const hostLog = log.child({ component: 'host' });
   const installed = installCli({ script: cliScript, binDir: process.env.ORQ_BIN_DIR ?? DEFAULT_BIN_DIR });
+  const remotePort = process.env.ORQ_REMOTE_PORT ? Number(process.env.ORQ_REMOTE_PORT) : undefined;
+  const gateway = new RemoteGateway({
+    dataDir,
+    log: hostLog.child({ component: 'remote' }),
+    electronSend: send,
+    port: Number.isFinite(remotePort) && remotePort! > 0 ? remotePort : undefined,
+    mobileDir: process.env.ORQ_MOBILE_DIR,
+  });
   let bridge: HostBridge;
   try {
-    bridge = await startWorkspaceManager({
-      send,
+    const inner = await startWorkspaceManager({
+      send: (message) => gateway.onHostMessage(message),
       adapters: opts.adapters,
       cliScript: installed.script,
       pipePath: process.env.ORQ_PIPE_PATH ?? defaultPipePath(),
@@ -36,6 +45,7 @@ export async function runHost(opts: { adapters: Record<string, AgentAdapter>; mo
       agyHooksFile: process.env.ORQ_AGY_HOOKS_FILE,
       modelCatalogDeps: opts.modelCatalogDeps,
     });
+    bridge = gateway.wrapBridge(inner);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') {
       hostLog.error({ err: error }, 'pipe do Orquestra já está em uso');
@@ -43,6 +53,11 @@ export async function runHost(opts: { adapters: Record<string, AgentAdapter>; mo
       process.exit(HOST_EXIT_PIPE_BUSY);
     }
     throw error;
+  }
+  try {
+    await gateway.init();
+  } catch (error) {
+    hostLog.warn({ err: error }, 'não foi possível iniciar o gateway remoto');
   }
 
   let stopping = false;

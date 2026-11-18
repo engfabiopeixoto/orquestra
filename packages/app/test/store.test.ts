@@ -24,6 +24,37 @@ describe('estado da interface', () => {
     expect(store.getState().terminals.A).toMatchObject({ id: 'id-novo', epoch: 2, unloaded: false, position: { x: 240, y: 180 } });
   });
 
+  it('terminal.added do próprio comando não duplica nem reposiciona o nó', () => {
+    const store = createAppStore();
+    store.getState().addTerminal(info('A'));
+    store.getState().moveNode('A', { x: 500, y: 300 });
+    store.getState().applyEvent({ type: 'terminal.added', info: info('A'), rect: { x: 10, y: 10, width: 640, height: 400 }, connectedTo: null });
+    store.getState().applyEvent({ type: 'terminal.added', info: info('A'), rect: { x: 10, y: 10, width: 640, height: 400 }, connectedTo: null });
+    expect(Object.keys(store.getState().terminals)).toEqual(['A']);
+    expect(store.getState().terminals.A).toMatchObject({ position: { x: 500, y: 300 }, epoch: 0 });
+  });
+
+  it('terminal.replaced repetido (comando + evento) remonta o xterm uma única vez', () => {
+    const store = createAppStore();
+    store.getState().addTerminal(info('A'));
+    const unloaded = { ...info('A'), state: 'exited' as const, unloaded: true };
+    store.getState().replaceTerminal('A', unloaded);
+    store.getState().applyEvent({ type: 'terminal.replaced', info: unloaded });
+    expect(store.getState().terminals.A).toMatchObject({ epoch: 1, unloaded: true });
+  });
+
+  it('renomear pelo comando e pelo evento (com oldName) não duplica o nó nem mexe nas arestas duas vezes', () => {
+    const store = createAppStore();
+    store.getState().addTerminal(info('A'));
+    store.getState().addTerminal(info('B'));
+    store.getState().addEdge({ a: 'A', b: 'B' });
+    store.getState().replaceTerminal('A', info('C'));
+    store.getState().applyEvent({ type: 'terminal.replaced', info: info('C'), oldName: 'A' });
+    expect(Object.keys(store.getState().terminals).sort()).toEqual(['B', 'C']);
+    expect(store.getState().edges).toEqual([{ a: 'C', b: 'B' }]);
+    expect(store.getState().terminals.C?.epoch).toBe(0);
+  });
+
   it('guarda as 20 respostas mais recentes e limpa ao trocar ou carregar projeto', () => {
     const store = createAppStore();
     for (let index = 0; index < 21; index++) {

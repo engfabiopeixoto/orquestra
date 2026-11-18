@@ -21,7 +21,14 @@ export function flushWorkspaceEvents(store: Pick<AppActions, 'applyEvent'>, work
   transitions.clear();
 }
 
-export function routeEvent(event: HostEvent, deps: { store: Pick<AppActions, 'applyEvent'>; bus: OutputBus }): void {
+export function routeEvent(
+  event: HostEvent,
+  deps: { store: Pick<AppActions, 'applyEvent'>; bus: OutputBus; onWorkspaceActivated?: (workspaceId: string) => void },
+): void {
+  if (event.type === 'workspace.activated') {
+    deps.onWorkspaceActivated?.(event.workspaceId);
+    return;
+  }
   if (event.workspaceId && event.type !== 'terminal.output' && workspaceStore.getState().changing) {
     const buffered = transitions.get(event.workspaceId) ?? [];
     buffered.push(event);

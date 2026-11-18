@@ -98,7 +98,62 @@ function nextPosition(nodes: Array<{ position: Position; size: Size }>): Positio
 
 let noticeId = 0;
 
+function terminalReplaceSignature(oldName: string, info: TerminalInfo): string {
+  return JSON.stringify({
+    oldName,
+    id: info.id ?? null,
+    name: info.name,
+    agent: info.agent,
+    state: info.state,
+    cwd: info.cwd,
+    args: info.args,
+    resume: info.resume,
+    regente: info.regente,
+    monitor: info.monitor,
+    unloaded: Boolean(info.unloaded),
+    blurred: Boolean(info.blurred),
+    locked: Boolean(info.locked),
+    model: info.model ?? null,
+  });
+}
+
 export function createAppStore() {
+  const recentReplacements = new Map<string, string>();
+  const applyTerminalReplacement = (oldName: string, info: TerminalInfo, set: (partial: Partial<AppState>) => void, get: () => AppState) => {
+    const signature = terminalReplaceSignature(oldName, info);
+    if (recentReplacements.get(info.name) === signature) {
+      return;
+    }
+    const { [oldName]: old, ...rest } = get().terminals;
+    if (!old) return;
+    recentReplacements.set(info.name, signature);
+    const isRename = oldName !== info.name;
+    let focusedTerminal = get().focusedTerminal;
+    if (focusedTerminal === oldName) {
+      focusedTerminal = isRename ? info.name : null;
+    }
+
+    set({
+      terminals: {
+        ...rest,
+        [info.name]: {
+          ...old,
+          ...info,
+          unloaded: Boolean(info.unloaded),
+          notice: null,
+          epoch: isRename ? old.epoch : old.epoch + 1,
+          renamedFrom: isRename ? oldName : undefined,
+        },
+      },
+      edges: get().edges.map((edge) => ({
+        a: edge.a === oldName ? info.name : edge.a,
+        b: edge.b === oldName ? info.name : edge.b,
+      })),
+      focusedTerminal,
+      editing: get().editing === oldName ? null : get().editing,
+      selectedNodes: get().selectedNodes.map((name) => name === oldName ? info.name : name),
+    });
+  };
   return createStore<AppState & AppActions>()((set, get) => ({
     project: null,
     terminals: {},
@@ -190,6 +245,7 @@ export function createAppStore() {
       } else if (event.type === 'group.layout') {
         get().applyGroupLayout(event);
       } else if (event.type === 'terminal.state') {
+        recentReplacements.delete(event.name);
         const view = get().terminals[event.name];
         if (view) set({ terminals: { ...get().terminals, [event.name]: { ...view, state: event.state, queued: event.queued } } });
       } else if (event.type === 'terminal.queue') {
@@ -199,6 +255,7 @@ export function createAppStore() {
         answers.push({ askId: event.askId, from: event.from, target: event.target, at: Date.now() });
         set({ answers: answers.slice(-20) });
       } else if (event.type === 'terminal.removed') {
+        recentReplacements.delete(event.name);
         const removedId = get().terminals[event.name]?.id;
         const { [event.name]: _removed, ...terminals } = get().terminals;
         const { [event.name]: _queue, ...queues } = get().queues;
@@ -215,6 +272,7 @@ export function createAppStore() {
         // Mensagem vazia limpa o aviso (ex.: a conversa voltou do segundo plano).
         if (view) set({ terminals: { ...get().terminals, [event.name]: { ...view, notice: event.message || null } } });
       } else if (event.type === 'terminal.model') {
+        recentReplacements.delete(event.name);
         const view = get().terminals[event.name];
         if (view) set({ terminals: { ...get().terminals, [event.name]: { ...view, model: event.model } } });
       } else if (event.type === 'models.catalog') {
@@ -228,17 +286,22 @@ export function createAppStore() {
       } else if (event.type === 'note.removed') {
         get().removeNote(event.name);
       } else if (event.type === 'terminal.added') {
-        const view: TerminalView = {
-          ...event.info,
-          position: { x: event.rect.x, y: event.rect.y },
-          size: { width: event.rect.width, height: event.rect.height },
-          notice: null,
-          epoch: 0,
-        };
+        recentReplacements.delete(event.info.name);
+        const existing = get().terminals[event.info.name];
+        const view: TerminalView = existing
+          ? { ...existing, ...event.info, unloaded: Boolean(event.info.unloaded) }
+          : {
+              ...event.info,
+              unloaded: Boolean(event.info.unloaded),
+              position: { x: event.rect.x, y: event.rect.y },
+              size: { width: event.rect.width, height: event.rect.height },
+              notice: null,
+              epoch: 0,
+            };
         set({ terminals: { ...get().terminals, [event.info.name]: view } });
         if (event.connectedTo) get().addEdge({ a: event.connectedTo, b: event.info.name });
       } else if (event.type === 'terminal.replaced') {
-        get().replaceTerminal(event.info.name, event.info);
+        applyTerminalReplacement(event.oldName ?? event.info.name, event.info, set, get);
       } else if (event.type === 'edge.added') {
         get().addEdge({ a: event.a, b: event.b });
       } else if (event.type === 'edge.removed') {
@@ -246,7 +309,13 @@ export function createAppStore() {
       }
     },
 
-    addTerminal: (info) =>
+    addTerminal: (info) => {
+      recentReplacements.delete(info.name);
+      const existing = get().terminals[info.name];
+      if (existing) {
+        set({ terminals: { ...get().terminals, [info.name]: { ...existing, ...info, unloaded: Boolean(info.unloaded) } } });
+        return;
+      }
       set({
         terminals: {
           ...get().terminals,
@@ -259,37 +328,11 @@ export function createAppStore() {
             epoch: 0,
           },
         },
-      }),
+      });
+    },
 
     replaceTerminal: (oldName, info) => {
-      const { [oldName]: old, ...rest } = get().terminals;
-      if (!old) return;
-      const isRename = oldName !== info.name;
-      let focusedTerminal = get().focusedTerminal;
-      if (focusedTerminal === oldName) {
-        focusedTerminal = isRename ? info.name : null;
-      }
-
-      set({
-        terminals: {
-          ...rest,
-          [info.name]: {
-            ...old,
-            ...info,
-            unloaded: Boolean(info.unloaded),
-            notice: null,
-            epoch: isRename ? old.epoch : old.epoch + 1,
-            renamedFrom: isRename ? oldName : undefined,
-          },
-        },
-        edges: get().edges.map((edge) => ({
-          a: edge.a === oldName ? info.name : edge.a,
-          b: edge.b === oldName ? info.name : edge.b,
-        })),
-        focusedTerminal,
-        editing: get().editing === oldName ? null : get().editing,
-        selectedNodes: get().selectedNodes.map((name) => name === oldName ? info.name : name),
-      });
+      applyTerminalReplacement(oldName, info, set, get);
     },
 
     upsertNote: (note, rect) => {

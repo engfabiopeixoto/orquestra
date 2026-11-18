@@ -59,6 +59,7 @@ export class ActivityMonitor {
   }
 
   observeEvent(event: HostEvent): void {
+    if (event.type === 'workspace.activated') return;
     if (event.workspaceId) {
       const { workspaceId, ...unscoped } = event;
       this.workspace(workspaceId).observeEvent(unscoped);

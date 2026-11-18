@@ -112,6 +112,21 @@ describe('até três workspaces isolados', () => {
     expect(who).toMatchObject({ name: 'codex-1' });
   });
 
+  it('ativar um workspace emite workspace.activated (global, sem sequence) só depois de concluir', async () => {
+    const { command, open, sent } = await setup();
+    const a = await open();
+    const b = await open();
+    const activatedEvents = () => sent.flatMap((message) => (message.kind === 'event' && message.event.type === 'workspace.activated' ? [message.event] : []));
+    const before = activatedEvents().length;
+    const snapshot = await command('workspace.activate', { id: a.workspaceId });
+    const events = activatedEvents().slice(before);
+    expect(events).toEqual([{ type: 'workspace.activated', workspaceId: a.workspaceId }]);
+    expect(snapshot.workspaceId).toBe(a.workspaceId);
+    expect((await command('workspace.list')).selectedId).toBe(a.workspaceId);
+    await command('workspace.activate', { id: b.workspaceId });
+    expect(activatedEvents().at(-1)).toMatchObject({ workspaceId: b.workspaceId });
+  });
+
   it('saída em segundo plano é retida no snapshot e não enviada ao renderer', async () => {
     const { command, open, ptyHost, sent } = await setup();
     const a = await open();

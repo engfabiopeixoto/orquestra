@@ -587,6 +587,29 @@ describe('regente na ponte', () => {
     expect(restartedIndex).toBeLessThan(outputIndex);
   });
 
+  it('comandos da interface emitem terminal.added, terminal.replaced e terminal.removed para os demais clientes', async () => {
+    const { sent, command } = await withRegent();
+    const events = (type: string) => sent.flatMap((message) => (message.kind === 'event' && message.event.type === type ? [message.event as any] : []));
+    await command('ui-1', 'terminal.create', { name: 'S', agent: 'shell' });
+    expect(events('terminal.added').map((event) => event.info.name)).toContain('S');
+    expect(events('terminal.added').find((event) => event.info.name === 'S').rect).toMatchObject({ width: expect.any(Number), height: expect.any(Number) });
+
+    await command('ui-2', 'terminal.rename', { name: 'S', newName: 'T' });
+    expect(events('terminal.replaced')).toContainEqual(expect.objectContaining({ oldName: 'S', info: expect.objectContaining({ name: 'T' }) }));
+
+    await command('ui-3', 'terminal.unload', { name: 'T' });
+    expect(events('terminal.replaced').at(-1)).toMatchObject({ info: { name: 'T', unloaded: true, state: 'exited' } });
+
+    await command('ui-4', 'terminal.restart', { name: 'T' });
+    expect(events('terminal.replaced').at(-1).info.unloaded).toBeFalsy();
+
+    await command('ui-5', 'terminal.duplicate', { name: 'T' });
+    expect(events('terminal.added').length).toBeGreaterThanOrEqual(2);
+
+    await command('ui-6', 'terminal.remove', { name: 'T' });
+    expect(events('terminal.removed')).toContainEqual(expect.objectContaining({ name: 'T' }));
+  });
+
   it('regent.unload e regent.load aplicam as regras, atualizam o canvas e são idempotentes', async () => {
     const { sent, command, ptyHost } = await withRegent();
     await command('4', 'terminal.create', { name: 'S', agent: 'shell' });

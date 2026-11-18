@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./errors": "./src/errors.ts",
     "./host-protocol": "./src/host-protocol.ts",
     "./workspace": "./src/workspace.ts",
     "./args": "./src/args.ts",
@@ -12,7 +13,9 @@
     "./group-layout": "./src/group-layout.ts",
     "./flow": "./src/flow.ts",
     "./flow-contract": "./src/flow-contract.ts",
-    "./models": "./src/models.ts"
+    "./models": "./src/models.ts",
+    "./remote": "./src/remote.ts",
+    "./usage-format": "./src/usage-format.ts"
   },
   "dependencies": {
     "zod": "3.24.1"

@@ -224,7 +224,18 @@ input { font: inherit; color: var(--text); background: var(--bg); border: 1px so
 .notice-error { border-left-color: var(--danger); }
 .notice button { border: none; padding: 0 4px; }
 .dialog-backdrop { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.5); }
-.dialog { width: 420px; display: flex; flex-direction: column; gap: 10px; padding: 18px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+.dialog { width: 420px; max-height: 90vh; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 18px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+.settings-dialog { width: 460px; }
+.remote-section { gap: 8px; padding: 10px 12px; margin: 4px 0 0; }
+.remote-section legend { padding: 0 6px; font-size: 12px; color: var(--muted); }
+.remote-meta { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.remote-actions { display: flex; gap: 8px; }
+.remote-pair-box { display: flex; gap: 10px; align-items: center; padding: 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+.remote-pair-box img { background: #fff; border-radius: 6px; padding: 4px; flex-shrink: 0; }
+.remote-pair-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; font-size: 11px; }
+.remote-devices { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.remote-devices li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; font-size: 12px; }
+.remote-devices li small { display: block; font-size: 10px; }
 .dialog h2 { margin: 0; font-size: 15px; }
 .dialog fieldset { border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; gap: 4px; }
 .dialog label { display: flex; flex-direction: column; gap: 4px; }

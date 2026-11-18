@@ -43,6 +43,17 @@ describe('roteamento de eventos', () => {
     expect(seen).toEqual(['certo']);
     expect(store.applyEvent).not.toHaveBeenCalled();
   });
+  it('workspace.activated vai ao callback (não ao estado) e funciona durante a troca de aba', () => {
+    setActiveWorkspace('A');
+    const bus = new OutputBus();
+    const store = { applyEvent: vi.fn() };
+    const onWorkspaceActivated = vi.fn();
+    routeEvent({ type: 'workspace.activated', workspaceId: 'B' }, { store, bus, onWorkspaceActivated });
+    workspaceStore.setState({ changing: true });
+    routeEvent({ type: 'workspace.activated', workspaceId: 'C' }, { store, bus, onWorkspaceActivated });
+    expect(onWorkspaceActivated.mock.calls).toEqual([['B'], ['C']]);
+    expect(store.applyEvent).not.toHaveBeenCalled();
+  });
   it('saída vai para o barramento; o resto, para o estado', () => {
     const bus = new OutputBus();
     const seen: string[] = [];

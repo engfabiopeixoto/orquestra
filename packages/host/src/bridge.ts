@@ -111,7 +111,7 @@ export type HostBridge = {
 
 type OpenProject = { dir: string; name: string; state: WorkspaceState; saver: WorkspaceSaver; flow?: FlowEngine };
 
-type BridgeMethod = Exclude<HostMethod, 'workspace.list' | 'workspace.activate'>;
+type BridgeMethod = Exclude<HostMethod, 'workspace.list' | 'workspace.activate' | 'remote.status' | 'remote.enable' | 'remote.pair' | 'remote.devices' | 'remote.revoke'>;
 type Handlers = { [M in BridgeMethod]: (params: HostParams<M>) => Promise<HostResult<M>> };
 
 export type UsageState = {
@@ -832,7 +832,16 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
           orquestra.brief(session.name, 'Orquestra', regentGuide());
         }
       }
-      return info(session);
+      const terminalInfo = info(session);
+      const existingRect = requireProject().state.rectOf(name);
+      const layoutRects = Object.values(requireProject().state.layout());
+      const rect = placement?.rect ?? existingRect ?? {
+        x: layoutRects.length ? Math.max(...layoutRects.map((item) => item.x + item.width)) + 40 : 80,
+        y: 80,
+        ...TERMINAL_SIZE,
+      };
+      opts.send({ kind: 'event', event: { type: 'terminal.added', info: terminalInfo, rect, connectedTo: null } });
+      return terminalInfo;
     },
     'terminal.update': async ({ name, ...changes }) => {
       opts.log.info({ terminal: name, method: 'terminal.update', keys: Object.keys(changes) }, 'comando da interface');
@@ -845,7 +854,9 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
       }
       recordPids();
       changed();
-      return info(session);
+      const terminalInfo = info(session);
+      opts.send({ kind: 'event', event: { type: 'terminal.replaced', info: terminalInfo, ...(changes.newName && changes.newName !== name ? { oldName: name } : {}) } });
+      return terminalInfo;
     },
     'terminal.remove': async ({ name }) => {
       opts.log.info({ terminal: name, method: 'terminal.remove' }, 'comando da interface');
@@ -859,13 +870,17 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
       const session = await orquestra.restartTerminal(name);
       recordPids();
       changed();
-      return info(session);
+      const terminalInfo = info(session);
+      opts.send({ kind: 'event', event: { type: 'terminal.replaced', info: terminalInfo } });
+      return terminalInfo;
     },
     'terminal.unload': async ({ name }) => {
       opts.log.info({ terminal: name, method: 'terminal.unload' }, 'comando da interface');
       const session = await orquestra.unloadTerminal(name);
       recordPids(); changed();
-      return info(session);
+      const terminalInfo = info(session);
+      opts.send({ kind: 'event', event: { type: 'terminal.replaced', info: terminalInfo } });
+      return terminalInfo;
     },
     'terminal.presentation': async ({ name, ...changes }) => {
       const current = requireProject();
@@ -893,7 +908,9 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
       if (persona && session.adapter.acceptsPrompts) orquestra.brief(newName, 'Orquestra', personaBrief(persona, { regent: source.regente }));
       else if (source.regente && session.adapter.acceptsPrompts) orquestra.brief(newName, 'Orquestra', regentGuide());
       changed();
-      return { info: info(session), rect };
+      const terminalInfo = info(session);
+      opts.send({ kind: 'event', event: { type: 'terminal.added', info: terminalInfo, rect, connectedTo: null } });
+      return { info: terminalInfo, rect };
     },
     'terminal.model': async ({ name, model }) => {
       opts.log.info({ terminal: name, method: 'terminal.model', model }, 'comando da interface');
@@ -903,7 +920,9 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
       const session = orquestra.renameTerminal(name, newName);
       project?.state.rename(name, newName);
       changed();
-      return info(session);
+      const terminalInfo = info(session);
+      opts.send({ kind: 'event', event: { type: 'terminal.replaced', info: terminalInfo, oldName: name } });
+      return terminalInfo;
     },
     'terminal.input': async ({ name, data }) => {
       const session = requireSession(name);

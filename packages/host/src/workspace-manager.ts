@@ -170,6 +170,7 @@ export async function startWorkspaceManager(opts: HostBridgeOptions): Promise<Ho
       entry.info.status = 'open';
       selectedId = entry.info.id;
       persist();
+      opts.send({ kind: 'event', event: { type: 'workspace.activated', workspaceId: entry.info.id } });
       return { ...snapshot, workspaceId: entry.info.id };
     } catch (error) {
       await entry.bridge.close(); entry.bridge = undefined; entry.info.status = 'paused';

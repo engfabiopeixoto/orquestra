@@ -8,6 +8,7 @@ import { canvasGroupSchema, groupColorSchema, groupKindSchema, groupMemberSchema
 import { flowGraphSchema, flowNodeSchema, flowRunSchema, flowNodeResultSchema, flowSnapshotSchema, flowTestReportSchema, jsonValueSchema } from './flow.js';
 import { browserNodeSchema, browserMethodSchemas } from './browser.js';
 import { modelAgentSchema, modelCatalogSchema, modelNameSchema, terminalModelSchema } from './models.js';
+import { remoteDeviceSchema, remoteErrorPayloadSchema, remotePairResultSchema, remoteStatusSchema } from './remote.js';
 
 export { terminalNameSchema } from './names.js';
 
@@ -225,6 +226,26 @@ export const hostMethodSchemas = {
     params: z.object({ name: z.string().min(1), scope: personaScopeSchema }),
     result: empty,
   },
+  'remote.status': {
+    params: empty,
+    result: remoteStatusSchema,
+  },
+  'remote.enable': {
+    params: z.object({ enabled: z.boolean() }),
+    result: remoteStatusSchema,
+  },
+  'remote.pair': {
+    params: empty,
+    result: remotePairResultSchema,
+  },
+  'remote.devices': {
+    params: empty,
+    result: z.object({ devices: z.array(remoteDeviceSchema) }),
+  },
+  'remote.revoke': {
+    params: z.object({ id: z.string().min(1) }),
+    result: empty,
+  },
 } as const;
 
 export type HostMethod = keyof typeof hostMethodSchemas;
@@ -265,13 +286,24 @@ export const hostEventSchema = z.discriminatedUnion('type', [
   // connectedTo e rect vêm preenchidos quando a nota nasceu de um agente.
   z.object({ type: z.literal('note.changed'), note: noteInfoSchema, connectedTo: z.string().nullable(), rect: rectSchema.nullable(), renamedFrom: z.string().optional() }),
   z.object({ type: z.literal('terminal.added'), info: terminalInfoSchema, rect: rectSchema, connectedTo: z.string().nullable() }),
-  z.object({ type: z.literal('terminal.replaced'), info: terminalInfoSchema }),
+  z.object({ type: z.literal('terminal.replaced'), info: terminalInfoSchema, oldName: z.string().optional() }),
+  z.object({ type: z.literal('workspace.activated'), workspaceId: z.string() }),
   z.object({ type: z.literal('edge.added'), a: z.string(), b: z.string() }),
   z.object({ type: z.literal('edge.removed'), a: z.string(), b: z.string() }),
   z.object({ type: z.literal('note.removed'), name: z.string() }),
   z.object({ type: z.literal('terminal.turn'), name: z.string(), owner: z.enum(['user', 'broker']), outcome: z.enum(['ended', 'failed']) }),
 ]).and(z.object({ workspaceId: z.string().optional(), sequence: z.number().int().nonnegative().optional() }));
 export type HostEvent = z.infer<typeof hostEventSchema>;
+
+export const remoteServerMessageSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('auth-ok'), device: remoteDeviceSchema }),
+  z.object({ type: z.literal('auth-error'), error: remoteErrorPayloadSchema }),
+  z.object({ type: z.literal('response'), id: z.string(), ok: z.literal(true), result: z.unknown() }),
+  z.object({ type: z.literal('response-error'), id: z.string(), error: remoteErrorPayloadSchema }),
+  z.object({ type: z.literal('event'), event: hostEventSchema }),
+  z.object({ type: z.literal('error'), error: remoteErrorPayloadSchema }),
+]);
+export type RemoteServerMessage = z.infer<typeof remoteServerMessageSchema>;
 
 export const mainToHostSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('portal-reply'), id: z.string(), ok: z.boolean(), result: z.unknown().optional(), error: z.object({ code: errorCodeSchema, message: z.string() }).optional() }),

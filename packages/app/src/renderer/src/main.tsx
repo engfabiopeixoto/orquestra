@@ -10,13 +10,23 @@ import { activateWorkspace, openProject, refreshWorkspaces, startupProject } fro
 import { workspaceStore } from './workspaces';
 import { appStore } from './store';
 
-window.orquestra.onEvent((event) => routeEvent(event, { store: appStore.getState(), bus: outputBus }));
+const api = createCommandApi(window.orquestra.invoke);
+
+window.orquestra.onEvent((event) =>
+  routeEvent(event, {
+    store: appStore.getState(),
+    bus: outputBus,
+    onWorkspaceActivated: (workspaceId) => {
+      if (!workspaceStore.getState().changing && appStore.getState().project?.workspaceId !== workspaceId) {
+        void activateWorkspace(workspaceId, api);
+      }
+    },
+  }),
+);
 window.addEventListener('error', (event) => window.orquestra.reportError(event.message, event.error?.stack ?? ''));
 window.addEventListener('unhandledrejection', (event) => window.orquestra.reportError(String(event.reason), ''));
 
 createRoot(document.getElementById('root')!).render(<App />);
-
-const api = createCommandApi(window.orquestra.invoke);
 
 void (async () => {
   await refreshWorkspaces(api);
