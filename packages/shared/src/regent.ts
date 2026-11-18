@@ -12,7 +12,7 @@ export type PersonaScope = z.infer<typeof personaScopeSchema>;
 
 /** Fonte única da ajuda dos comandos de reger: o orq --help e o guia entregue ao regente. */
 export const REGENT_COMMANDS: Array<{ usage: string; description: string }> = [
-  { usage: 'orq new <nome> --agent claude|agy|codex|shell [--persona <f>] [--args "<texto>"] [--cwd <pasta>] [--no-resume]', description: 'cria um terminal ao seu lado, já conectado a você' },
+  { usage: 'orq new <nome> --agent claude|agy|codex|shell [--persona <f>] [--args "<texto>"] [--cwd <pasta>] [--no-resume]', description: 'cria um terminal ao seu lado, já conectado a você; sem --args usa os padrões dos agentes' },
   { usage: 'orq remove <nome>', description: 'remove um terminal ou nota (não você mesmo)' },
   { usage: 'orq restart <terminal>', description: 'reinicia um terminal travado ou sem resposta (falha os pedidos da fila dele)' },
   { usage: 'orq unload <terminal>', description: 'descarrega um terminal ocioso para liberar memória (conexões e configuração ficam)' },

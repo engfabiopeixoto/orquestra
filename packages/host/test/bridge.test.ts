@@ -529,6 +529,16 @@ describe('regente na ponte', () => {
     expect(sent).toContainEqual({ kind: 'event', event: { type: 'notice', level: 'info', message: 'R criou S.' } });
   });
 
+  it('regent.new sem args usa os padrões dos agentes; com args usa os informados', async () => {
+    const { sent, command } = await withRegent();
+    await command('4', 'settings.update', { defaultArgs: { claude: ['--padrao'], agy: [], codex: [] } });
+    await bridge!.dispatchForTest('regent.new', { name: 'C', agent: 'claude' }, { session: 'R' });
+    await bridge!.dispatchForTest('regent.new', { name: 'D', agent: 'claude', args: ['-x'] }, { session: 'R' });
+    const added = (name: string) => sent.find((message) => message.kind === 'event' && message.event.type === 'terminal.added' && message.event.info.name === name);
+    expect(added('C')).toMatchObject({ event: { info: { args: ['--padrao'] } } });
+    expect(added('D')).toMatchObject({ event: { info: { args: ['-x'] } } });
+  });
+
   it('regent.new com função entrega o texto pela fila do novo terminal', async () => {
     const { ptyHost } = await withRegent();
     await bridge!.dispatchForTest('persona.write', { name: 'revisor', text: 'Revise.', global: false }, { session: 'R' });

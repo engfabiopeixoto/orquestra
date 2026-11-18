@@ -301,7 +301,8 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
         agent: params.agent,
         cwd: params.cwd,
         resume: params.resume,
-        args: params.args,
+        // Sem --args, vale o mesmo que a janela de novo terminal: os padrões dos agentes.
+        args: params.args ?? (params.agent === 'shell' ? [] : settings.get().defaultArgs[params.agent]),
         regente: false,
         persona: params.persona,
       });
