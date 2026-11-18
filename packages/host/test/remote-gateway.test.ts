@@ -27,7 +27,7 @@ afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((fn) => fn()));
 });
 
-async function setupGateway(opts?: { authTimeoutMs?: number; rateLimit?: number; pairTtlMs?: number; mobileDir?: string; log?: Logger; port?: number }) {
+async function setupGateway(opts?: { authTimeoutMs?: number; rateLimit?: number; pairTtlMs?: number; mobileDir?: string; log?: Logger; port?: number; outputBufferLimit?: number }) {
   const dataDir = mkdtempSync(join(tmpdir(), 'orq-gateway-test-'));
   const mobileDir = opts?.mobileDir ?? join(dataDir, 'mobile-dist');
   mkdirSync(mobileDir, { recursive: true });
@@ -40,6 +40,7 @@ async function setupGateway(opts?: { authTimeoutMs?: number; rateLimit?: number;
     log: opts?.log ?? silentLogger(),
     electronSend: (msg) => electronSent.push(msg),
     port: opts?.port ?? 0,
+    outputBufferLimit: opts?.outputBufferLimit,
     mobileDir,
     authTimeoutMs: opts?.authTimeoutMs ?? 5_000,
     rateLimit: opts?.rateLimit ?? 5,
@@ -196,7 +197,7 @@ describe('RemoteGateway', () => {
     expect(revokedErr.error.code).toBe('INVALID_TOKEN');
   });
 
-  it('recusa métodos fora da lista (incluindo terminal.send) e mensagens > 64 KB', async () => {
+  it('recusa métodos fora da lista e mensagens > 64 KB', async () => {
     const { electronCommand } = await setupGateway();
     const status = (await electronCommand('remote.enable', { enabled: true })) as { localUrl: string };
     const pair = (await electronCommand('remote.pair')) as { token: string };
@@ -207,7 +208,7 @@ describe('RemoteGateway', () => {
     ws.send(JSON.stringify({ type: 'auth', token: paired.body.deviceToken }));
     await waitForMsg(messages, (m) => m.type === 'auth-ok');
 
-    for (const forbidden of ['files.read', 'settings.update', 'terminal.create', 'terminal.send', 'remote.enable']) {
+    for (const forbidden of ['files.read', 'settings.update', 'terminal.create', 'terminal.remove', 'remote.enable']) {
       const id = `cmd-${forbidden}`;
       ws.send(JSON.stringify({ type: 'command', id, method: forbidden, params: {} }));
       const resp = await waitForMsg(messages, (m) => m.id === id);
@@ -630,5 +631,198 @@ describe('RemoteGateway: ciclo de vida', () => {
     await expect(electronCommand('remote.enable', { enabled: true })).rejects.toMatchObject({ code: 'CONFLICT', message: expect.stringContaining('já está em uso') });
     expect(gateway.status().enabled).toBe(false);
     expect(gateway.store.isEnabled()).toBe(false);
+  });
+});
+
+async function openProjectWithTerminals(electronCommand: (m: string, p?: unknown, w?: string) => Promise<unknown>, dir: string, names: string[]) {
+  mkdirSync(dir, { recursive: true });
+  const snap = (await electronCommand('project.open', { dir })) as ProjectSnapshot;
+  for (const name of names) await electronCommand('terminal.create', { name, agent: 'shell' }, snap.workspaceId);
+  return snap;
+}
+const outputs = (messages: any[], name?: string) =>
+  messages.filter((m) => m.type === 'event' && m.event.type === 'terminal.output' && (!name || m.event.name === name));
+
+describe('RemoteGateway: snapshot remoto filtrado', () => {
+  it('workspace.activate devolve só terminais, filas, nome e sequência: sem notas, fluxo, grupos, layout nem diretório', async () => {
+    const { electronCommand, dataDir } = await setupGateway();
+    const status = (await electronCommand('remote.enable', { enabled: true })) as { localUrl: string };
+    const snap = await openProjectWithTerminals(electronCommand, join(dataDir, 'proj'), ['A']);
+    await electronCommand('note.create', { name: 'segredos', content: 'CONTEUDO-SIGILOSO-DA-NOTA' }, snap.workspaceId);
+    const pair = (await electronCommand('remote.pair')) as { token: string };
+    const client = await authedClient(status.localUrl, pair.token, 'Cel');
+
+    client.ws.send(JSON.stringify({ type: 'command', id: 'act', method: 'workspace.activate', params: { id: snap.workspaceId } }));
+    const resp = await waitForMsg(client.messages, (m) => m.id === 'act');
+    expect(resp.type).toBe('response');
+    expect(Object.keys(resp.result).sort()).toEqual(expect.arrayContaining(['eventSequence', 'name', 'terminals', 'workspaceId']));
+    for (const forbidden of ['notes', 'flow', 'groups', 'layout', 'edges', 'viewport', 'dir']) expect(resp.result, forbidden).not.toHaveProperty(forbidden);
+    expect(resp.result.terminals.map((t: any) => t.name)).toEqual(['A']);
+    expect(JSON.stringify(client.messages)).not.toContain('CONTEUDO-SIGILOSO-DA-NOTA');
+  });
+});
+
+describe('RemoteGateway: assinatura da saída do terminal', () => {
+  it('só entrega saída de terminais assinados, agrupada em lotes, e para ao cancelar a assinatura', async () => {
+    const { electronCommand, dataDir, ptyHost } = await setupGateway();
+    const status = (await electronCommand('remote.enable', { enabled: true })) as { localUrl: string };
+    const snap = await openProjectWithTerminals(electronCommand, join(dataDir, 'proj'), ['A', 'B']);
+    const pair = (await electronCommand('remote.pair')) as { token: string };
+    const client = await authedClient(status.localUrl, pair.token, 'Cel');
+    const [ptyA, ptyB] = [ptyHost.spawned[0]!.pty, ptyHost.spawned[1]!.pty];
+
+    ptyA.emitData('antes-da-assinatura');
+    await new Promise((r) => setTimeout(r, 120));
+    expect(outputs(client.messages)).toHaveLength(0);
+
+    client.ws.send(JSON.stringify({ type: 'subscribe', workspaceId: snap.workspaceId, name: 'A' }));
+    await new Promise((r) => setTimeout(r, 30));
+    for (const piece of ['um-', 'dois-', 'tres']) {
+      ptyA.emitData(piece);
+      await new Promise((r) => setTimeout(r, 8));
+    }
+    ptyB.emitData('terminal-nao-assinado');
+    await waitForMsg(client.messages, (m) => m.type === 'event' && m.event.type === 'terminal.output');
+    await new Promise((r) => setTimeout(r, 120));
+    const received = outputs(client.messages);
+    expect(received).toHaveLength(1);
+    expect(received[0].event).toMatchObject({ name: 'A', data: 'um-dois-tres', workspaceId: snap.workspaceId });
+    expect(outputs(client.messages, 'B')).toHaveLength(0);
+
+    client.ws.send(JSON.stringify({ type: 'unsubscribe', workspaceId: snap.workspaceId, name: 'A' }));
+    await new Promise((r) => setTimeout(r, 30));
+    ptyA.emitData('depois-de-cancelar');
+    await new Promise((r) => setTimeout(r, 120));
+    expect(outputs(client.messages)).toHaveLength(1);
+  });
+
+  it('trocar de workspace encerra as assinaturas; saída de workspace inativo nunca chega', async () => {
+    const { electronCommand, dataDir, ptyHost } = await setupGateway();
+    const status = (await electronCommand('remote.enable', { enabled: true })) as { localUrl: string };
+    const a = await openProjectWithTerminals(electronCommand, join(dataDir, 'a'), ['A']);
+    const b = await openProjectWithTerminals(electronCommand, join(dataDir, 'b'), ['B']); // b fica ativo
+    const pair = (await electronCommand('remote.pair')) as { token: string };
+    const client = await authedClient(status.localUrl, pair.token, 'Cel');
+    const [ptyA, ptyB] = [ptyHost.spawned[0]!.pty, ptyHost.spawned[1]!.pty];
+
+    client.ws.send(JSON.stringify({ type: 'subscribe', workspaceId: a.workspaceId, name: 'A' }));
+    client.ws.send(JSON.stringify({ type: 'subscribe', workspaceId: b.workspaceId, name: 'B' }));
+    await new Promise((r) => setTimeout(r, 30));
+    ptyA.emitData('saida-de-A-inativo');
+    ptyB.emitData('saida-de-B');
+    await waitForMsg(client.messages, (m) => m.type === 'event' && m.event.type === 'terminal.output' && m.event.name === 'B');
+    expect(outputs(client.messages, 'A')).toHaveLength(0);
+
+    client.ws.send(JSON.stringify({ type: 'command', id: 'troca', method: 'workspace.activate', params: { id: a.workspaceId } }));
+    await waitForMsg(client.messages, (m) => m.id === 'troca');
+    ptyB.emitData('B-em-segundo-plano');
+    ptyA.emitData('A-agora-ativo');
+    await waitForMsg(client.messages, (m) => m.type === 'event' && m.event.type === 'terminal.output' && m.event.name === 'A');
+    await new Promise((r) => setTimeout(r, 100));
+    expect(outputs(client.messages, 'B').map((m) => m.event.data)).toEqual(['saida-de-B']);
+  });
+
+  it('acima do limite descarta o buffer, avisa com output-overflow e só volta a transmitir depois de um snapshot novo', async () => {
+    const { electronCommand, dataDir, ptyHost } = await setupGateway({ outputBufferLimit: 200 });
+    const status = (await electronCommand('remote.enable', { enabled: true })) as { localUrl: string };
+    const snap = await openProjectWithTerminals(electronCommand, join(dataDir, 'proj'), ['A']);
+    const pair = (await electronCommand('remote.pair')) as { token: string };
+    const client = await authedClient(status.localUrl, pair.token, 'Cel');
+    const pty = ptyHost.spawned[0]!.pty;
+
+    client.ws.send(JSON.stringify({ type: 'subscribe', workspaceId: snap.workspaceId, name: 'A' }));
+    await new Promise((r) => setTimeout(r, 30));
+    pty.emitData('x'.repeat(500));
+    const overflow = await waitForMsg(client.messages, (m) => m.type === 'output-overflow');
+    expect(overflow).toMatchObject({ name: 'A', workspaceId: snap.workspaceId });
+    await new Promise((r) => setTimeout(r, 120));
+    expect(outputs(client.messages)).toHaveLength(0);
+
+    pty.emitData('ainda-mudo');
+    await new Promise((r) => setTimeout(r, 120));
+    expect(outputs(client.messages)).toHaveLength(0);
+    expect(client.messages.filter((m) => m.type === 'output-overflow')).toHaveLength(1);
+
+    client.ws.send(JSON.stringify({ type: 'command', id: 'snap', method: 'terminal.snapshot', params: { name: 'A' }, workspaceId: snap.workspaceId }));
+    const snapshot = await waitForMsg(client.messages, (m) => m.id === 'snap');
+    expect(snapshot.result.data).toContain('ainda-mudo');
+    pty.emitData('voltou');
+    await waitForMsg(client.messages, (m) => m.type === 'event' && m.event.type === 'terminal.output' && m.event.data === 'voltou');
+  });
+
+  it('a saída já contida no snapshot não é reenviada depois dele', async () => {
+    const { electronCommand, dataDir, ptyHost } = await setupGateway();
+    const status = (await electronCommand('remote.enable', { enabled: true })) as { localUrl: string };
+    const snap = await openProjectWithTerminals(electronCommand, join(dataDir, 'proj'), ['A']);
+    const pair = (await electronCommand('remote.pair')) as { token: string };
+    const client = await authedClient(status.localUrl, pair.token, 'Cel');
+    client.ws.send(JSON.stringify({ type: 'subscribe', workspaceId: snap.workspaceId, name: 'A' }));
+    await new Promise((r) => setTimeout(r, 30));
+    ptyHost.spawned[0]!.pty.emitData('linha-no-retrato');
+    client.ws.send(JSON.stringify({ type: 'command', id: 'snap', method: 'terminal.snapshot', params: { name: 'A' }, workspaceId: snap.workspaceId }));
+    const snapshot = await waitForMsg(client.messages, (m) => m.id === 'snap');
+    expect(snapshot.result.data).toContain('linha-no-retrato');
+    await new Promise((r) => setTimeout(r, 150));
+    expect(outputs(client.messages).some((m) => m.event.data.includes('linha-no-retrato'))).toBe(false);
+  });
+
+  it('assinar sem autenticar fecha a conexão com 4001', async () => {
+    const { electronCommand } = await setupGateway();
+    const status = (await electronCommand('remote.enable', { enabled: true })) as { localUrl: string };
+    const { ws } = connectWs(status.localUrl);
+    await new Promise<void>((r) => ws.on('open', () => r()));
+    const closed = new Promise<number>((r) => ws.on('close', (code) => r(code)));
+    ws.send(JSON.stringify({ type: 'subscribe', workspaceId: 'w', name: 'A' }));
+    expect(await closed).toBe(4001);
+  });
+});
+
+describe('RemoteGateway: terminal.send, terminal.key e recarga', () => {
+  it('terminal.send digita a mensagem e envia Enter; terminal.key envia a tecla; mais de 16 KB é recusado', async () => {
+    const { electronCommand, dataDir, ptyHost } = await setupGateway();
+    const status = (await electronCommand('remote.enable', { enabled: true })) as { localUrl: string };
+    const snap = await openProjectWithTerminals(electronCommand, join(dataDir, 'proj'), ['A']);
+    const pair = (await electronCommand('remote.pair')) as { token: string };
+    const client = await authedClient(status.localUrl, pair.token, 'Cel');
+    const pty = ptyHost.spawned[0]!.pty;
+    const send = async (id: string, method: string, params: unknown) => {
+      client.ws.send(JSON.stringify({ type: 'command', id, method, params, workspaceId: snap.workspaceId }));
+      return waitForMsg(client.messages, (m) => m.id === id);
+    };
+
+    expect((await send('s1', 'terminal.send', { name: 'A', text: 'echo oi' })).type).toBe('response');
+    expect(pty.written.slice(-2)).toEqual(['echo oi', '\r']);
+    expect((await send('k1', 'terminal.key', { name: 'A', key: 'ArrowUp' })).type).toBe('response');
+    expect(pty.written.at(-1)).toBe('\x1b[A');
+    const tooBig = await send('s2', 'terminal.send', { name: 'A', text: 'y'.repeat(16 * 1024 + 1) });
+    expect(tooBig.error.code).toBe('USAGE');
+    expect((await send('k2', 'terminal.key', { name: 'A', key: 'F13' })).error.code).toBe('USAGE');
+  });
+
+  it('descarregar e recarregar pelo celular: o cartão volta a Ocioso e o terminal reabre', async () => {
+    const { electronCommand, dataDir, ptyHost } = await setupGateway();
+    const status = (await electronCommand('remote.enable', { enabled: true })) as { localUrl: string };
+    const snap = await openProjectWithTerminals(electronCommand, join(dataDir, 'proj'), ['A']);
+    const pair = (await electronCommand('remote.pair')) as { token: string };
+    const client = await authedClient(status.localUrl, pair.token, 'Cel');
+    ptyHost.spawned[0]!.pty.emitData('pronto> ');
+    await new Promise((r) => setTimeout(r, 60));
+    const send = async (id: string, method: string, params: unknown) => {
+      client.ws.send(JSON.stringify({ type: 'command', id, method, params, workspaceId: snap.workspaceId }));
+      return waitForMsg(client.messages, (m) => m.id === id);
+    };
+
+    const unloaded = await send('u', 'terminal.unload', { name: 'A' });
+    expect(unloaded.result).toMatchObject({ name: 'A', unloaded: true, state: 'exited' });
+    await waitForMsg(client.messages, (m) => m.type === 'event' && m.event.type === 'terminal.replaced' && m.event.info.unloaded === true);
+
+    const reloaded = await send('r', 'terminal.restart', { name: 'A' });
+    expect(reloaded.result.unloaded).toBeFalsy();
+    expect(ptyHost.spawned).toHaveLength(2);
+    ptyHost.spawned[1]!.pty.emitData('pronto> ');
+    await waitForMsg(client.messages, (m) => m.type === 'event' && m.event.type === 'terminal.state' && m.event.name === 'A' && m.event.state === 'idle');
+    const replaced = client.messages.filter((m) => m.type === 'event' && m.event.type === 'terminal.replaced');
+    expect(replaced.at(-1).event.info).toMatchObject({ name: 'A' });
+    expect(replaced.at(-1).event.info.unloaded).toBeFalsy();
   });
 });

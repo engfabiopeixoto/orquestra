@@ -91,6 +91,10 @@ export const workspaceInfoSchema = z.object({
 });
 export type WorkspaceInfo = z.infer<typeof workspaceInfoSchema>;
 
+export const TERMINAL_SEND_MAX_CHARS = 16 * 1024;
+export const terminalKeySchema = z.enum(['Enter', 'Escape', 'Tab', 'ArrowUp', 'ArrowDown', 'CtrlC', 'Digit1', 'Digit2', 'Digit3']);
+export type TerminalKey = z.infer<typeof terminalKeySchema>;
+
 export const hostMethodSchemas = {
   'portal.register': { params: browserNodeSchema, result: empty },
   'portal.registry': { params: empty, result: z.object({ portals: z.array(browserNodeSchema) }) },
@@ -179,6 +183,10 @@ export const hostMethodSchemas = {
   'terminal.model': { params: z.object({ name: z.string().min(1), model: modelNameSchema }), result: terminalInfoSchema },
   'terminal.rename': { params: z.object({ name: z.string().min(1), newName: terminalNameSchema }), result: terminalInfoSchema },
   'terminal.input': { params: z.object({ name: z.string().min(1), data: z.string() }), result: empty },
+  // Mensagem do celular: cola o texto como o desktop colaria e envia Enter.
+  'terminal.send': { params: z.object({ name: z.string().min(1), text: z.string().min(1).max(TERMINAL_SEND_MAX_CHARS, 'Mensagem acima de 16 KB.') }), result: empty },
+  // Tecla nomeada: o núcleo escolhe o formato que o agente entende (VT comum ou Win32 do Codex).
+  'terminal.key': { params: z.object({ name: z.string().min(1), key: terminalKeySchema }), result: empty },
   'terminal.resize': {
     params: z.object({ name: z.string().min(1), cols: z.number().int().min(2).max(500), rows: z.number().int().min(1).max(300) }),
     result: empty,
@@ -302,6 +310,8 @@ export const remoteServerMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('response-error'), id: z.string(), error: remoteErrorPayloadSchema }),
   z.object({ type: z.literal('event'), event: hostEventSchema }),
   z.object({ type: z.literal('error'), error: remoteErrorPayloadSchema }),
+  // A saída acumulada passou do limite e foi descartada: o cliente pede um terminal.snapshot novo.
+  z.object({ type: z.literal('output-overflow'), name: z.string(), workspaceId: z.string().optional() }),
 ]);
 export type RemoteServerMessage = z.infer<typeof remoteServerMessageSchema>;
 

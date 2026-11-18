@@ -11,6 +11,7 @@
     "@orquestra/shared": "*",
     "react": "19.3.0",
     "react-dom": "19.3.0",
+    "@xterm/xterm": "5.5.0",
     "zod": "3.24.1"
   },
   "devDependencies": {

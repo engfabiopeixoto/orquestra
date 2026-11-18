@@ -1,9 +1,16 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { HostEvent, ProjectSnapshot, TerminalInfo, WorkspaceInfo } from '@orquestra/shared/host-protocol';
+import type { HostEvent, TerminalInfo, WorkspaceInfo } from '@orquestra/shared/host-protocol';
+import type { RemoteSnapshot } from '@orquestra/shared/remote-snapshot';
 import { App, PairScreen, UsageSection } from '../src/App';
 import { RemoteWsClient } from '../src/ws-client';
+
+const fakeView = vi.hoisted(() => ({ load: vi.fn(), write: vi.fn(), dispose: vi.fn() }));
+vi.mock('../src/terminal-view', () => ({
+  createXtermView: () => fakeView,
+  fontSizeForWidth: () => ({ fontSize: 12, scrollsHorizontally: false }),
+}));
 
 const device = { id: 'dev-1', name: 'Pixel', createdAt: '2026-11-18T00:00:00Z', lastSeenAt: null };
 
@@ -16,6 +23,7 @@ class FakeWebSocket {
   onerror: ((e: unknown) => void) | null = null;
   onmessage: ((e: { data: unknown }) => void) | null = null;
   readonly commands: Array<{ method: string; params: any }> = [];
+  readonly subscriptions: Array<{ type: string; workspaceId: string; name: string }> = [];
   constructor(readonly url: string) {
     FakeWebSocket.instances.push(this);
     queueMicrotask(() => {
@@ -26,6 +34,7 @@ class FakeWebSocket {
   send(data: string) {
     const msg = JSON.parse(data);
     if (msg.type === 'auth') return void queueMicrotask(() => this.push({ type: 'auth-ok', device }));
+    if (msg.type === 'subscribe' || msg.type === 'unsubscribe') return void this.subscriptions.push(msg);
     this.commands.push({ method: msg.method, params: msg.params });
     void Promise.resolve(FakeWebSocket.handler(msg.method, msg.params)).then((result) => this.push({ type: 'response', id: msg.id, ok: true, result }));
   }
@@ -47,12 +56,10 @@ const term = (name: string, extra: Partial<TerminalInfo> = {}): TerminalInfo => 
 const workspace = (id: string, name: string, extra: Partial<WorkspaceInfo> = {}): WorkspaceInfo => ({
   id, dir: `C:/${name}`, name, status: 'open', terminalCount: 2, busy: 0, waiting: 1, ...extra,
 });
-const snapshot = (id: string, name: string, terminals: TerminalInfo[], eventSequence = 0): ProjectSnapshot => ({
-  workspaceId: id, dir: `C:/${name}`, name, terminals, notes: [], edges: [], layout: {}, viewport: { x: 0, y: 0, zoom: 1 }, eventSequence,
-});
+const snapshot = (id: string, name: string, terminals: TerminalInfo[], eventSequence = 0): RemoteSnapshot => ({ workspaceId: id, name, terminals, eventSequence });
 
 const WORKSPACES = [workspace('w1', 'Alpha'), workspace('w2', 'Beta')];
-const SNAPSHOTS: Record<string, ProjectSnapshot> = {
+const SNAPSHOTS: Record<string, RemoteSnapshot> = {
   w1: snapshot('w1', 'Alpha', [term('arquiteto'), term('revisor', { state: 'waiting' })], 5),
   w2: snapshot('w2', 'Beta', [term('solo')], 1),
 };
@@ -63,6 +70,7 @@ function setupHost(extra?: (method: string, params: any) => unknown) {
     if (custom !== undefined) return custom;
     if (method === 'workspace.list') return { workspaces: WORKSPACES, selectedId: 'w1' };
     if (method === 'workspace.activate') return SNAPSHOTS[params.id];
+    if (method === 'terminal.snapshot') return { data: 'retrato', cols: 100, rows: 30 };
     if (method.startsWith('usage.')) return { checkedAt: '2026-11-18T00:00:00Z', windows: [], credits: null, details: [] };
     return {};
   };
@@ -70,6 +78,9 @@ function setupHost(extra?: (method: string, params: any) => unknown) {
 
 beforeEach(() => {
   FakeWebSocket.instances = [];
+  fakeView.load.mockClear();
+  fakeView.write.mockClear();
+  fakeView.dispose.mockClear();
   localStorage.clear();
   window.history.replaceState({}, '', '/');
   vi.stubGlobal('WebSocket', FakeWebSocket);
@@ -177,6 +188,64 @@ describe('App', () => {
     socket.event({ type: 'terminal.state', name: 'arquiteto', state: 'waiting', queued: 0, workspaceId: 'w1', sequence: 6 });
     await act(async () => release!());
     expect((await screen.findByTestId('agent-state-arquiteto')).textContent).toBe('Esperando você');
+  });
+
+  it('evento que chega entre a resposta de workspace.activate e o re-render não é descartado', async () => {
+    storeAuth();
+    let release: (() => void) | undefined;
+    setupHost((method, params) => {
+      if (method === 'workspace.activate') return new Promise((resolve) => { release = () => resolve(SNAPSHOTS[params.id]); });
+      return undefined;
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByTestId('workspace-card-w1'));
+    await waitFor(() => expect(release).toBeDefined());
+    const socket = lastSocket();
+    await act(async () => {
+      release!();
+      // A continuação de openWorkspace já rodou, mas o React ainda não renderizou (tudo dentro do mesmo act).
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      socket.push({ type: 'event', event: { type: 'terminal.state', name: 'arquiteto', state: 'busy', queued: 0, workspaceId: 'w1', sequence: 7 } });
+    });
+    expect((await screen.findByTestId('agent-state-arquiteto')).textContent).toBe('Ocupado');
+  });
+
+  it('toca no agente para abrir o terminal: assina a saída, mostra o retrato e a saída ao vivo; overflow pede snapshot novo; voltar cancela a assinatura', async () => {
+    storeAuth();
+    render(<App />);
+    fireEvent.click(await screen.findByTestId('workspace-card-w1'));
+    fireEvent.click(await screen.findByTestId('agent-card-revisor'));
+    expect(await screen.findByTestId('terminal-screen')).toBeTruthy();
+    const socket = lastSocket();
+    await waitFor(() => expect(fakeView.load).toHaveBeenCalledWith('retrato', 100, 30, expect.any(Number)));
+    expect(socket.subscriptions).toContainEqual({ type: 'subscribe', workspaceId: 'w1', name: 'revisor' });
+    expect(screen.getByTestId('terminal-state').textContent).toBe('Esperando você');
+
+    socket.event({ type: 'terminal.output', name: 'revisor', data: 'olá do agente', workspaceId: 'w1', sequence: 20 });
+    expect(fakeView.write).toHaveBeenCalledWith('olá do agente');
+    socket.event({ type: 'terminal.output', name: 'revisor', data: 'de outro workspace', workspaceId: 'w2' });
+    expect(fakeView.write).not.toHaveBeenCalledWith('de outro workspace');
+
+    act(() => socket.push({ type: 'output-overflow', name: 'revisor', workspaceId: 'w1' }));
+    await waitFor(() => expect(socket.commands.filter((c) => c.method === 'terminal.snapshot')).toHaveLength(2));
+
+    // O estado do cartão continua ao vivo dentro da tela do terminal.
+    socket.event({ type: 'terminal.state', name: 'revisor', state: 'busy', queued: 0, workspaceId: 'w1', sequence: 21 });
+    expect(screen.getByTestId('terminal-state').textContent).toBe('Ocupado');
+
+    fireEvent.click(screen.getByTestId('terminal-back'));
+    expect(await screen.findByTestId('active-workspace-title')).toBeTruthy();
+    expect(socket.subscriptions).toContainEqual({ type: 'unsubscribe', workspaceId: 'w1', name: 'revisor' });
+  });
+
+  it('terminal removido no PC fecha a tela do terminal', async () => {
+    storeAuth();
+    render(<App />);
+    fireEvent.click(await screen.findByTestId('workspace-card-w1'));
+    fireEvent.click(await screen.findByTestId('agent-card-revisor'));
+    await screen.findByTestId('terminal-screen');
+    lastSocket().event({ type: 'terminal.removed', name: 'revisor', workspaceId: 'w1', sequence: 30 });
+    expect(await screen.findByTestId('active-workspace-title')).toBeTruthy();
   });
 
   it('quando o PC ativa outro workspace, o celular que vê os agentes acompanha; na lista só atualiza o destaque', async () => {

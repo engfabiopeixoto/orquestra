@@ -14,8 +14,12 @@ import {
   REMOTE_AUTH_TIMEOUT_MS,
   REMOTE_DEFAULT_PORT,
   REMOTE_MAX_MESSAGE_BYTES,
+  REMOTE_MAX_SUBSCRIPTIONS,
+  REMOTE_OUTPUT_BUFFER_LIMIT,
+  REMOTE_OUTPUT_FLUSH_MS,
   remoteClientMessageSchema,
   remotePairRequestSchema,
+  toRemoteSnapshot,
   type HostToMain,
   type MainToHost,
   type RemoteDevice,
@@ -93,6 +97,12 @@ type ClientConn = {
   device: RemoteDevice | null;
   authTimer: NodeJS.Timeout | null;
   subscriptions: Set<string>;
+  /** Saída pendente por terminal, agrupada a cada REMOTE_OUTPUT_FLUSH_MS. */
+  output: Map<string, { name: string; workspaceId?: string; data: string; sequence?: number }>;
+  outputBytes: number;
+  outputTimer: NodeJS.Timeout | null;
+  /** Terminais cuja saída foi descartada por excesso: ficam mudos até o cliente pedir um snapshot novo. */
+  overflowed: Set<string>;
 };
 
 export type RemoteGatewayOptions = {
@@ -107,6 +117,8 @@ export type RemoteGatewayOptions = {
   rateLimit?: number;
   rateWindowMs?: number;
   allowedOrigins?: string[];
+  outputFlushMs?: number;
+  outputBufferLimit?: number;
   persistEnabledState?: boolean;
   now?: () => number;
 };
@@ -118,6 +130,8 @@ export class RemoteGateway {
   private readonly mobileDir: string;
   private readonly authTimeoutMs: number;
   private readonly persistEnabledState: boolean;
+  private readonly outputFlushMs: number;
+  private readonly outputBufferLimit: number;
   private readonly extraAllowedOrigins: Set<string>;
   private server: Server | null = null;
   private wss: WebSocketServer | null = null;
@@ -126,7 +140,7 @@ export class RemoteGateway {
   private bridge: HostBridge | null = null;
   private lifecycle: Promise<unknown> = Promise.resolve();
   private readonly clients = new Map<string, ClientConn>();
-  private readonly pending = new Map<string, { connId: string; clientCmdId: string }>();
+  private readonly pending = new Map<string, { connId: string; clientCmdId: string; method: string; terminal?: string }>();
 
   constructor(private readonly opts: RemoteGatewayOptions) {
     const bindHost = (opts.host ?? '127.0.0.1').trim();
@@ -139,6 +153,8 @@ export class RemoteGateway {
     this.mobileDir = opts.mobileDir?.trim() || defaultMobileDir();
     this.authTimeoutMs = opts.authTimeoutMs ?? REMOTE_AUTH_TIMEOUT_MS;
     this.persistEnabledState = opts.persistEnabledState ?? true;
+    this.outputFlushMs = opts.outputFlushMs ?? REMOTE_OUTPUT_FLUSH_MS;
+    this.outputBufferLimit = opts.outputBufferLimit ?? REMOTE_OUTPUT_BUFFER_LIMIT;
     this.extraAllowedOrigins = new Set(opts.allowedOrigins ?? []);
     this.store = new RemoteDeviceStore({
       dataDir: opts.dataDir,
@@ -218,6 +234,7 @@ export class RemoteGateway {
           clearTimeout(conn.authTimer);
           conn.authTimer = null;
         }
+        this.clearOutput(conn);
         this.clients.delete(conn.id);
         this.clearPendingFor(conn.id);
         this.sendWs(conn.ws, {
@@ -231,6 +248,48 @@ export class RemoteGateway {
       }
     }
     this.opts.log.info({ deviceId: id }, 'dispositivo remoto revogado');
+  }
+
+  private clearOutput(conn: ClientConn): void {
+    if (conn.outputTimer) clearTimeout(conn.outputTimer);
+    conn.outputTimer = null;
+    conn.output.clear();
+    conn.outputBytes = 0;
+  }
+
+  private flushOutput(conn: ClientConn): void {
+    if (conn.outputTimer) clearTimeout(conn.outputTimer);
+    conn.outputTimer = null;
+    const entries = [...conn.output.values()];
+    conn.output.clear();
+    conn.outputBytes = 0;
+    if (!conn.device) return;
+    for (const entry of entries) {
+      this.sendWs(conn.ws, {
+        type: 'event',
+        event: { type: 'terminal.output', name: entry.name, data: entry.data, workspaceId: entry.workspaceId, sequence: entry.sequence },
+      });
+    }
+  }
+
+  /** Agrupa a saída por conexão; passou do limite, descarta tudo e avisa para pedir snapshot novo. */
+  private queueOutput(conn: ClientConn, event: { name: string; data: string; workspaceId?: string; sequence?: number }): void {
+    if (conn.overflowed.has(event.name)) return;
+    const key = `${event.workspaceId ?? ''}:${event.name}`;
+    const current = conn.output.get(key);
+    conn.output.set(key, { name: event.name, workspaceId: event.workspaceId, data: (current?.data ?? '') + event.data, sequence: event.sequence });
+    conn.outputBytes += event.data.length;
+    if (conn.outputBytes > this.outputBufferLimit) {
+      const dropped = [...conn.output.values()];
+      this.clearOutput(conn);
+      for (const entry of dropped) {
+        conn.overflowed.add(entry.name);
+        this.sendWs(conn.ws, { type: 'output-overflow', name: entry.name, workspaceId: entry.workspaceId });
+      }
+      this.opts.log.warn({ deviceId: conn.device?.id }, 'saída remota descartada por excesso de buffer');
+      return;
+    }
+    if (!conn.outputTimer) conn.outputTimer = setTimeout(() => this.flushOutput(conn), this.outputFlushMs);
   }
 
   private clearPendingFor(connId: string): void {
@@ -337,6 +396,7 @@ export class RemoteGateway {
         conn.authTimer = null;
       }
       conn.device = null;
+      this.clearOutput(conn);
       this.clients.delete(conn.id);
       this.clearPendingFor(conn.id);
       try { conn.ws.close(1000, 'Acesso remoto desligado'); } catch {}
@@ -567,6 +627,10 @@ export class RemoteGateway {
       ws,
       device: null,
       subscriptions: new Set(),
+      output: new Map(),
+      outputBytes: 0,
+      outputTimer: null,
+      overflowed: new Set(),
       authTimer: setTimeout(() => {
         if (!conn.device) {
           this.clients.delete(connId);
@@ -591,6 +655,7 @@ export class RemoteGateway {
         conn.authTimer = null;
       }
       conn.device = null;
+      this.clearOutput(conn);
       this.clients.delete(connId);
       this.clearPendingFor(connId);
     });
@@ -652,6 +717,20 @@ export class RemoteGateway {
         return;
       }
 
+      if (msg.type === 'subscribe') {
+        if (!conn.subscriptions.has(`${msg.workspaceId}:${msg.name}`) && conn.subscriptions.size >= REMOTE_MAX_SUBSCRIPTIONS) {
+          this.sendWs(ws, { type: 'error', error: { code: 'USAGE', message: 'Assinaturas demais nesta conexão.' } });
+          return;
+        }
+        conn.subscriptions.add(`${msg.workspaceId}:${msg.name}`);
+        return;
+      }
+      if (msg.type === 'unsubscribe') {
+        conn.subscriptions.delete(`${msg.workspaceId}:${msg.name}`);
+        for (const [key, entry] of conn.output) if (entry.name === msg.name && key.startsWith(`${msg.workspaceId}:`)) conn.output.delete(key);
+        conn.overflowed.delete(msg.name);
+        return;
+      }
       if (msg.type !== 'command') {
         this.sendWs(ws, { type: 'error', error: { code: 'USAGE', message: 'Cliente já autenticado.' } });
         return;
@@ -712,7 +791,7 @@ export class RemoteGateway {
     }
 
     const internalId = `remote:${conn.id}:${randomUUID()}`;
-    this.pending.set(internalId, { connId: conn.id, clientCmdId: cmd.id });
+    this.pending.set(internalId, { connId: conn.id, clientCmdId: cmd.id, method: cmd.method, terminal: terminalName });
     try {
       await this.bridge.handle({
         kind: 'command',
@@ -747,7 +826,21 @@ export class RemoteGateway {
         const conn = this.clients.get(target.connId);
         if (conn && conn.device) {
           if (message.kind === 'response') {
-            this.sendWs(conn.ws, { type: 'response', id: target.clientCmdId, ok: true, result: message.result });
+            let result = message.result;
+            if (target.method === 'workspace.activate') {
+              try {
+                result = toRemoteSnapshot(message.result as Parameters<typeof toRemoteSnapshot>[0]);
+              } catch (error) {
+                this.opts.log.error({ err: error }, 'snapshot remoto inválido');
+                this.sendWs(conn.ws, { type: 'response-error', id: target.clientCmdId, error: { code: 'INTERNAL', message: 'Resposta inválida do núcleo.' } });
+                return;
+              }
+            } else if (target.method === 'terminal.snapshot' && target.terminal) {
+              // A saída acumulada até aqui já está no retrato: descartar evita linhas repetidas e libera o terminal mudo.
+              for (const [key, entry] of conn.output) if (entry.name === target.terminal) conn.output.delete(key);
+              conn.overflowed.delete(target.terminal);
+            }
+            this.sendWs(conn.ws, { type: 'response', id: target.clientCmdId, ok: true, result });
           } else {
             this.sendWs(conn.ws, { type: 'response-error', id: target.clientCmdId, error: message.error });
           }
@@ -761,14 +854,24 @@ export class RemoteGateway {
 
     if (message.kind === 'event') {
       this.opts.electronSend(message);
-      if (!isRemoteAllowedEvent(message.event.type)) return;
+      const event = message.event;
+      if (!isRemoteAllowedEvent(event.type)) return;
+      if (event.type === 'workspace.activated') {
+        // As assinaturas valem para o workspace ativo: trocar de workspace as encerra.
+        for (const conn of this.clients.values()) {
+          for (const key of [...conn.subscriptions]) if (!key.startsWith(`${event.workspaceId}:`)) conn.subscriptions.delete(key);
+          for (const [key, entry] of [...conn.output]) if (entry.workspaceId !== event.workspaceId) conn.output.delete(key);
+          conn.overflowed.clear();
+        }
+      }
       for (const conn of this.clients.values()) {
         if (!conn.device) continue;
-        if (message.event.type === 'terminal.output') {
-          const subKey = `${message.event.workspaceId ?? ''}:${message.event.name}`;
-          if (!conn.subscriptions.has(subKey)) continue;
+        if (event.type === 'terminal.output') {
+          if (!conn.subscriptions.has(`${event.workspaceId ?? ''}:${event.name}`)) continue;
+          this.queueOutput(conn, event);
+          continue;
         }
-        this.sendWs(conn.ws, { type: 'event', event: message.event });
+        this.sendWs(conn.ws, { type: 'event', event });
       }
       return;
     }

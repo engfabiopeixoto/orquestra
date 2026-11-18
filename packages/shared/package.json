@@ -15,6 +15,8 @@
     "./flow-contract": "./src/flow-contract.ts",
     "./models": "./src/models.ts",
     "./remote": "./src/remote.ts",
+    "./remote-snapshot": "./src/remote-snapshot.ts",
+    "./win32-input": "./src/win32-input.ts",
     "./usage-format": "./src/usage-format.ts"
   },
   "dependencies": {

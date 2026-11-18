@@ -2,14 +2,15 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   HostEvent,
   HostResult,
-  ProjectSnapshot,
   QueueEntry,
   TerminalInfo,
   WorkspaceInfo,
 } from '@orquestra/shared/host-protocol';
 import { formatResetTime, formatWindowLabel } from '@orquestra/shared/usage-format';
 import { remotePairResponseSchema } from '@orquestra/shared/remote';
+import type { RemoteSnapshot } from '@orquestra/shared/remote-snapshot';
 import { applyEventToSnapshot, replayEvents } from './snapshot';
+import { TerminalScreen, type OutputBus, type OutputSignal } from './TerminalScreen';
 import { clearStoredAuth, loadStoredAuth, saveStoredAuth, type StoredAuth } from './storage';
 import { effectiveTerminalState, modelLabelOf, sortTerminalsForMobile, terminalStateLabel } from './terminals';
 import { RemoteWsClient, type ConnectionStatus } from './ws-client';
@@ -237,7 +238,7 @@ export function App() {
   const [statusReason, setStatusReason] = useState<string | null>(null);
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [activeSnapshot, setActiveSnapshot] = useState<ProjectSnapshot | null>(null);
+  const [activeSnapshot, setActiveSnapshot] = useState<RemoteSnapshot | null>(null);
   const [notices, setNotices] = useState<Record<string, string>>({});
   const [loadingList, setLoadingList] = useState(false);
   const [activatingId, setActivatingId] = useState<string | null>(null);
@@ -245,6 +246,17 @@ export function App() {
 
   const activeWorkspaceIdRef = useRef<string | null>(null);
   activeWorkspaceIdRef.current = activeSnapshot?.workspaceId ?? null;
+  const [openTerminal, setOpenTerminal] = useState<string | null>(null);
+  const outputListeners = useRef(new Set<(signal: OutputSignal) => void>());
+  const bus = useMemo<OutputBus>(
+    () => ({
+      subscribe: (listener) => {
+        outputListeners.current.add(listener);
+        return () => void outputListeners.current.delete(listener);
+      },
+    }),
+    [],
+  );
   const activatingRef = useRef<string | null>(null);
   const bufferedEventsRef = useRef<HostEvent[]>([]);
   const openWorkspaceRef = useRef<(id: string) => Promise<void>>(async () => {});
@@ -262,7 +274,17 @@ export function App() {
           setAuth((prev) => (prev ? { ...prev, device } : prev));
         }
       },
+      onOutputOverflow: ({ name }) => {
+        for (const listener of outputListeners.current) listener({ kind: 'overflow', name });
+      },
       onEvent: (event: HostEvent) => {
+        if (event.type === 'terminal.output') {
+          // A saída só importa à tela do terminal aberto, e só do workspace que o celular está vendo.
+          if (event.workspaceId === activeWorkspaceIdRef.current) {
+            for (const listener of outputListeners.current) listener({ kind: 'output', event });
+          }
+          return;
+        }
         if (event.type === 'workspace.activated') {
           const viewing = activeWorkspaceIdRef.current;
           const activating = activatingRef.current;
@@ -338,7 +360,10 @@ export function App() {
       const buffered = bufferedEventsRef.current;
       bufferedEventsRef.current = [];
       activatingRef.current = null;
+      // Atualiza a referência junto com o estado: evento que chegue antes do re-render não pode ser descartado.
+      activeWorkspaceIdRef.current = snap.workspaceId;
       setActiveSnapshot(replayEvents(snap, buffered));
+      setOpenTerminal((current) => (current && snap.terminals.some((t) => t.name === current) ? current : null));
       setNotices({});
       setSelectedId(id);
     } catch (err) {
@@ -395,6 +420,22 @@ export function App() {
     );
   }
 
+  const openedTerminal = openTerminal && activeSnapshot ? activeSnapshot.terminals.find((t) => t.name === openTerminal) : undefined;
+  if (client && activeSnapshot?.workspaceId && openedTerminal) {
+    return (
+      <div className="mobile-shell terminal-shell">
+        <TerminalScreen
+          client={client}
+          workspaceId={activeSnapshot.workspaceId}
+          terminal={openedTerminal}
+          status={status}
+          bus={bus}
+          onBack={() => setOpenTerminal(null)}
+        />
+      </div>
+    );
+  }
+
   const sortedTerminals: TerminalInfo[] = activeSnapshot ? sortTerminalsForMobile(activeSnapshot.terminals) : [];
 
   return (
@@ -408,6 +449,7 @@ export function App() {
               data-testid="mobile-back-workspaces"
               onClick={() => {
                 setActiveSnapshot(null);
+                setOpenTerminal(null);
                 void refreshWorkspaces();
               }}
             >
@@ -504,6 +546,13 @@ export function App() {
                     key={terminal.name}
                     className={`card agent-card state-${stateKind}`}
                     data-testid={`agent-card-${terminal.name}`}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Abrir terminal ${terminal.name}`}
+                    onClick={() => setOpenTerminal(terminal.name)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') setOpenTerminal(terminal.name);
+                    }}
                   >
                     <div className="agent-hd">
                       <div className="agent-title-group">

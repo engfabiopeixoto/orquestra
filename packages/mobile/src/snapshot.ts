@@ -1,4 +1,5 @@
-import type { HostEvent, ProjectSnapshot } from '@orquestra/shared/host-protocol';
+import type { HostEvent } from '@orquestra/shared/host-protocol';
+import type { RemoteSnapshot as ProjectSnapshot } from '@orquestra/shared/remote-snapshot';
 
 /**
  * Aplica um evento do host ao snapshot do workspace exibido.

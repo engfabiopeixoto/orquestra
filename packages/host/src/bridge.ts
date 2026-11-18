@@ -930,6 +930,15 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
       session.userInput(data);
       return {};
     },
+    'terminal.send': async ({ name, text }) => {
+      opts.log.info({ terminal: name, method: 'terminal.send', chars: text.length }, 'comando da interface');
+      await requireSession(name).sendMessage(text);
+      return {};
+    },
+    'terminal.key': async ({ name, key }) => {
+      requireSession(name).sendKey(key);
+      return {};
+    },
     'terminal.resize': async ({ name, cols, rows }) => {
       requireSession(name).resize(cols, rows);
       return {};

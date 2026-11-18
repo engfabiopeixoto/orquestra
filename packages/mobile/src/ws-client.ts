@@ -1,5 +1,7 @@
 import { OrqError } from '@orquestra/shared/errors';
 import { parseHostResult, remoteServerMessageSchema, type HostEvent, type HostMethod, type HostParams, type HostResult } from '@orquestra/shared/host-protocol';
+import { remoteResultOverrides, type RemoteSnapshot } from '@orquestra/shared/remote-snapshot';
+import type { ZodTypeAny } from 'zod';
 import type { RemoteDevice } from '@orquestra/shared/remote';
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'revoked' | 'closed';
@@ -23,7 +25,16 @@ export type RemoteWsClientOptions = {
   commandTimeoutMs?: number;
   onStatus?: (status: ConnectionStatus, device?: RemoteDevice, reason?: string) => void;
   onEvent?: (event: HostEvent) => void;
+  onOutputOverflow?: (overflow: { name: string; workspaceId?: string }) => void;
 };
+
+/** Resultado de um comando como o celular o recebe (o snapshot do workspace é reduzido pelo gateway). */
+export type RemoteResult<M extends HostMethod> = M extends keyof typeof remoteResultOverrides ? RemoteSnapshot : HostResult<M>;
+
+function parseRemoteResult<M extends HostMethod>(method: M, value: unknown): RemoteResult<M> {
+  const override = (remoteResultOverrides as Record<string, ZodTypeAny>)[method];
+  return (override ? override.parse(value) : parseHostResult(method, value)) as RemoteResult<M>;
+}
 
 const WS_OPEN = 1;
 
@@ -39,6 +50,7 @@ export class RemoteWsClient {
   private attempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private nextId = 1;
+  private readonly subscriptions = new Map<string, { workspaceId: string; name: string }>();
   private readonly pending = new Map<
     string,
     {
@@ -87,6 +99,8 @@ export class RemoteWsClient {
       if (msg.type === 'auth-ok') {
         this.attempt = 0;
         this.setStatus('connected', msg.device);
+        // Depois de reconectar o servidor não guarda nada: reassina o que a tela aberta precisa.
+        for (const sub of this.subscriptions.values()) this.sendSubscription('subscribe', sub.workspaceId, sub.name);
         return;
       }
 
@@ -112,6 +126,11 @@ export class RemoteWsClient {
 
       if (msg.type === 'event') {
         this.opts.onEvent?.(msg.event);
+        return;
+      }
+
+      if (msg.type === 'output-overflow') {
+        this.opts.onOutputOverflow?.({ name: msg.name, workspaceId: msg.workspaceId });
       }
     };
 
@@ -142,13 +161,30 @@ export class RemoteWsClient {
     }
   }
 
-  command<M extends HostMethod>(method: M, params: HostParams<M>, workspaceId?: string): Promise<HostResult<M>> {
+  private sendSubscription(type: 'subscribe' | 'unsubscribe', workspaceId: string, name: string): void {
+    if (this.ws && this.ws.readyState === WS_OPEN && this.status === 'connected') {
+      this.ws.send(JSON.stringify({ type, workspaceId, name }));
+    }
+  }
+
+  /** Pede a saída ao vivo de um terminal; vale também depois de reconectar. */
+  subscribe(workspaceId: string, name: string): void {
+    this.subscriptions.set(`${workspaceId}:${name}`, { workspaceId, name });
+    this.sendSubscription('subscribe', workspaceId, name);
+  }
+
+  unsubscribe(workspaceId: string, name: string): void {
+    this.subscriptions.delete(`${workspaceId}:${name}`);
+    this.sendSubscription('unsubscribe', workspaceId, name);
+  }
+
+  command<M extends HostMethod>(method: M, params: HostParams<M>, workspaceId?: string): Promise<RemoteResult<M>> {
     const ws = this.ws;
     if (!ws || ws.readyState !== WS_OPEN || this.status !== 'connected') {
       return Promise.reject(new OrqError('NOT_CONNECTED', 'Sem conexão ativa com o computador.'));
     }
     const id = `m-${this.nextId++}`;
-    return new Promise<HostResult<M>>((resolve, reject) => {
+    return new Promise<RemoteResult<M>>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new OrqError('APP_UNAVAILABLE', 'Tempo esgotado aguardando resposta do computador.'));
@@ -156,7 +192,7 @@ export class RemoteWsClient {
       this.pending.set(id, {
         resolve: (value) => {
           try {
-            resolve(parseHostResult(method, value));
+            resolve(parseRemoteResult(method, value));
           } catch {
             reject(new OrqError('INTERNAL', 'Resposta inválida do computador.'));
           }

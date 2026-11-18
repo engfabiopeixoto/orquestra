@@ -1,10 +1,11 @@
 import { EventEmitter } from 'node:events';
-import { OrqError, type SessionState } from '@orquestra/shared';
+import { OrqError, type SessionState, type TerminalKey } from '@orquestra/shared';
 import type { AgentAdapter, HookSignal, ScreenSignal } from './adapters/types.js';
 import type { BackgroundJob } from './background-job.js';
 import { CodexRolloutWatcher, type CodexRolloutEvent } from './codex-rollout-watcher.js';
 import { incompleteEscapeTail } from './escape-tail.js';
-import { writePrompt } from './input.js';
+import { encodePrompt, writePrompt } from './input.js';
+import { encodeTerminalKey } from './terminal-keys.js';
 import type { Logger } from './log.js';
 import type { PtyProcess } from './pty-host.js';
 import { Screen } from './screen.js';
@@ -210,6 +211,27 @@ export class Session extends EventEmitter<SessionEvents> {
       }
     }
     this.refreshWaiting();
+  }
+
+  /** Teclas nomeadas no formato que o programa pediu: Win32 (Codex com DECSET 9001) ou VT comum. */
+  sendKey(key: TerminalKey): void {
+    if (this.currentState === 'exited') throw new OrqError('APP_UNAVAILABLE', `Recarregue o terminal ${this.name} para interagir.`);
+    this.userInput(encodeTerminalKey(key, { win32: this.adapter.kind === 'codex' && this.screen.win32Input, applicationCursor: this.screen.applicationCursorKeys }));
+  }
+
+  /**
+   * Mensagem do celular: cola o texto como o desktop colaria e envia Enter. Usa colagem delimitada quando o programa
+   * a ligou (modo 2004) ou o texto tem várias linhas; senão digita o texto como está (shell comum).
+   */
+  async sendMessage(text: string): Promise<void> {
+    if (this.currentState === 'exited') throw new OrqError('APP_UNAVAILABLE', `Recarregue o terminal ${this.name} para interagir.`);
+    const clean = text.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '').replace(/[\r\n]+$/, '');
+    const { body } = encodePrompt(clean);
+    const raw = /[\r\n]/.test(clean) || this.screen.bracketedPaste ? body : clean;
+    this.userInput(this.adapter.encodeInput ? this.adapter.encodeInput(raw) : raw);
+    await new Promise((resolve) => setTimeout(resolve, this.opts.commandSubmitDelayMs ?? COMMAND_SUBMIT_DELAY_MS));
+    if (this.state === 'exited') return;
+    this.userInput('\r');
   }
 
   async injectPrompt(text: string, askId: string): Promise<void> {

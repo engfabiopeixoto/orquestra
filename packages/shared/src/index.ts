@@ -12,3 +12,5 @@ export * from './browser.js';
 export * from './usage-format.js';
 export * from './models.js';
 export * from './remote.js';
+export * from './remote-snapshot.js';
+export * from './win32-input.js';

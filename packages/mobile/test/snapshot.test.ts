@@ -1,13 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { HostEvent, ProjectSnapshot, TerminalInfo } from '@orquestra/shared/host-protocol';
+import type { HostEvent, TerminalInfo } from '@orquestra/shared/host-protocol';
+import type { RemoteSnapshot } from '@orquestra/shared/remote-snapshot';
 import { applyEventToSnapshot, replayEvents } from '../src/snapshot.js';
 
 const term = (name: string, extra: Partial<TerminalInfo> = {}): TerminalInfo => ({
   name, agent: 'claude', state: 'idle', queued: 0, cwd: 'C:/p', resume: true, args: [], regente: false, monitor: false, ...extra,
 });
-const snapshot = (terminals: TerminalInfo[], eventSequence?: number): ProjectSnapshot => ({
-  workspaceId: 'w1', dir: 'C:/p', name: 'p', terminals, notes: [], edges: [], layout: {}, viewport: { x: 0, y: 0, zoom: 1 }, eventSequence,
-});
+const snapshot = (terminals: TerminalInfo[], eventSequence?: number): RemoteSnapshot => ({ workspaceId: 'w1', name: 'p', terminals, eventSequence });
 const state = (name: string, s: TerminalInfo['state'], sequence?: number): HostEvent => ({ type: 'terminal.state', name, state: s, queued: 0, workspaceId: 'w1', sequence });
 
 describe('snapshot do celular', () => {

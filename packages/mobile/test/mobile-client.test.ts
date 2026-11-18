@@ -171,4 +171,59 @@ describe('cliente mobile: validação e reconexão', () => {
     expect(sockets).toHaveLength(2);
     client.close();
   });
+
+  it('subscribe e unsubscribe vão ao servidor e as assinaturas são refeitas depois de reconectar', async () => {
+    vi.useFakeTimers();
+    const { client, sockets } = connected();
+    const sent = (index: number) => sockets[index]!.sent.map((raw) => JSON.parse(raw)).filter((m) => m.type === 'subscribe' || m.type === 'unsubscribe');
+
+    client.subscribe('w1', 'A');
+    client.subscribe('w1', 'B');
+    client.unsubscribe('w1', 'B');
+    expect(sent(0)).toEqual([
+      { type: 'subscribe', workspaceId: 'w1', name: 'A' },
+      { type: 'subscribe', workspaceId: 'w1', name: 'B' },
+      { type: 'unsubscribe', workspaceId: 'w1', name: 'B' },
+    ]);
+
+    sockets[0]!.close(1006, 'dropped');
+    await vi.advanceTimersByTimeAsync(100);
+    sockets[1]!.open();
+    expect(sent(1)).toEqual([]);
+    sockets[1]!.receive({ type: 'auth-ok', device });
+    expect(sent(1)).toEqual([{ type: 'subscribe', workspaceId: 'w1', name: 'A' }]);
+    client.close();
+  });
+
+  it('assinar sem conexão só registra: a assinatura sai quando autenticar', () => {
+    const sockets: FakeSocket[] = [];
+    const client = new RemoteWsClient({ url: 'ws://x/ws', token: 't', createSocket: () => { const s = new FakeSocket(); sockets.push(s); return s; } });
+    client.subscribe('w1', 'A');
+    client.connect();
+    sockets[0]!.open();
+    expect(sockets[0]!.sent.map((r) => JSON.parse(r).type)).toEqual(['auth']);
+    sockets[0]!.receive({ type: 'auth-ok', device });
+    expect(JSON.parse(sockets[0]!.sent[1]!)).toEqual({ type: 'subscribe', workspaceId: 'w1', name: 'A' });
+    client.close();
+  });
+
+  it('output-overflow chega ao callback e eventos de saída seguem pelo onEvent', () => {
+    const sockets: FakeSocket[] = [];
+    const overflows: unknown[] = [];
+    const events: unknown[] = [];
+    const client = new RemoteWsClient({
+      url: 'ws://x/ws', token: 't',
+      createSocket: () => { const s = new FakeSocket(); sockets.push(s); return s; },
+      onOutputOverflow: (o) => overflows.push(o),
+      onEvent: (e) => events.push(e),
+    });
+    client.connect();
+    sockets[0]!.open();
+    sockets[0]!.receive({ type: 'auth-ok', device });
+    sockets[0]!.receive({ type: 'output-overflow', name: 'A', workspaceId: 'w1' });
+    sockets[0]!.receive({ type: 'event', event: { type: 'terminal.output', name: 'A', data: 'x', workspaceId: 'w1' } });
+    expect(overflows).toEqual([{ name: 'A', workspaceId: 'w1' }]);
+    expect(events).toHaveLength(1);
+    client.close();
+  });
 });

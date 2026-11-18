@@ -11,7 +11,7 @@ export const REMOTE_PAIR_RATE_WINDOW_MS = 60_000;
 
 /**
  * Métodos do host permitidos a clientes móveis na Fase 1.
- * `terminal.send` fica para a Fase 2 e é recusado nesta fase.
+ * Fase 2: `terminal.send` (mensagem) e `terminal.key` (tecla nomeada) ao lado de `terminal.input`.
  */
 export const REMOTE_ALLOWED_METHODS = [
   'workspace.list',
@@ -22,6 +22,8 @@ export const REMOTE_ALLOWED_METHODS = [
   'usage.codex',
   'usage.agy',
   'terminal.input',
+  'terminal.send',
+  'terminal.key',
   'prompt.cancel',
   'terminal.restart',
   'terminal.unload',
@@ -100,6 +102,8 @@ export type RemotePairResponse = z.infer<typeof remotePairResponseSchema>;
 
 export const remoteClientMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('auth'), token: z.string().min(1) }),
+  z.object({ type: z.literal('subscribe'), workspaceId: z.string().min(1), name: z.string().min(1) }),
+  z.object({ type: z.literal('unsubscribe'), workspaceId: z.string().min(1), name: z.string().min(1) }),
   z.object({
     type: z.literal('command'),
     id: z.string().min(1).max(128),
@@ -108,6 +112,9 @@ export const remoteClientMessageSchema = z.discriminatedUnion('type', [
     workspaceId: z.string().optional(),
   }),
 ]);
+export const REMOTE_OUTPUT_FLUSH_MS = 50;
+export const REMOTE_OUTPUT_BUFFER_LIMIT = 1024 * 1024;
+export const REMOTE_MAX_SUBSCRIPTIONS = 16;
 export type RemoteClientMessage = z.infer<typeof remoteClientMessageSchema>;
 
 export const remoteErrorPayloadSchema = z.object({

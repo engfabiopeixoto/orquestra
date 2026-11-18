@@ -13,6 +13,30 @@ export class Screen {
     this.serializer = new SerializeAddon();
     // O addon declara o Terminal do @xterm/xterm; o headless tem a mesma API usada pelo addon.
     this.terminal.loadAddon(this.serializer as unknown as Parameters<typeof this.terminal.loadAddon>[0]);
+    // DECSET 9001 (win32-input-mode): o xterm não o implementa, então o núcleo só observa o liga/desliga.
+    const track = (enabled: boolean) => (params: (number | number[])[]): boolean => {
+      if (params.flat().includes(9001)) this.win32InputMode = enabled;
+      return false;
+    };
+    this.terminal.parser.registerCsiHandler({ prefix: '?', final: 'h' }, track(true));
+    this.terminal.parser.registerCsiHandler({ prefix: '?', final: 'l' }, track(false));
+  }
+
+  private win32InputMode = false;
+
+  /** O programa pediu teclas no formato Win32 (DECSET 9001). */
+  get win32Input(): boolean {
+    return this.win32InputMode;
+  }
+
+  /** O programa ligou a colagem delimitada (DECSET 2004). */
+  get bracketedPaste(): boolean {
+    return this.terminal.modes.bracketedPasteMode;
+  }
+
+  /** Setas no modo de aplicação (DECCKM): ESC O A em vez de ESC [ A. */
+  get applicationCursorKeys(): boolean {
+    return this.terminal.modes.applicationCursorKeysMode;
   }
 
   write(data: string): Promise<void> {

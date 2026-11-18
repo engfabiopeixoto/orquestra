@@ -442,3 +442,143 @@ button:focus-visible {
   text-align: center;
   color: var(--muted);
 }
+
+/* Tela do terminal */
+.terminal-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+}
+
+.terminal-screen {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.terminal-topbar {
+  gap: 8px;
+}
+
+.terminal-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.terminal-host {
+  flex: 1;
+  min-height: 0;
+  background: #0d0f13;
+  border-block: 1px solid var(--line);
+  overflow-y: hidden;
+  overflow-x: hidden;
+}
+
+.terminal-host.scrolls {
+  overflow-x: auto;
+}
+
+.terminal-canvas {
+  height: 100%;
+}
+
+.key-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--panel);
+}
+
+.key-bar button {
+  flex: 1 0 auto;
+  padding: 8px 12px;
+}
+
+.send-bar {
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  background: var(--panel);
+}
+
+.send-bar textarea {
+  flex: 1;
+  min-height: 44px;
+  max-height: 120px;
+  resize: none;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.menu-sheet {
+  position: absolute;
+  right: 8px;
+  top: 56px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+}
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.dialog {
+  width: 100%;
+  max-width: 480px;
+  max-height: 80dvh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border-radius: 16px 16px 0 0;
+  border: 1px solid var(--line);
+  background: var(--card);
+}
+
+.dialog-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.model-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.model-list button {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.agent-card[role='button'] {
+  cursor: pointer;
+}
+.terminal-screen { position: relative; }
