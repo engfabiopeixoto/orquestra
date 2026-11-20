@@ -6,7 +6,7 @@ import {
   BackgroundVariant,
   useNodesState,
   useReactFlow,
-  useViewport,
+  useStore,
   type Connection,
   type Edge,
   type OnBeforeDelete,
@@ -32,6 +32,7 @@ import { useEdgeActivity } from './use-edge-activity';
 import { disconnectEdge, type DisconnectableEdge } from './disconnect-edge';
 import { DisconnectEdgeContext, RemovableEdge } from './RemovableEdge';
 import { PortalNode } from '../portal/PortalNode';
+import { usePortalOverlay } from '../portal/modal-overlay';
 import { portalStore, usePortalStore } from '../portal/portal-state';
 
 const nodeTypes = { terminal: TerminalNode, note: NoteNode, groupFrame: GroupFrame, portal: PortalNode };
@@ -129,8 +130,7 @@ export function Canvas({ snapToGrid = true, motion = 'contained', onRemoveReques
   const initialNodes = useMemo(() => buildFlowNodes(terminals, notes, [], groups, workspacePortals).map((node) => ({ ...node, selected: selection.includes(node.id) })), []);
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasFlowNode>(initialNodes);
   const { zoomTo, fitView, getViewport, setViewport, getNode, setCenter, screenToFlowPosition } = useReactFlow();
-  const { zoom } = useViewport();
-  const isFullZoom = Math.abs(zoom - 1) <= 0.001;
+  const isFullZoom = useStore((state) => Math.abs(state.transform[2] - 1) <= 0.001);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const groupDrag = useRef<{ id: string; origin: Position; positions: Map<string, Position>; memberNames: Set<string> } | null>(null);
   const [paneMenu, setPaneMenu] = useState<{ x: number; y: number; position: Position } | null>(null);
@@ -175,6 +175,7 @@ export function Canvas({ snapToGrid = true, motion = 'contained', onRemoveReques
 
   const [edgeMenu, setEdgeMenu] = useState<{ x: number; y: number; edge: DisconnectableEdge } | null>(null);
   const edgeMenuRef = useRef<HTMLDivElement>(null);
+  usePortalOverlay(paneMenu !== null || edgeMenu !== null);
   useEffect(() => {
     if (!edgeMenu) return;
     const outside = (event: PointerEvent) => { if (!edgeMenuRef.current?.contains(event.target as Node)) setEdgeMenu(null); };
@@ -223,7 +224,7 @@ export function Canvas({ snapToGrid = true, motion = 'contained', onRemoveReques
       }}
       onEdgeContextMenu={(event, edge) => {
         event.preventDefault();
-        setEdgeMenu({ x: Math.min(event.clientX, window.innerWidth - 160), y: Math.min(event.clientY, window.innerHeight - 50), edge: { source: edge.source, target: edge.target, data: edge.data } });
+        setEdgeMenu({ x: Math.min(event.clientX, window.innerWidth - 160), y: Math.min(event.clientY, window.innerHeight - 50), edge: { source: edge.source, target: edge.target } });
       }}
       snapToGrid={snapToGrid}
       snapGrid={[20, 20]}

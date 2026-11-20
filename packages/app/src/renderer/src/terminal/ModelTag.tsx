@@ -2,6 +2,7 @@ import { isModelAgent, modelNameSchema, type AgentModelCatalog, type TerminalMod
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { CommandApi } from '../api';
+import { usePortalOverlay } from '../portal/modal-overlay';
 import { appStore, useApp } from '../store';
 
 const MENU_WIDTH = 260;
@@ -59,6 +60,7 @@ export function ModelTag({ name, agent, model, api }: { name: string; agent: str
     window.addEventListener('keydown', escape);
     return () => { document.removeEventListener('pointerdown', outside); window.removeEventListener('keydown', escape); };
   }, [menu]);
+  usePortalOverlay(menu !== null);
   if (!isModelAgent(agent) || !agentCatalog) return null;
   const view = modelTagView(model);
 

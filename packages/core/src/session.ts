@@ -57,6 +57,7 @@ export type SessionOptions = {
   codexLongTurnWarningMs?: number;
   codexHome?: string;
   codexRolloutPollMs?: number;
+  codexRolloutIdlePollMs?: number;
   codexRolloutStartedAt?: number;
   agentSessionId?: string | null;
   unloaded?: boolean;
@@ -155,6 +156,7 @@ export class Session extends EventEmitter<SessionEvents> {
         sessionId: this.agentSessionId,
         startedAt: opts.codexRolloutStartedAt,
         pollMs: opts.codexRolloutPollMs,
+        idlePollMs: opts.codexRolloutIdlePollMs,
         log: opts.log,
         onEvent: (event) => this.onCodexRollout(event),
       })
@@ -848,6 +850,7 @@ export class Session extends EventEmitter<SessionEvents> {
     if (state === this.currentState) return;
     this.opts.log.info({ terminal: this.name, from: this.currentState, to: state, reason, owner: this.owner, askId: this.currentAskId, turn: this.turnSeq }, 'estado do terminal');
     this.currentState = state;
+    this.codexRolloutWatcher?.setIdle(state === 'idle' || state === 'background');
     this.emit('state', state);
   }
 }

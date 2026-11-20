@@ -6,13 +6,13 @@ import { createCommandApi } from './api';
 import { App } from './App';
 import { routeEvent } from './events';
 import { outputBus } from './output-bus';
-import { activateWorkspace, openProject, refreshWorkspaces, startupProject } from './project';
+import { activateWorkspace, openProject, refreshWorkspaces, scheduleWorkspaceRefresh, shouldRefreshWorkspacesForEvent, startupProject } from './project';
 import { workspaceStore } from './workspaces';
 import { appStore } from './store';
 
 const api = createCommandApi(window.orquestra.invoke);
 
-window.orquestra.onEvent((event) =>
+window.orquestra.onEvent((event) => {
   routeEvent(event, {
     store: appStore.getState(),
     bus: outputBus,
@@ -21,8 +21,9 @@ window.orquestra.onEvent((event) =>
         void activateWorkspace(workspaceId, api);
       }
     },
-  }),
-);
+  });
+  if (shouldRefreshWorkspacesForEvent(event.type)) scheduleWorkspaceRefresh(api);
+});
 window.addEventListener('error', (event) => window.orquestra.reportError(event.message, event.error?.stack ?? ''));
 window.addEventListener('unhandledrejection', (event) => window.orquestra.reportError(String(event.reason), ''));
 
@@ -46,7 +47,7 @@ setInterval(() => {
   if (document.hidden || refreshing || workspaceStore.getState().changing) return;
   refreshing = true;
   void refreshWorkspaces(api).catch(() => {}).finally(() => { refreshing = false; });
-}, 2000);
+}, 10_000);
 
 window.orquestra.onFocusTerminal(async (name, workspaceId) => {
   if (workspaceId && appStore.getState().project?.workspaceId !== workspaceId) await activateWorkspace(workspaceId);

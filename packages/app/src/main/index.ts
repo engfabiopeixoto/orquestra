@@ -7,11 +7,13 @@ import { ActivityMonitor } from './activity';
 import { appShortcut, handleAppAction } from './app-action';
 import { appUserModelId } from './app-id';
 import { bundledScripts } from './bundled-paths';
+import { HostGate } from './host-gate';
 import { HostProcess } from './host-process';
 import { createAppLogger } from './log';
-import { resolveNodePath, whereNode } from './node-path';
+import { resolveNodePathAsync } from './node-path';
 import { killRecordedAgents, taskkillTree } from './orphans';
 import { initPortalSystem } from './portal/portal-ipc';
+import { createPortalLifecycle } from './portal/portal-lifecycle';
 import type { PortalManager } from './portal/portal-manager';
 
 const dataDir = process.env.ORQ_DATA_DIR ?? join(app.getPath('appData'), 'Orquestra');
@@ -23,7 +25,7 @@ const hostScript = process.env.ORQ_HOST_SCRIPT ?? scripts.host;
 const cliScript = process.env.ORQ_CLI_SCRIPT ?? scripts.cli;
 
 let window: BrowserWindow | null = null;
-let host: HostProcess | null = null;
+const hostGate = new HostGate<HostProcess>();
 let portalSystem: { portalManager: PortalManager; dispose: () => void } | null = null;
 let quitting = false;
 
@@ -44,7 +46,8 @@ const activityMonitor = new ActivityMonitor({
 });
 
 async function startHost(): Promise<HostProcess> {
-  const nodePath = resolveNodePath({ env: process.env, where: whereNode });
+  const nodePath = await resolveNodePathAsync(process.env);
+  if (quitting) throw new OrqError('APP_UNAVAILABLE', 'O Orquestra está encerrando.');
   const process_ = new HostProcess({
     nodePath,
     script: hostScript,
@@ -76,17 +79,25 @@ async function startHost(): Promise<HostProcess> {
       detail: `Veja o log em ${logDir}.`,
     });
     if (answer.response !== 0) return app.quit();
-    host = null;
-    try {
-      host = await startHost();
-    } catch (error) {
-      log.error({ err: error }, 'falha ao reiniciar o núcleo');
-      dialog.showErrorBox('Orquestra não pôde reiniciar o núcleo', error instanceof OrqError ? error.message : String(error));
-      return app.quit();
-    }
+    hostGate.clear();
+    hostGate.beginStart(
+      startHost().catch((error) => {
+        if (quitting) return null;
+        log.error({ err: error }, 'falha ao reiniciar o núcleo');
+        dialog.showErrorBox('Orquestra não pôde reiniciar o núcleo', error instanceof OrqError ? error.message : String(error));
+        app.quit();
+        return null;
+      }),
+    );
+    const restarted = await hostGate.waitSettled();
+    if (!restarted) return;
     window.webContents.reload();
   });
   await process_.start();
+  if (quitting) {
+    await process_.stop();
+    throw new OrqError('APP_UNAVAILABLE', 'O Orquestra está encerrando.');
+  }
   log.info({ nodePath, hostScript }, 'núcleo iniciado');
   return process_;
 }
@@ -138,7 +149,7 @@ function createWindow(): BrowserWindow {
     event.preventDefault();
     quitting = true;
     portalSystem?.dispose();
-    void (host?.stop() ?? Promise.resolve()).finally(() => app.quit());
+    void hostGate.waitSettled().then((active) => active?.stop()).finally(() => app.quit());
   });
   if (process.env.ELECTRON_RENDERER_URL) void created.loadURL(process.env.ELECTRON_RENDERER_URL);
   else void created.loadFile(join(__dirname, '../renderer/index.html'));
@@ -186,10 +197,10 @@ ipcMain.handle('orq:command', async (_event, method: unknown, params: unknown, w
     return { ok: false, error: { code: 'USAGE', message: `Comando desconhecido: ${String(method)}.` } };
   }
   try {
-    if (!host) throw new OrqError('APP_UNAVAILABLE', 'O núcleo do Orquestra não está rodando. Reinicie o app.');
+    const activeHost = await hostGate.requireReady();
     // O núcleo valida os parâmetros com o mesmo schema e devolve USAGE se estiverem errados.
     if (workspaceId !== undefined && typeof workspaceId !== 'string') throw new OrqError('USAGE', 'Workspace inválido.');
-    const result = await host.request(method, params as never, workspaceId);
+    const result = await activeHost.request(method, params as never, workspaceId);
     if (method === 'project.open' || method === 'workspace.activate') {
       const snapshot = result as { workspaceId?: string; dir?: string };
       if (snapshot.workspaceId && snapshot.dir) portalSystem?.portalManager.registerWorkspace(snapshot.workspaceId, snapshot.dir);
@@ -229,24 +240,25 @@ if (!app.requestSingleInstanceLock()) {
     if (window.isMinimized()) window.restore();
     window.focus();
   });
-  void app.whenReady().then(async () => {
+  void app.whenReady().then(() => {
     app.setAppUserModelId(appUserModelId(app.isPackaged));
     // Ctrl+R, Ctrl+Shift+I e afins pertencem ao terminal: sem barra de menu, nenhum acelerador do Electron interfere.
     Menu.setApplicationMenu(null);
-    try {
-      host = await startHost();
-    } catch (error) {
-      const message = error instanceof OrqError ? error.message : String(error);
-      log.error({ err: error }, 'falha ao iniciar o núcleo');
-      dialog.showErrorBox('Orquestra não pôde iniciar', message);
-      app.quit();
-      return;
-    }
-    portalSystem = initPortalSystem(() => window, {
-      register: async (workspaceId, id) => { if (!host) throw new OrqError('APP_UNAVAILABLE', 'Núcleo indisponível.'); await host.request('portal.register', { id, title: 'Navegador' }, workspaceId); },
-      unregister: async (workspaceId, id) => { if (host) await host.request('portal.unregister', { id }, workspaceId); },
-    });
+    portalSystem = initPortalSystem(
+      () => window,
+      createPortalLifecycle(hostGate, (workspaceId, id) => Boolean(portalSystem?.portalManager.getPortalState(id, workspaceId))),
+    );
     window = createWindow();
+    hostGate.beginStart(
+      startHost().catch((error) => {
+        if (quitting) return null;
+        const message = error instanceof OrqError ? error.message : String(error);
+        log.error({ err: error }, 'falha ao iniciar o núcleo');
+        dialog.showErrorBox('Orquestra não pôde iniciar', message);
+        app.quit();
+        return null;
+      }),
+    );
   });
   app.on('before-quit', () => {
     portalSystem?.dispose();

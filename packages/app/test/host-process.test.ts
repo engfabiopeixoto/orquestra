@@ -65,16 +65,32 @@ describe('HostProcess', () => {
     await expect(h.request('project.open', { dir: 'C:/p' })).rejects.toMatchObject({ code: 'APP_UNAVAILABLE' });
   });
 
-  it('núcleo que sai antes de ficar pronto falha na hora, sem esperar o prazo', async () => {
+  it('núcleo que sai antes de ficar pronto falha na hora, sem esperar o prazo e sem disparar onUnexpectedExit', async () => {
     host = new HostProcess({ nodePath: process.execPath, script: fakeHost, env: { ...process.env, FAKE_HOST_EXIT_EARLY: '1' }, startTimeoutMs: 20_000 });
+    const unexpected: Array<number | null> = [];
+    host.onUnexpectedExit((code) => unexpected.push(code));
     const startedAt = Date.now();
     await expect(host.start()).rejects.toMatchObject({ code: 'APP_UNAVAILABLE', message: expect.stringMatching(/parou ao iniciar/) });
     expect(Date.now() - startedAt).toBeLessThan(5000);
+    expect(unexpected).toEqual([]);
   });
 
-  it('núcleo que não fica pronto falha no prazo', async () => {
-    const h = create({ FAKE_HOST_SILENT: '1' });
-    await expect(h.start()).rejects.toMatchObject({ code: 'APP_UNAVAILABLE' });
+  it('núcleo que não fica pronto falha no prazo e encerra o processo filho', async () => {
+    host = new HostProcess({ nodePath: process.execPath, script: fakeHost, env: { ...process.env, FAKE_HOST_SILENT: '1' }, startTimeoutMs: 250 });
+    const unexpected: Array<number | null> = [];
+    host.onUnexpectedExit((code) => unexpected.push(code));
+    const started = host.start();
+    const pid = (host as unknown as { child?: { pid?: number } }).child?.pid;
+    expect(pid).toBeTypeOf('number');
+    await expect(started).rejects.toMatchObject({ code: 'APP_UNAVAILABLE' });
+    let alive = true;
+    try {
+      process.kill(pid!, 0);
+    } catch {
+      alive = false;
+    }
+    expect(alive).toBe(false);
+    expect(unexpected).toEqual([]);
   });
 
   it('núcleo que sai com pipe ocupado vira mensagem específica', async () => {

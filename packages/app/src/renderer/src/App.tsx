@@ -21,6 +21,7 @@ import { GroupDialog, type GroupDraft } from './groups/GroupDialog';
 import { GroupMembersDialog } from './groups/GroupMembersDialog';
 import { GroupUIContext } from './groups/ui-actions';
 import { selectionMembers } from './groups/helpers';
+import { syncPortalModalState, usePortalOverlay } from './portal/modal-overlay';
 import { portalStore } from './portal/portal-state';
 
 const globalApi = createCommandApi(window.orquestra.invoke);
@@ -48,15 +49,8 @@ export function App() {
   }, []);
   useEffect(() => { setCreating(false); setPersonasOpen(false); setCreatingGroup(undefined); setGroupDraft(null); setManagingGroup(null); }, [project?.workspaceId]);
 
-  useEffect(() => {
-    let previous: boolean | undefined;
-    const sync = () => {
-      const blocked = Boolean(document.querySelector('[role="dialog"], .ctx-menu, .workspace-changing, .usage-details:not([hidden])'));
-      if (blocked !== previous) { previous = blocked; void window.orquestra?.portal?.setModalState(blocked); }
-    };
-    const observer = new MutationObserver(sync); observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'aria-expanded'] }); sync();
-    return () => observer.disconnect();
-  }, []);
+  useEffect(() => { syncPortalModalState(true); }, []);
+  usePortalOverlay(creating || editing !== null || settingsOpen || personasOpen || groupDraft !== null || managingGroup !== null || changing);
 
   useEffect(() => {
     portalStore.getState().loadFromStorage(project?.workspaceId || 'default');

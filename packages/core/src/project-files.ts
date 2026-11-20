@@ -40,9 +40,13 @@ export class ProjectFiles {
   private gitAt = 0;
   private gitPending: Promise<boolean> | null = null;
   private baseline = new Map<string, string | null>();
+  private statCache = new Map<string, { mtimeMs: number; size: number; change: Change }>();
   private directories = new Map<string, Map<string, ProjectFile>>();
   private newFiles = new Set<string>();
-  constructor(root: string, private readonly options: { gitCacheMs?: number } = {}) {
+  constructor(
+    root: string,
+    private readonly options: { gitCacheMs?: number; readFile?: (path: string) => Promise<Buffer> } = {},
+  ) {
     this.root = resolve(root);
     this.canonical = realpath(this.root);
   }
@@ -115,11 +119,10 @@ export class ProjectFiles {
     return this.gitPending;
   }
 
-  private async text(path: string): Promise<string | null> {
+  private async readTextContent(path: string, size: number): Promise<string | null> {
+    if (size > MAX_TEXT) return null;
     try {
-      const info = await stat(path);
-      if (!info.isFile() || info.size > MAX_TEXT) return null;
-      const buffer = await readFile(path);
+      const buffer = await (this.options.readFile ?? readFile)(path);
       if (buffer.includes(0)) return null;
       return buffer.toString('utf8');
     } catch { return null; }
@@ -146,15 +149,28 @@ export class ProjectFiles {
         const kind = entry.isSymbolicLink() ? 'link' : entry.isDirectory() ? 'directory' : 'file';
         let change = git ? this.changes.get(path) ?? unchanged() : unchanged();
         if (!git && kind === 'file') {
-          const value = await this.text(join(absolute, entry.name));
-          if (!this.baseline.has(path)) {
-            this.baseline.set(path, previous && !previous.has(path) ? '' : value);
-            if (previous && !previous.has(path)) this.newFiles.add(path);
-            if (previous && !previous.has(path)) change = { change: 'added', additions: value ? lines(value).length : 0, deletions: 0 };
+          const fullPath = join(absolute, entry.name);
+          let info: Awaited<ReturnType<typeof stat>> | null = null;
+          try {
+            const candidate = await stat(fullPath);
+            if (candidate.isFile()) info = candidate;
+          } catch { /* Arquivo inacessível ou removido durante a varredura. */ }
+          const cached = this.statCache.get(path);
+          if (info && this.baseline.has(path) && cached && cached.mtimeMs === info.mtimeMs && cached.size === info.size) {
+            change = { ...cached.change };
           } else {
-            const before = this.baseline.get(path);
-            if (before !== null && before !== undefined && value !== null) change = compareText(before, value);
-            if (this.newFiles.has(path)) change.change = 'added';
+            const value = info ? await this.readTextContent(fullPath, info.size) : null;
+            if (!this.baseline.has(path)) {
+              this.baseline.set(path, previous && !previous.has(path) ? '' : value);
+              if (previous && !previous.has(path)) this.newFiles.add(path);
+              if (previous && !previous.has(path)) change = { change: 'added', additions: value ? lines(value).length : 0, deletions: 0 };
+            } else {
+              const before = this.baseline.get(path);
+              if (before !== null && before !== undefined && value !== null) change = compareText(before, value);
+              if (this.newFiles.has(path)) change.change = 'added';
+            }
+            if (info) this.statCache.set(path, { mtimeMs: info.mtimeMs, size: info.size, change: { ...change } });
+            else this.statCache.delete(path);
           }
           this.changes.set(path, change);
         }
@@ -164,6 +180,7 @@ export class ProjectFiles {
     }
     if (!git && previous) for (const entry of previous.values()) {
       if (!current.has(entry.path)) {
+        this.statCache.delete(entry.path);
         const before = this.baseline.get(entry.path);
         this.changes.set(entry.path, { change: 'removed', additions: 0, deletions: before ? lines(before).length : 0 });
       }

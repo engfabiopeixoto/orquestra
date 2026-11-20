@@ -63,11 +63,26 @@ test('app empacotado abre, inicia o núcleo, cria shell e grava logs', async () 
   await page.getByTestId('group-ungroup').click();
   await expect(page.locator('.group-frame')).toHaveCount(0);
   await expect(page.getByTestId('terminal-body-S1')).toBeVisible();
+
+  // Nota Markdown (react-markdown / remark-gfm no bundle minificado)
+  await page.getByTestId('palette-new-note').click();
+  await expect(page.getByTestId('note-nota-1')).toBeVisible();
+  await page.getByTestId('note-view-nota-1').dblclick();
+  await page.getByTestId('note-editor-nota-1').fill('## Resumo\n\nTexto **empacotado**');
+  await page.keyboard.press('Control+s');
+  await expect(page.getByTestId('note-view-nota-1').locator('strong')).toHaveText('empacotado');
+
+  // Portal aberto + menu/diálogo por cima (usePortalOverlay no build empacotado)
   await page.getByTestId('palette-new-portal').click(); await expect(page.locator('.portal-node')).toBeVisible();
   const portalId = (await page.locator('.portal-node').getAttribute('data-testid'))!.slice('portal-node-'.length);
   await page.evaluate((id) => window.orquestra.invoke('edge.connect', { a: 'S1', b: id }), portalId);
   await page.evaluate(() => window.orquestra.invoke('terminal.input', { name: 'S1', data: 'orq portal list --json\r' }));
   await expect.poll(() => screenOf(page, 'S1')).toContain(portalId);
+  await page.getByRole('button', { name: 'Menu do Orquestra' }).click();
+  await page.getByRole('menuitem', { name: 'Sobre o Orquestra' }).click();
+  await expect(page.getByRole('dialog', { name: /Sobre o Orquestra/i })).toBeVisible();
+  await page.getByRole('dialog', { name: /Sobre o Orquestra/i }).getByRole('button', { name: 'Fechar', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   await page.getByTestId('portal-mode-mobile').click(); await expect(page.locator('.portal-node')).toHaveClass(/is-mobile-frame/); await page.getByTestId('portal-close').click(); await expect(page.locator('.portal-node')).toHaveCount(0);
   } finally { await app.close(); }
 

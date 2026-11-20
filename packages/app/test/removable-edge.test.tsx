@@ -34,11 +34,11 @@ describe('RemovableEdge', () => {
     expect(button.className).toContain('nopan');
   });
 
-  it('chama a desconexão com a origem, o destino e os dados da aresta ao clicar no ×', () => {
+  it('chama a desconexão com a origem e o destino da aresta ao clicar no ×', () => {
     const disconnect = vi.fn();
-    renderEdge(props({ data: { id: 'c1' } }), disconnect);
+    renderEdge(props(), disconnect);
     fireEvent.click(screen.getByRole('button', { name: 'Desconectar' }));
-    expect(disconnect).toHaveBeenCalledWith({ source: 'A', target: 'B', data: { id: 'c1' } });
+    expect(disconnect).toHaveBeenCalledWith({ source: 'A', target: 'B' });
   });
 
   it('mostra o botão em hover e quando a aresta está selecionada', () => {

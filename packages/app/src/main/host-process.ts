@@ -26,6 +26,7 @@ const unavailable = (message: string) => new OrqError('APP_UNAVAILABLE', message
 export class HostProcess {
   private child: ChildProcess | undefined;
   private stopping = false;
+  private stopPromise: Promise<void> | undefined;
   private readonly pending = new Map<string, Pending>();
   private readonly eventListeners = new Set<(event: HostEvent) => void>();
   private readonly exitListeners = new Set<(code: number | null) => void>();
@@ -37,6 +38,7 @@ export class HostProcess {
 
   start(): Promise<void> {
     this.stopping = false;
+    this.stopPromise = undefined;
     return new Promise((resolve, reject) => {
       // Nunca shell: true — o canal IPC não atravessa o cmd.exe.
       const child = spawn(this.opts.nodePath, [this.opts.script], {
@@ -46,16 +48,16 @@ export class HostProcess {
       });
       this.child = child;
       let ready = false;
-      const timer = setTimeout(
-        () => reject(unavailable('O núcleo do Orquestra não ficou pronto a tempo. Veja o log em %APPDATA%\\Orquestra\\logs.')),
-        this.opts.startTimeoutMs ?? 15_000,
-      );
+      const timer = setTimeout(() => {
+        void this.stop(1000).finally(() => reject(unavailable('O núcleo do Orquestra não ficou pronto a tempo. Veja o log em %APPDATA%\\Orquestra\\logs.')));
+      }, this.opts.startTimeoutMs ?? 15_000);
       child.stdout?.resume();
       child.stderr?.setEncoding('utf8').on('data', (chunk: string) => {
         for (const line of chunk.split(/\r?\n/)) if (line) this.opts.onLog?.(line);
       });
       child.on('error', (error) => {
         clearTimeout(timer);
+        if (this.child === child) this.child = undefined;
         reject(unavailable(`Não foi possível iniciar o núcleo (${error.message}). Confira o caminho do Node.`));
       });
       child.on('message', (raw) => {
@@ -107,7 +109,7 @@ export class HostProcess {
         this.pending.clear();
         for (const controller of this.browserCalls.values()) controller.abort(); this.browserCalls.clear();
         this.child = undefined;
-        if (!this.stopping) for (const listener of this.exitListeners) listener(code);
+        if (!this.stopping && ready) for (const listener of this.exitListeners) listener(code);
       });
     });
   }
@@ -138,15 +140,23 @@ export class HostProcess {
   setBrowserHandler(handler: typeof this.browserHandler): void { this.browserHandler = handler; }
 
   async stop(timeoutMs = 5000): Promise<void> {
+    if (this.stopPromise) return this.stopPromise;
     const child = this.child;
     if (!child) return;
     this.stopping = true;
-    const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
-    if (child.connected) child.send({ kind: 'shutdown' });
-    const clean = await Promise.race([exited.then(() => true), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs))]);
-    if (clean) return;
-    // Não saiu a tempo: derruba a árvore inteira (o núcleo e os agentes dele).
-    await new Promise<void>((resolve) => execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, () => resolve()));
-    await exited;
+    this.stopPromise = (async () => {
+      const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
+      if (child.connected) child.send({ kind: 'shutdown' });
+      const clean = await Promise.race([exited.then(() => true), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs))]);
+      if (clean) return;
+      // Não saiu a tempo: derruba a árvore inteira (o núcleo e os agentes dele).
+      await new Promise<void>((resolve) => execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, () => resolve()));
+      await exited;
+    })();
+    try {
+      await this.stopPromise;
+    } finally {
+      this.stopPromise = undefined;
+    }
   }
 }

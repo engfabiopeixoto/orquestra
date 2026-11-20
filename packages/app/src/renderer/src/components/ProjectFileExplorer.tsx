@@ -1,18 +1,39 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import type { HostResult, ProjectFile } from '@orquestra/shared/host-protocol';
 import type { CommandApi } from '../api';
+import { usePortalOverlay } from '../portal/modal-overlay';
 
 const labels = { none: '', added: 'Adições', modified: 'Adições e remoções', removed: 'Remoções' };
 const badges = { none: '', added: 'A', modified: 'M', removed: 'R' };
 /** O núcleo só roda o git a cada 10 s; perguntar com mais frequência só relê as pastas. */
 const REFRESH_MS = 5000;
 type FileView = HostResult<'files.read'>;
+type FolderView = HostResult<'files.list'>;
+
+function sameFolderResult(a: FolderView | undefined, b: FolderView): boolean {
+  if (!a || a.comparison !== b.comparison || a.truncated !== b.truncated || a.entries.length !== b.entries.length) return false;
+  return a.entries.every((left, index) => {
+    const right = b.entries[index]!;
+    return (
+      left.name === right.name &&
+      left.path === right.path &&
+      left.kind === right.kind &&
+      left.change === right.change &&
+      left.additions === right.additions &&
+      left.deletions === right.deletions
+    );
+  });
+}
 
 export function ProjectFileExplorer({ api, projectDir }: { api: CommandApi; projectDir: string }) {
   const [expanded, setExpanded] = useState(() => new Set(['']));
   const [folders, setFolders] = useState<Record<string, HostResult<'files.list'>>>({});
+  const foldersRef = useRef(folders);
+  foldersRef.current = folders;
   const [filter, setFilter] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const errorRef = useRef(error);
+  errorRef.current = error;
   const [preview, setPreview] = useState<FileView | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -20,6 +41,7 @@ export function ProjectFileExplorer({ api, projectDir }: { api: CommandApi; proj
   const pending = useRef(false);
   const revision = useRef(0);
   const selection = useRef(0);
+  usePortalOverlay(selected !== null);
   const refresh = async (version: number) => {
     if (pending.current) return;
     pending.current = true;
@@ -33,8 +55,17 @@ export function ProjectFileExplorer({ api, projectDir }: { api: CommandApi; proj
       if (result.status === 'fulfilled') updates[paths[index]!] = result.value;
       else failure = result.reason instanceof Error ? result.reason.message : 'Não foi possível ler os arquivos.';
     });
-    setFolders((previous) => ({ ...previous, ...updates }));
-    setError(failure);
+    const previous = foldersRef.current;
+    let changed = false;
+    const next = { ...previous };
+    for (const [path, value] of Object.entries(updates)) {
+      if (!sameFolderResult(previous[path], value)) {
+        next[path] = value;
+        changed = true;
+      }
+    }
+    if (changed) setFolders(next);
+    if (failure !== errorRef.current) setError(failure);
   };
   useEffect(() => {
     const version = ++revision.current;

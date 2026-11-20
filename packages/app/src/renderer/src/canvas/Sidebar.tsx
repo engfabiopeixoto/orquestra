@@ -8,6 +8,7 @@ import { useApp } from '../store';
 import { useWorkspaces, workspaceDot, workspaceSummary } from '../workspaces';
 import { ProjectFileExplorer } from '../components/ProjectFileExplorer';
 import { AboutDialog } from '../components/AboutDialog';
+import { usePortalOverlay } from '../portal/modal-overlay';
 
 type Recent = { dir: string; name: string; openedAt: string };
 type Row = { dir: string; name: string; workspace?: WorkspaceInfo };
@@ -39,6 +40,7 @@ export function Sidebar({
   const [aboutOpen, setAboutOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
+  usePortalOverlay(menu !== null || aboutOpen);
 
   useEffect(() => {
     void api.command('recent.list', {}).then((result) => setRecent(result.projects)).catch(() => setRecent([]));

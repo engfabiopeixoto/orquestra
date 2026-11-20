@@ -288,4 +288,39 @@ describe('CodexRolloutWatcher', () => {
       await watcher.stop();
     }
   });
+
+  it('reduz o intervalo de polling quando idle e acelera imediatamente ao voltar para busy sem perder eventos', async () => {
+    const home = makeHome();
+    const path = newThreadRollout(home, 'thread-idle-rate', new Date().toISOString());
+    const events: CodexRolloutEvent[] = [];
+    const watcher = new CodexRolloutWatcher({
+      codexHome: home,
+      cwd,
+      terminalName: 'Y',
+      terminalId: 'terminal-y',
+      sessionId: 'thread-idle-rate',
+      pollMs: 25,
+      idlePollMs: 300,
+      log: silentLogger(),
+      onEvent: (item) => events.push(item),
+    });
+    const statSpy = vi.spyOn(watcher as unknown as { poll(): Promise<void> }, 'poll');
+    watcher.start();
+    try {
+      await waitFor(() => events.some((item) => item.kind === 'session'));
+      statSpy.mockClear();
+      watcher.setIdle(true);
+      await new Promise((resolve) => setTimeout(resolve, 220));
+      // Com idlePollMs=300ms, em 220ms nenhum ou no máximo 1 poll teria rodado (contra ~8 em 25ms)
+      expect(statSpy.mock.calls.length).toBeLessThanOrEqual(1);
+
+      appendFileSync(path, event('task_started', 'turn-idle-wake'));
+      statSpy.mockClear();
+      watcher.setIdle(false);
+      await waitFor(() => events.some((item) => item.kind === 'task-started' && item.turnId === 'turn-idle-wake'), 500);
+      expect(statSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      await watcher.stop();
+    }
+  });
 });

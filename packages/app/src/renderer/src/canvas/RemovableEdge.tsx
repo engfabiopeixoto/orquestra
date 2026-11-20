@@ -32,7 +32,7 @@ export function RemovableEdge({ id, source, target, sourceX, sourceY, targetX, t
           onMouseLeave={() => setHovered(false)}
           onFocus={() => setHovered(true)}
           onBlur={() => setHovered(false)}
-          onClick={(event) => { event.stopPropagation(); disconnect({ source, target, data }); }}
+          onClick={(event) => { event.stopPropagation(); disconnect({ source, target }); }}
         >×</button>
         {activity && !controlsVisible ? <span className="edge-pill" data-testid={`edge-pill-${id}`} style={{ transform: center }}>{PILL_LABEL[activity.kind]}</span> : null}
       </EdgeLabelRenderer>

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { HostResult } from '@orquestra/shared/host-protocol';
 import type { CommandApi } from '../api';
+import { usePortalOverlay } from '../portal/modal-overlay';
 import { useApp } from '../store';
 
 type Provider = 'codex' | 'claude' | 'agy';
@@ -74,6 +75,7 @@ function ProviderUsage({ id, title, automatic, api, externalUsage, onUsage }: { 
 
 export function SubscriptionUsage({ api }: { api: CommandApi }) {
   const [open, setOpen] = useState(false);
+  usePortalOverlay(open);
   const [summary, setSummary] = useState<Partial<Record<Provider, Usage>>>({});
   const sharedUsage = useApp((state) => state.usage);
   const onUsage = (id: Provider, usage: Usage) => setSummary((previous) => (previous[id] === usage ? previous : { ...previous, [id]: usage }));

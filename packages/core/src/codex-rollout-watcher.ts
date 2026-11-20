@@ -18,6 +18,7 @@ export type CodexRolloutWatcherOptions = {
   sessionId?: string | null;
   startedAt?: number;
   pollMs?: number;
+  idlePollMs?: number;
   discoveryMs?: number;
   log: Logger;
   onEvent: (event: CodexRolloutEvent) => void;
@@ -176,12 +177,14 @@ export class CodexRolloutWatcher {
   private readonly home: string;
   private readonly startedAt: number;
   private readonly pollMs: number;
+  private readonly idlePollMs: number;
   private readonly discoveryMs: number;
   private readonly candidates = new Map<string, Candidate>();
   private readonly olderRollouts = new Set<string>();
   private timer: NodeJS.Timeout | undefined;
   private polling = false;
   private stopped = false;
+  private idle = false;
   private selected: Candidate | null = null;
   private expectedSessionId: string | null;
   private nextDiscoveryAt = 0;
@@ -192,15 +195,34 @@ export class CodexRolloutWatcher {
     this.home = opts.codexHome ?? process.env.CODEX_HOME ?? join(homedir(), '.codex');
     this.startedAt = opts.startedAt ?? Date.now();
     this.pollMs = opts.pollMs ?? 250;
+    this.idlePollMs = opts.idlePollMs ?? (opts.pollMs !== undefined ? Math.max(opts.pollMs, opts.pollMs * 8) : 2000);
     this.discoveryMs = opts.discoveryMs ?? 2000;
     this.expectedSessionId = opts.sessionId ?? null;
+  }
+
+  private scheduleTimer(): void {
+    clearInterval(this.timer);
+    if (this.stopped) return;
+    this.timer = setInterval(() => void this.poll(), this.idle ? this.idlePollMs : this.pollMs);
+    this.timer.unref();
   }
 
   start(): void {
     if (this.timer || this.stopped) return;
     void this.poll();
-    this.timer = setInterval(() => void this.poll(), this.pollMs);
-    this.timer.unref();
+    this.scheduleTimer();
+  }
+
+  isIdle(): boolean {
+    return this.idle;
+  }
+
+  setIdle(idle: boolean): void {
+    if (this.idle === idle) return;
+    this.idle = idle;
+    if (this.stopped || !this.timer) return;
+    this.scheduleTimer();
+    if (!idle) void this.poll();
   }
 
   setSessionId(sessionId: string): void {

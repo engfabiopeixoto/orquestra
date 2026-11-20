@@ -2,7 +2,7 @@ import type { Edge } from '@xyflow/react';
 import type { CommandApi } from '../api';
 import { appStore } from '../store';
 
-export type DisconnectableEdge = Pick<Edge, 'source' | 'target' | 'data'>;
+export type DisconnectableEdge = Pick<Edge, 'source' | 'target'>;
 
 /** Único caminho de remoção de aresta: usado por Delete, menu de contexto e botão ×. */
 export async function disconnectEdge(edge: DisconnectableEdge, api: CommandApi): Promise<void> {

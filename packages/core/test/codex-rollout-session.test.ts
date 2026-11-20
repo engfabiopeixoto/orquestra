@@ -171,4 +171,31 @@ describe('Session Codex via rollout', () => {
     await new Promise((resolve) => setTimeout(resolve, 120));
     expect(warned).toEqual([]);
   });
+
+  it('alterna CodexRolloutWatcher para idle em repouso e captura task_started externo ou após injectPrompt', async () => {
+    const { home, session, ended } = makeSession();
+    await ready(session);
+    const file = createRollout(home, 'thread-idle-switch');
+    await waitFor(() => session.agentSessionId === 'thread-idle-switch');
+
+    const watcher = (session as unknown as { codexRolloutWatcher: { isIdle(): boolean } }).codexRolloutWatcher;
+    expect(watcher.isIdle()).toBe(true);
+
+    // Envia prompt pelo broker: volta imediatamente para polling ativo
+    await session.injectPrompt('oi', 'ask-switch');
+    expect(watcher.isIdle()).toBe(false);
+    rolloutEvent(file, 'task_started', 'turn-switch-1');
+    rolloutEvent(file, 'task_complete', 'turn-switch-1', { last_agent_message: 'ok' });
+    await waitFor(() => ended.length === 1);
+    expect(session.state).toBe('idle');
+    expect(watcher.isIdle()).toBe(true);
+
+    // Mesmo em idle, um task_started externo acorda o turno para busy e depois conclui
+    rolloutEvent(file, 'task_started', 'turn-ext-1');
+    await waitFor(() => session.state === 'busy');
+    expect(watcher.isIdle()).toBe(false);
+    rolloutEvent(file, 'task_complete', 'turn-ext-1', { last_agent_message: 'ok-ext' });
+    await waitFor(() => ended.length === 2);
+    expect(watcher.isIdle()).toBe(true);
+  });
 });

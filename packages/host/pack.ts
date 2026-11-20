@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildHost, EXTERNAL_MODULES } from './build.js';
@@ -55,8 +55,34 @@ export async function packHost(): Promise<string> {
     throw error;
   }
 
+  pruneDistPack(distPack);
   console.log('Pacote do núcleo pronto em:', distPack);
   return distPack;
+}
+
+function removePdbFiles(dir: string): void {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) removePdbFiles(full);
+    else if (entry.name.toLowerCase().endsWith('.pdb')) rmSync(full, { force: true });
+  }
+}
+
+function pruneDistPack(distPack: string): void {
+  const nodeModules = join(distPack, 'node_modules');
+  removePdbFiles(nodeModules);
+  const ptyDir = join(nodeModules, 'node-pty');
+  for (const dir of ['third_party', 'deps', 'src']) {
+    rmSync(join(ptyDir, dir), { recursive: true, force: true });
+  }
+  const prebuilds = join(ptyDir, 'prebuilds');
+  try {
+    for (const entry of readdirSync(prebuilds, { withFileTypes: true })) {
+      if (entry.isDirectory() && (entry.name === 'win32-arm64' || entry.name.startsWith('darwin-'))) {
+        rmSync(join(prebuilds, entry.name), { recursive: true, force: true });
+      }
+    }
+  } catch { /* Sem pasta prebuilds. */ }
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

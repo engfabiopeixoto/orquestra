@@ -1,6 +1,7 @@
 import type { QueueEntry } from '@orquestra/shared/host-protocol';
 import { useState } from 'react';
 import { createCommandApi } from '../api';
+import { usePortalOverlay } from '../portal/modal-overlay';
 import { appStore, useApp } from '../store';
 import { QueuePanel } from './QueuePanel';
 
@@ -21,6 +22,7 @@ export function ContextBar({ name, menu = false, onDone, onOpenMenu }: { name: s
   const view = useApp((state) => state.terminals[name]);
   const [showQueue, setShowQueue] = useState(false);
   const [pending, setPending] = useState(false);
+  usePortalOverlay(!menu && showQueue);
   const act = async (action: () => Promise<void>) => {
     if (pending) return;
     setPending(true);

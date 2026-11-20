@@ -1,4 +1,4 @@
-import { NodeResizer, useViewport, type NodeProps } from '@xyflow/react';
+import { NodeResizer, useStore, type NodeProps } from '@xyflow/react';
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { GROUP_MIN, groupContains } from '@orquestra/shared/group-layout';
@@ -7,17 +7,19 @@ import type { GroupFlowNode } from '../canvas/flow-nodes';
 import { appStore, useApp } from '../store';
 import { activeWorkspaceId } from '../workspace-context';
 import { canvasElements, recoverGroupLayout } from './helpers';
+import { usePortalOverlay } from '../portal/modal-overlay';
 import { useGroupUI } from './ui-actions';
 
 export function GroupFrame({ data, selected }: NodeProps<GroupFlowNode>) {
   const state = useApp((state) => state);
   const group = state.groups.find((group) => group.id === data.groupId);
   const ui = useGroupUI();
-  const { zoom } = useViewport();
+  const zoom = useStore((state) => state.transform[2]);
   const api = useMemo(() => { const id = activeWorkspaceId(); return createCommandApi(window.orquestra.invoke, () => id); }, []);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [pending, setPending] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  usePortalOverlay(menu !== null);
   useEffect(() => {
     if (!menu) return;
     const outside = (event: PointerEvent) => { if (!menuRef.current?.contains(event.target as Node)) setMenu(null); };

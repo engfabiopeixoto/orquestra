@@ -1,7 +1,7 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { Terminal } from '@xterm/xterm';
-import { NodeResizer, NodeToolbar, Position, useReactFlow, useViewport, type NodeProps } from '@xyflow/react';
+import { NodeResizer, NodeToolbar, Position, useReactFlow, useStore, type NodeProps } from '@xyflow/react';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { createCommandApi } from '../api';
@@ -19,6 +19,7 @@ import { activeWorkspaceId } from '../workspace-context';
 import { recoverGroupLayout } from '../groups/helpers';
 import { NodeConnectors } from '../canvas/NodeConnectors';
 import { encodeWin32KeyEvent, installCodexInputMode } from './codex-input';
+import { usePortalOverlay } from '../portal/modal-overlay';
 import { ModelTag } from './ModelTag';
 
 export type { TerminalFlowNode };
@@ -178,10 +179,11 @@ function TerminalBody({ name, readOnly, agent }: { name: string; readOnly: boole
 
 export function TerminalNode({ id, data, selected }: NodeProps<TerminalFlowNode>) {
   const view = useApp((state) => state.terminals[data.name]);
-  const { zoom } = useViewport();
+  const zoomReadOnly = useStore((state) => Math.abs(state.transform[2] - 1) > 0.001);
   const { getNode, setCenter } = useReactFlow();
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  usePortalOverlay(menu !== null);
   useEffect(() => {
     if (!menu) return;
     const outside = (event: PointerEvent) => { if (!menuRef.current?.contains(event.target as Node)) setMenu(null); };
@@ -191,7 +193,6 @@ export function TerminalNode({ id, data, selected }: NodeProps<TerminalFlowNode>
     menuRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
     return () => { document.removeEventListener('pointerdown', outside); window.removeEventListener('keydown', escape); };
   }, [menu]);
-  const zoomReadOnly = Math.abs(zoom - 1) > 0.001;
   const readOnly = zoomReadOnly || Boolean(view?.blurred) || view?.state === 'exited';
   if (!view) return null;
   const mismatch = view.model?.status === 'mismatch';
@@ -213,23 +214,27 @@ export function TerminalNode({ id, data, selected }: NodeProps<TerminalFlowNode>
 
   return (
     <>
-      <NodeToolbar isVisible={selected && !menu} position={Position.Top} align="start">
-        <ContextBar name={data.name} onOpenMenu={openFromButton} />
-      </NodeToolbar>
-      <NodeResizer
-        isVisible={selected && !view.locked}
-        minWidth={320}
-        minHeight={180}
-        onResizeEnd={(_event, params) => {
-          appStore.getState().resizeNode(data.name, { width: params.width, height: params.height });
-          appStore.getState().moveNode(data.name, { x: params.x, y: params.y });
-          void api
-            .command('layout.update', {
-              nodes: [{ name: data.name, x: params.x, y: params.y, width: params.width, height: params.height }],
-            })
-            .catch((error) => recoverGroupLayout(api, error));
-        }}
-      />
+      {selected && !menu ? (
+        <NodeToolbar isVisible position={Position.Top} align="start">
+          <ContextBar name={data.name} onOpenMenu={openFromButton} />
+        </NodeToolbar>
+      ) : null}
+      {selected && !view.locked ? (
+        <NodeResizer
+          isVisible
+          minWidth={320}
+          minHeight={180}
+          onResizeEnd={(_event, params) => {
+            appStore.getState().resizeNode(data.name, { width: params.width, height: params.height });
+            appStore.getState().moveNode(data.name, { x: params.x, y: params.y });
+            void api
+              .command('layout.update', {
+                nodes: [{ name: data.name, x: params.x, y: params.y, width: params.width, height: params.height }],
+              })
+              .catch((error) => recoverGroupLayout(api, error));
+          }}
+        />
+      ) : null}
       <NodeConnectors />
       <div className={`term-node frame-${view.state} ${selected ? 'is-selected' : ''} ${view.locked ? 'is-locked nopan' : ''} ${mismatch ? 'model-mismatch' : ''}`}>
         {view.state === 'waiting' ? <span className="waiting-badge" data-testid={`terminal-waiting-${data.name}`}>👋 aguardando você</span> : null}

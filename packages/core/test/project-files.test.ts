@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, unlinkSync, writeFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -96,5 +97,39 @@ describe('frequência das consultas ao Git', () => {
     writeFileSync(join(root, 'novo.txt'), 'novo\n');
     await new Promise((resolve) => setTimeout(resolve, 1700));
     expect(await changed(files)).toEqual([]);
+  });
+});
+
+describe('cache por mtime e tamanho sem Git', () => {
+  it('não relê o conteúdo de arquivos inalterados em listagens repetidas e detecta edição e recriação', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'orq-files-stat-cache-'));
+    writeFileSync(join(root, 'a.txt'), 'linha 1\n');
+    writeFileSync(join(root, 'b.txt'), 'linha 2\n');
+    const reader = vi.fn((path: string) => readFile(path));
+    const files = new ProjectFiles(root, { readFile: reader });
+
+    await files.list('');
+    expect(reader).toHaveBeenCalledTimes(2);
+    reader.mockClear();
+
+    // Segunda e terceira listagens sem alteração: 0 leituras de conteúdo
+    await files.list('');
+    await files.list('');
+    expect(reader).toHaveBeenCalledTimes(0);
+
+    // Alterando um arquivo: só ele é relido
+    writeFileSync(join(root, 'a.txt'), 'linha 1\nlinha 2 extra\n');
+    const updated = await files.list('');
+    expect(reader).toHaveBeenCalledTimes(1);
+    expect(updated.entries.find((e) => e.name === 'a.txt')).toMatchObject({ change: 'added', additions: 1 });
+
+    // Deletar e recriar invalida o cache anterior
+    reader.mockClear();
+    unlinkSync(join(root, 'b.txt'));
+    await files.list('');
+    writeFileSync(join(root, 'b.txt'), 'linha 2 recriada\n');
+    const recreated = await files.list('');
+    expect(reader).toHaveBeenCalledTimes(1);
+    expect(recreated.entries.find((e) => e.name === 'b.txt')).toMatchObject({ change: 'modified', additions: 1, deletions: 1 });
   });
 });
