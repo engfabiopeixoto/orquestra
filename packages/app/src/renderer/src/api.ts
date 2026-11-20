@@ -21,7 +21,7 @@ export function createCommandApi(invoke: (method: string, params: unknown, works
     async command(method, params) {
       const id = workspace();
       const generation = workspaceGeneration();
-      const scoped = /^(terminal\.|note\.|edge\.|layout\.|prompt\.|files\.|persona\.|group\.|flow\.|portal\.)/.test(method);
+      const scoped = /^(terminal\.|note\.|edge\.|layout\.|prompt\.|files\.|persona\.|group\.|portal\.)/.test(method);
       const response = id ? await invoke(method, params, id) : await invoke(method, params);
       if (!response.ok) throw new CommandError(response.error.code, response.error.message);
       if (scoped && (id !== activeWorkspaceId() || generation !== workspaceGeneration())) throw new CommandError('APP_UNAVAILABLE', 'A operação foi concluída no workspace de origem.');

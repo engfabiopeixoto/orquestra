@@ -2,7 +2,6 @@ import type { GroupLayout, HostEvent, NoteInfo, ProjectSnapshot, QueueEntry, Sub
 import { builtinModelCatalog, modelCatalogSchema, type ModelCatalog } from '@orquestra/shared/models';
 import type { CanvasGroup, Position, Size, Viewport } from '@orquestra/shared/workspace';
 import { groupNodeId, inferredGroupKind } from '@orquestra/shared/group-layout';
-import { flowCanvasId, type FlowSnapshot } from '@orquestra/shared/flow';
 import { useStore } from 'zustand';
 import { createStore } from 'zustand/vanilla';
 
@@ -56,7 +55,6 @@ export type AppState = {
   groups: CanvasGroup[];
   canvasViewport: Viewport | null;
   selectionMode: boolean;
-  flow: FlowSnapshot;
   modelCatalog: ModelCatalog;
   usage: Partial<Record<UsageProvider, SubscriptionUsage>>;
 };
@@ -66,7 +64,6 @@ export type AppActions = {
   setModelCatalog(catalog: ModelCatalog): void;
   loadProject(snapshot: ProjectSnapshot, selection?: { focusedTerminal: string | null; selectedNodes: string[] }): void;
   applyGroupLayout(layout: GroupLayout): void;
-  applyFlow(snapshot: FlowSnapshot): void;
   applyEvent(event: HostEvent): void;
   addTerminal(info: TerminalInfo): void;
   replaceTerminal(oldName: string, info: TerminalInfo): void;
@@ -172,11 +169,10 @@ export function createAppStore() {
     groups: [],
     canvasViewport: null,
     selectionMode: false,
-    flow: { graph: { nodes: [], connections: [], autoRun: false }, run: null, tests: null },
     modelCatalog: builtinModelCatalog(),
     usage: {},
 
-    setProject: (project) => set({ project, terminals: {}, notes: {}, edges: [], queues: {}, answers: [], focusedTerminal: null, editing: null, viewport: null, canvasViewport: null, groups: [], selectedNodes: [], connectMode: false, connectFrom: null, selectionMode: false, flow: { graph: { nodes: [], connections: [], autoRun: false }, run: null, tests: null } }),
+    setProject: (project) => set({ project, terminals: {}, notes: {}, edges: [], queues: {}, answers: [], focusedTerminal: null, editing: null, viewport: null, canvasViewport: null, groups: [], selectedNodes: [], connectMode: false, connectFrom: null, selectionMode: false }),
     setModelCatalog: (modelCatalog) => {
       const parsed = modelCatalogSchema.safeParse(modelCatalog);
       if (parsed.success) set({ modelCatalog: parsed.data });
@@ -220,31 +216,20 @@ export function createAppStore() {
         viewport: snapshot.viewport,
         canvasViewport: snapshot.viewport,
         groups: snapshot.groups ?? [],
-        flow: snapshot.flow ?? { graph: { nodes: [], connections: [], autoRun: false }, run: null, tests: null },
-        selectedNodes: selection?.selectedNodes.filter((name) => terminals[name] || notes[name] || snapshot.groups?.some((group) => groupNodeId(group.id) === name) || snapshot.flow?.graph.nodes.some((node) => flowCanvasId(node.id) === name)) ?? [],
+        selectedNodes: selection?.selectedNodes.filter((name) => terminals[name] || notes[name] || snapshot.groups?.some((group) => groupNodeId(group.id) === name)) ?? [],
       });
     },
-    applyFlow: (flow) => set({ flow }),
 
     applyGroupLayout: ({ groups, layout }) => {
       const update = <T extends { position: Position; size: Size }>(items: Record<string, T>): Record<string, T> => Object.fromEntries(Object.entries(items).map(([name, item]) => {
         const rect = layout[name];
         return [name, rect ? { ...item, position: { x: rect.x, y: rect.y }, size: { width: rect.width, height: rect.height } } : item];
       }));
-      const flow = get().flow;
-      set({ groups, terminals: update(get().terminals), notes: update(get().notes), flow: { ...flow, graph: { ...flow.graph, nodes: flow.graph.nodes.map((node) => { const rect = layout[flowCanvasId(node.id)]; return rect ? { ...node, position: { x: rect.x, y: rect.y }, size: { width: rect.width, height: rect.height } } : node; }) } }, selectedNodes: get().selectedNodes.filter((name) => get().terminals[name] || get().notes[name] || flow.graph.nodes.some((node) => flowCanvasId(node.id) === name) || groups.some((group) => groupNodeId(group.id) === name)) });
+      set({ groups, terminals: update(get().terminals), notes: update(get().notes), selectedNodes: get().selectedNodes.filter((name) => get().terminals[name] || get().notes[name] || groups.some((group) => groupNodeId(group.id) === name)) });
     },
 
     applyEvent: (event) => {
-      if (event.type === 'flow.graph') {
-        const run = get().flow.run;
-        set({ flow: { ...get().flow, graph: event.graph, run: run ? { ...run, stale: event.revision ? run.revision !== event.revision : true } : null } });
-      } else if (event.type === 'flow.run') {
-        set({ flow: { ...get().flow, run: event.run } });
-      } else if (event.type === 'flow.node') {
-        const flow = get().flow;
-        if (flow.run?.id === event.runId) set({ flow: { ...flow, run: { ...flow.run, results: { ...flow.run.results, [event.id]: event.result } } } });
-      } else if (event.type === 'group.layout') {
+      if (event.type === 'group.layout') {
         get().applyGroupLayout(event);
       } else if (event.type === 'terminal.state') {
         recentReplacements.delete(event.name);
@@ -371,7 +356,6 @@ export function createAppStore() {
     },
 
     moveNode: (name, position) => {
-      if (name.startsWith('flow:')) { const flow = get().flow; return set({ flow: { ...flow, graph: { ...flow.graph, nodes: flow.graph.nodes.map((node) => flowCanvasId(node.id) === name ? { ...node, position } : node) } } }); }
       const term = get().terminals[name];
       if (term) return set({ terminals: { ...get().terminals, [name]: { ...term, position } } });
       const note = get().notes[name];
@@ -430,6 +414,6 @@ export function useApp<T>(selector: (state: AppState & AppActions) => T): T {
 
 export function layoutOf(state: AppState, name: string): Rect | null {
   const node = state.terminals[name] ?? state.notes[name];
-  if (!node) { const data = state.flow.graph.nodes.find((node) => flowCanvasId(node.id) === name); return data ? { ...data.position, ...data.size, height: Math.max(data.size.height, 130 + Math.max(data.inputs.length, data.outputs.length) * 26) } : null; }
+  if (!node) return null;
   return { ...node.position, ...node.size };
 }

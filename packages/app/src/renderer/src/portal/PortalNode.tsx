@@ -131,7 +131,7 @@ export function PortalNode({ id, data, selected }: NodeProps<PortalFlowNode>) {
         ? { x: canvasRect.left, y: canvasRect.top, width: canvasRect.width, height: canvasRect.height }
         : { x: 0, y: 0, width: window.innerWidth, height: window.innerHeight };
       const controls = [...document.querySelectorAll<HTMLElement>(
-        '.palette, .group-tools, .flow-toolbar, .zoom-control, .zoom, .subscription-usage',
+        '.palette, .group-tools, .zoom-control, .zoom, .subscription-usage',
       )].map((control) => {
         const controlRect = control.getBoundingClientRect();
         return { x: controlRect.left, y: controlRect.top, width: controlRect.width, height: controlRect.height };
@@ -150,7 +150,7 @@ export function PortalNode({ id, data, selected }: NodeProps<PortalFlowNode>) {
     const observer = new ResizeObserver(() => sync());
     observer.observe(el);
     const canvasElement = document.querySelector('.canvas');
-    const controlsSelector = '.palette, .group-tools, .flow-toolbar, .zoom-control, .zoom, .subscription-usage';
+    const controlsSelector = '.palette, .group-tools, .zoom-control, .zoom, .subscription-usage';
     const observedControls = new Set<Element>();
     const observeControls = () => {
       const currentControls = new Set(document.querySelectorAll(controlsSelector));

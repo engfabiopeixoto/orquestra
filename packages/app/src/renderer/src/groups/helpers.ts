@@ -7,7 +7,6 @@ export function canvasElements(state: AppState): GroupElement[] {
   return [
     ...Object.values(state.terminals).flatMap((terminal) => terminal.id ? [{ kind: 'terminal' as const, id: terminal.id, name: terminal.name, rect: { ...terminal.position, ...terminal.size }, locked: Boolean(terminal.locked) }] : []),
     ...Object.values(state.notes).flatMap((note) => note.id ? [{ kind: 'note' as const, id: note.id, name: note.name, rect: { ...note.position, ...note.size }, locked: false }] : []),
-    ...state.flow.graph.nodes.filter((node) => node.kind !== 'agent').map((node) => ({ kind: 'flow' as const, id: node.id, name: `flow:${node.id}`, rect: { ...node.position, ...node.size }, locked: false })),
   ];
 }
 export function selectionMembers(state: AppState): GroupMember[] {

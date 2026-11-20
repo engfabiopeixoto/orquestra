@@ -16,12 +16,11 @@ Rodar vários agentes ao mesmo tempo significa alternar entre janelas de termina
 - **Tag de modelo.** Cada terminal de agente mostra o modelo no cabeçalho. Clique na tag para escolher outro modelo da lista daquele agente. A tag fica vermelha quando o agente está rodando um modelo diferente do escolhido.
 - **Funções (personas).** Salve instruções reutilizáveis por projeto ou globalmente e entregue uma a qualquer terminal.
 - **Notas.** Notas em Markdown no canvas que os agentes conectados podem ler e escrever.
-- **Grupos.** Agrupe terminais, notas e nós de fluxo em uma moldura e mova todos juntos.
+- **Grupos.** Agrupe terminais e notas em uma moldura e mova todos juntos.
 - **Workspaces.** Mantenha até três projetos abertos ao mesmo tempo, cada um com seu canvas.
 - **Portais de navegador.** Conecte um navegador a um agente para ele navegar, clicar, digitar, rolar a página e capturar telas.
 - **Monitoramento de atividade.** Ative o monitoramento por terminal para receber uma notificação do Windows quando ele terminar um turno ou esperar por você com o app fora de foco.
 - **Uso das assinaturas.** Veja as janelas de uso e os horários de renovação do Claude, do Codex e do agy. Os agentes consultam esses dados com `orq usage`, e o regente pode delegar sem estourar os limites.
-- **Fluxo visual de dados.** Monte um grafo de processamento no mesmo canvas com nós de entrada, arquivo, algoritmo (JavaScript ou Python), validação, teste, visualização e saída. Veja [docs/fluxo-visual.md](docs/fluxo-visual.md).
 - **Controle remoto no celular (PWA).** Acompanhe e controle os workspaces do PC pelo celular via Tailscale.
 
 ## Celular
@@ -40,7 +39,6 @@ O Orquestra inclui uma PWA servida pelo próprio computador dentro da sua tailne
 - Windows x64. O código usa pipes nomeados do Windows, `where.exe`, `cmd.exe` e PowerShell, e o instalador é apenas para Windows.
 - Node.js 22 ou mais recente e npm, para compilar ou desenvolver a partir do código.
 - Os CLIs de agente que você quer usar, instalados e autenticados: `claude`, `agy`, `codex`. O Orquestra os procura no `PATH` e nas pastas comuns de instalação do npm.
-- Python 3, opcional, para algoritmos em Python no fluxo visual.
 
 ## Instalação
 
@@ -108,11 +106,11 @@ Workspaces do npm em `packages/`:
 | Pacote | Papel |
 | --- | --- |
 | `app` | App Electron: processo principal, renderer em React (canvas com React Flow, terminais xterm.js), configuração do electron-builder e testes Playwright. |
-| `host` | Processo em segundo plano que mantém terminais, workspaces, grupos do canvas e o motor do fluxo visual. O app fala com ele por um protocolo tipado. |
+| `host` | Processo em segundo plano que mantém terminais, workspaces e grupos do canvas. O app fala com ele por um protocolo tipado. |
 | `core` | Sessões de terminal (node-pty), adaptadores dos agentes claude, agy, codex e shell, servidor de pipe local, notas, funções e uso das assinaturas. |
 | `cli` | O comando `orq` e o servidor MCP, empacotados em um único `orq.mjs`. |
 | `mobile` | PWA (React + Vite + xterm.js) servida pelo gateway remoto do host para acompanhar e controlar workspaces pelo celular. |
-| `shared` | Schemas Zod e tipos compartilhados por todos os pacotes: protocolo do host, workspace, fluxo e cliente do CLI. |
+| `shared` | Schemas Zod e tipos compartilhados por todos os pacotes: protocolo do host, workspace e cliente do CLI. |
 
 ## Licença
 

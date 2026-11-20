@@ -9,7 +9,6 @@ export const groupNodeId = (id: string) => `__orq_group_${id}`;
 export const memberKey = (member: GroupMember) => `${member.kind}:${member.id}`;
 export function inferredGroupKind(members: GroupMember[], fallback: CanvasGroup['kind']): CanvasGroup['kind'] {
   if (!members.length) return fallback;
-  if (members.some((member) => member.kind === 'flow')) return 'mixed';
   const terminals = members.some((member) => member.kind === 'terminal');
   const notes = members.some((member) => member.kind === 'note');
   return terminals && notes ? 'mixed' : terminals ? 'agents' : 'notes';

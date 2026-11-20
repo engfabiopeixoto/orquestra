@@ -2,8 +2,8 @@ import { z } from 'zod';
 import { OrqError } from './errors.js';
 import { terminalNameSchema } from './names.js';
 import { personaSchema } from './regent.js';
-import { flowGraphSchema, type FlowGraph } from './flow.js';
 import { browserNodeSchema } from './browser.js';
+import { inferredGroupKind } from './group-layout.js';
 import { modelNameSchema } from './models.js';
 
 export const WORKSPACE_DIR = '.orquestra';
@@ -13,7 +13,7 @@ const finite = z.number().finite();
 export const positionSchema = z.object({ x: finite, y: finite });
 export const sizeSchema = z.object({ width: finite.positive(), height: finite.positive() });
 export const viewportSchema = z.object({ x: finite, y: finite, zoom: finite.positive() });
-export const groupMemberSchema = z.object({ kind: z.enum(['terminal', 'note', 'flow']), id: z.string().uuid() });
+export const groupMemberSchema = z.object({ kind: z.enum(['terminal', 'note']), id: z.string().uuid() });
 export const groupKindSchema = z.enum(['agents', 'notes', 'mixed']);
 export const groupColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Escolha uma cor hexadecimal válida.');
 export const canvasGroupSchema = z.object({
@@ -74,7 +74,6 @@ export const workspaceSchema = z
     connections: z.array(connectionSchema),
     personas: z.array(personaSchema).default([]),
     groups: z.array(canvasGroupSchema).default([]),
-    flow: flowGraphSchema.default({ nodes: [], connections: [], autoRun: false }),
     portals: z.array(browserNodeSchema).max(2).default([]),
   })
   .superRefine((workspace, ctx) => {
@@ -115,7 +114,7 @@ export const workspaceSchema = z
       if (groupIds.has(group.id) || ids.has(group.id)) issue(['groups', index, 'id'], 'id de grupo repetido');
       groupIds.add(group.id);
       group.members.forEach((member, memberIndex) => {
-        const source = member.kind === 'terminal' ? workspace.terminals : member.kind === 'note' ? workspace.notes : workspace.flow.nodes.filter((node) => node.kind !== 'agent');
+        const source = member.kind === 'terminal' ? workspace.terminals : workspace.notes;
         if (!source.some((node) => node.id === member.id)) issue(['groups', index, 'members', memberIndex], 'membro inexistente');
         if (membership.has(member.id)) issue(['groups', index, 'members', memberIndex], 'elemento pertence a mais de um grupo');
         membership.add(member.id);
@@ -129,16 +128,33 @@ export type Viewport = z.infer<typeof viewportSchema>;
 export type WorkspaceTerminal = Omit<z.infer<typeof workspaceTerminalSchema>, 'monitor'> & { monitor: boolean };
 export type WorkspaceNote = z.infer<typeof workspaceNoteSchema>;
 export type Connection = z.infer<typeof connectionSchema>;
-export type Workspace = Omit<z.infer<typeof workspaceSchema>, 'terminals' | 'groups' | 'flow' | 'portals'> & { terminals: WorkspaceTerminal[]; groups?: CanvasGroup[]; flow?: FlowGraph; portals?: z.infer<typeof browserNodeSchema>[] };
+export type Workspace = Omit<z.infer<typeof workspaceSchema>, 'terminals' | 'groups' | 'portals'> & { terminals: WorkspaceTerminal[]; groups?: CanvasGroup[]; portals?: z.infer<typeof browserNodeSchema>[] };
 
 export function emptyWorkspace(): Workspace {
-  return { schemaVersion: 1, viewport: { x: 0, y: 0, zoom: 1 }, terminals: [], notes: [], connections: [], personas: [], groups: [], flow: { nodes: [], connections: [], autoRun: false }, portals: [] };
+  return { schemaVersion: 1, viewport: { x: 0, y: 0, zoom: 1 }, terminals: [], notes: [], connections: [], personas: [], groups: [], portals: [] };
+}
+
+function stripLegacyFlowMembers(raw: unknown): unknown {
+  if (typeof raw !== 'object' || raw === null || !('groups' in raw) || !Array.isArray((raw as { groups?: unknown }).groups)) return raw;
+  const record = raw as Record<string, unknown>;
+  const groups = (record.groups as unknown[]).map((group) => {
+    if (typeof group !== 'object' || group === null || !('members' in group) || !Array.isArray((group as { members?: unknown }).members)) return group;
+    const item = group as Record<string, unknown>;
+    const rawMembers = item.members as unknown[];
+    // Compatibilidade com workspaces antigos que persistiam membros de nós de fluxo removidos.
+    const kept = rawMembers.filter((member) => !(typeof member === 'object' && member !== null && (member as { kind?: unknown }).kind === 'flow'));
+    if (kept.length === rawMembers.length) return group;
+    const validMembers = kept.filter((member): member is GroupMember => groupMemberSchema.safeParse(member).success);
+    const kind = groupKindSchema.safeParse(item.kind).success ? inferredGroupKind(validMembers, item.kind as CanvasGroup['kind']) : item.kind;
+    return { ...item, members: kept, kind };
+  });
+  return { ...record, groups };
 }
 
 export function migrateWorkspace(raw: unknown): Workspace {
   const version = typeof raw === 'object' && raw !== null ? (raw as { schemaVersion?: unknown }).schemaVersion : undefined;
   if (version !== 1) throw new OrqError('USAGE', `Workspace inválido: schemaVersion: versão ${String(version)} não suportada (esperada 1).`);
-  const parsed = workspaceSchema.safeParse(raw);
+  const parsed = workspaceSchema.safeParse(stripLegacyFlowMembers(raw));
   if (!parsed.success) {
     const detail = parsed.error.issues.map((issue) => `${issue.path.join('.') || 'workspace'}: ${issue.message}`).join('; ');
     throw new OrqError('USAGE', `Workspace inválido: ${detail}.`);

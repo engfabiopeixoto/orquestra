@@ -479,7 +479,7 @@ describe('RemoteGateway: WebSocket', () => {
     const forbidden = all.filter((m) => !(REMOTE_ALLOWED_METHODS as readonly string[]).includes(m));
     expect(forbidden.length).toBeGreaterThan(20);
     for (const m of all) expect(isRemoteAllowedMethod(m), m).toBe(!forbidden.includes(m));
-    for (const required of ['persona.', 'project.open', 'project.close', 'flow.', 'portal.', 'terminal.remove', 'terminal.update', 'terminal.duplicate', 'note.']) {
+    for (const required of ['persona.', 'project.open', 'project.close', 'portal.', 'terminal.remove', 'terminal.update', 'terminal.duplicate', 'note.']) {
       expect(forbidden.some((m) => m.startsWith(required)), required).toBe(true);
     }
 
@@ -518,7 +518,7 @@ describe('RemoteGateway: WebSocket', () => {
     expect(JSON.stringify(lines)).not.toContain('senha-super-secreta');
   });
 
-  it('não repassa portal-call, portal-cancel, confirm nem eventos de fluxo, notas, grupos e arestas ao celular', async () => {
+  it('não repassa portal-call, portal-cancel, confirm nem eventos de notas, grupos e arestas ao celular', async () => {
     const { gateway, electronSent, electronCommand } = await setupGateway();
     const status = (await electronCommand('remote.enable', { enabled: true })) as { localUrl: string };
     const pair = (await electronCommand('remote.pair')) as { token: string };
@@ -526,8 +526,6 @@ describe('RemoteGateway: WebSocket', () => {
     const wsId = 'w1';
 
     const events = [
-      { type: 'flow.graph', graph: {}, workspaceId: wsId },
-      { type: 'flow.run', run: {}, workspaceId: wsId },
       { type: 'note.changed', note: { name: 'n', text: 'conteúdo sigiloso' }, connectedTo: null, rect: null, workspaceId: wsId },
       { type: 'note.removed', name: 'n', workspaceId: wsId },
       { type: 'group.layout', groups: [], layout: {}, workspaceId: wsId },
@@ -544,7 +542,7 @@ describe('RemoteGateway: WebSocket', () => {
     const received = client.messages.filter((m) => m.type === 'event').map((m) => m.event.type);
     expect(received).toEqual(['terminal.state']);
     expect(JSON.stringify(client.messages)).not.toContain('conteúdo sigiloso');
-    expect(electronSent.filter((m) => m.kind === 'event').map((m) => (m as any).event.type)).toEqual(expect.arrayContaining(['flow.graph', 'note.changed', 'group.layout', 'edge.added']));
+    expect(electronSent.filter((m) => m.kind === 'event').map((m) => (m as any).event.type)).toEqual(expect.arrayContaining(['note.changed', 'group.layout', 'edge.added']));
     expect(electronSent.some((m) => m.kind === 'portal-call')).toBe(true);
     expect(client.messages.some((m) => m.type !== 'event' && m.type !== 'auth-ok')).toBe(false);
   });
@@ -647,7 +645,7 @@ const outputs = (messages: any[], name?: string) =>
   messages.filter((m) => m.type === 'event' && m.event.type === 'terminal.output' && (!name || m.event.name === name));
 
 describe('RemoteGateway: snapshot remoto filtrado', () => {
-  it('workspace.activate devolve só terminais, filas, nome e sequência: sem notas, fluxo, grupos, layout nem diretório', async () => {
+  it('workspace.activate devolve só terminais, filas, nome e sequência: sem notas, grupos, layout nem diretório', async () => {
     const { electronCommand, dataDir } = await setupGateway();
     const status = (await electronCommand('remote.enable', { enabled: true })) as { localUrl: string };
     const snap = await openProjectWithTerminals(electronCommand, join(dataDir, 'proj'), ['A']);
@@ -659,7 +657,7 @@ describe('RemoteGateway: snapshot remoto filtrado', () => {
     const resp = await waitForMsg(client.messages, (m) => m.id === 'act');
     expect(resp.type).toBe('response');
     expect(Object.keys(resp.result).sort()).toEqual(expect.arrayContaining(['eventSequence', 'name', 'terminals', 'workspaceId']));
-    for (const forbidden of ['notes', 'flow', 'groups', 'layout', 'edges', 'viewport', 'dir']) expect(resp.result, forbidden).not.toHaveProperty(forbidden);
+    for (const forbidden of ['notes', 'groups', 'layout', 'edges', 'viewport', 'dir']) expect(resp.result, forbidden).not.toHaveProperty(forbidden);
     expect(resp.result.terminals.map((t: any) => t.name)).toEqual(['A']);
     expect(JSON.stringify(client.messages)).not.toContain('CONTEUDO-SIGILOSO-DA-NOTA');
   });

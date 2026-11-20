@@ -1037,7 +1037,6 @@ export class RemoteGateway {
         await inner.handle(message);
       },
       dispatchForTest: (method, params, caller) => inner.dispatchForTest(method, params, caller),
-      cancelWork: inner.cancelWork ? () => inner.cancelWork!() : undefined,
       close: async () => {
         await this.close();
         await inner.close();

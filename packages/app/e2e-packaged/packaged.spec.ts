@@ -63,10 +63,6 @@ test('app empacotado abre, inicia o núcleo, cria shell e grava logs', async () 
   await page.getByTestId('group-ungroup').click();
   await expect(page.locator('.group-frame')).toHaveCount(0);
   await expect(page.getByTestId('terminal-body-S1')).toBeVisible();
-  await page.getByTestId('flow-library').click(); await page.getByTestId('flow-example').click();
-  await page.getByRole('button', { name: 'Enquadrar', exact: true }).click(); await page.getByTestId('flow-run').click();
-  await expect.poll(async () => { const response = await page.evaluate(() => window.orquestra.invoke('flow.get', {})); return response.ok ? (response.result as any).run?.status : 'error'; }).toBe('success');
-  await page.getByRole('button', { name: 'Abrir prévia 3D', exact: true }).click(); await expect(page.getByTestId('flow-3d').locator('canvas')).toBeVisible(); await page.getByRole('button', { name: 'Fechar', exact: true }).click();
   await page.getByTestId('palette-new-portal').click(); await expect(page.locator('.portal-node')).toBeVisible();
   const portalId = (await page.locator('.portal-node').getAttribute('data-testid'))!.slice('portal-node-'.length);
   await page.evaluate((id) => window.orquestra.invoke('edge.connect', { a: 'S1', b: id }), portalId);

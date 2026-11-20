@@ -11,8 +11,6 @@
     "./args": "./src/args.ts",
     "./regent": "./src/regent.ts",
     "./group-layout": "./src/group-layout.ts",
-    "./flow": "./src/flow.ts",
-    "./flow-contract": "./src/flow-contract.ts",
     "./models": "./src/models.ts",
     "./remote": "./src/remote.ts",
     "./remote-snapshot": "./src/remote-snapshot.ts",

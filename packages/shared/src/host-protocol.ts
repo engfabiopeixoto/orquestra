@@ -5,7 +5,6 @@ import { terminalNameSchema } from './names.js';
 import { sessionStateSchema } from './protocol.js';
 import { personaScopeSchema } from './regent.js';
 import { canvasGroupSchema, groupColorSchema, groupKindSchema, groupMemberSchema, positionSchema, sizeSchema, viewportSchema } from './workspace.js';
-import { flowGraphSchema, flowNodeSchema, flowRunSchema, flowNodeResultSchema, flowSnapshotSchema, flowTestReportSchema, jsonValueSchema } from './flow.js';
 import { browserNodeSchema, browserMethodSchemas } from './browser.js';
 import { modelAgentSchema, modelCatalogSchema, modelNameSchema, terminalModelSchema } from './models.js';
 import { remoteDeviceSchema, remoteErrorPayloadSchema, remotePairResultSchema, remoteStatusSchema } from './remote.js';
@@ -80,7 +79,6 @@ export const projectSnapshotSchema = z.object({
   viewport: viewportSchema,
   queues: z.record(z.array(queueEntrySchema)).optional(),
   groups: z.array(canvasGroupSchema).optional(),
-  flow: flowSnapshotSchema.optional(),
 });
 export type ProjectSnapshot = z.infer<typeof projectSnapshotSchema>;
 
@@ -99,22 +97,6 @@ export const hostMethodSchemas = {
   'portal.register': { params: browserNodeSchema, result: empty },
   'portal.registry': { params: empty, result: z.object({ portals: z.array(browserNodeSchema) }) },
   'portal.unregister': { params: z.object({ id: z.string().min(1) }), result: empty },
-  'flow.get': { params: empty, result: flowSnapshotSchema },
-  'flow.save': { params: z.object({ node: flowNodeSchema }), result: flowSnapshotSchema },
-  'flow.remove': { params: groupNamed, result: flowSnapshotSchema },
-  'flow.connect': { params: z.object({ from: z.string().uuid(), output: z.string(), to: z.string().uuid(), input: z.string() }), result: flowSnapshotSchema },
-  'flow.disconnect': { params: groupNamed, result: flowSnapshotSchema },
-  'flow.move': { params: z.object({ nodes: z.array(groupNamed.extend({ position: positionSchema, size: sizeSchema.optional() })).max(200), groupAssignments: z.array(groupAssignmentSchema).optional() }), result: empty },
-  'flow.run': { params: z.object({ targets: z.array(z.string().uuid()).optional(), force: z.boolean().default(false) }), result: flowSnapshotSchema },
-  'flow.cancel': { params: empty, result: flowSnapshotSchema },
-  'flow.auto': { params: z.object({ enabled: z.boolean() }), result: flowSnapshotSchema },
-  'flow.test': { params: groupNamed, result: flowTestReportSchema },
-  'flow.example': { params: z.object({ position: positionSchema }), result: flowSnapshotSchema },
-  'flow.inspect': { params: z.object({ nodeId: z.string().uuid(), port: z.string(), direction: z.enum(['input', 'output']).default('output'), runId: z.string().uuid().optional() }), result: z.object({ value: jsonValueSchema, bytes: z.number(), revision: z.string(), stale: z.boolean() }) },
-  'flow.history': { params: empty, result: z.object({ runs: z.array(flowRunSchema).max(20) }) },
-  'flow.compare': { params: z.object({ before: z.string().uuid(), after: z.string().uuid() }), result: z.object({ changes: z.array(z.object({ id: z.string(), title: z.string(), codeChanged: z.boolean(), outputsChanged: z.array(z.string()) })) }) },
-  'flow.exportPreview': { params: z.object({ nodeId: z.string().uuid(), port: z.string(), runId: z.string().uuid().optional(), path: z.string() }), result: z.object({ path: z.string(), next: z.string(), previous: z.string().nullable(), previousHash: z.string().nullable(), nextHash: z.string() }) },
-  'flow.exportApply': { params: z.object({ nodeId: z.string().uuid(), port: z.string(), runId: z.string().uuid().optional(), path: z.string(), previousHash: z.string().nullable(), nextHash: z.string() }), result: z.object({ path: z.string() }) },
   'group.create': { params: z.object({ title: z.string().trim().min(1).max(120), color: groupColorSchema, kind: groupKindSchema, members: z.array(groupMemberSchema).default([]), position: positionSchema }), result: groupLayoutSchema },
   'group.update': { params: groupNamed.extend({ title: z.string().trim().min(1).max(120).optional(), color: groupColorSchema.optional(), locked: z.boolean().optional() }), result: groupLayoutSchema },
   'group.assign': { params: z.object({ id: z.string().uuid().nullable(), members: z.array(groupMemberSchema) }), result: groupLayoutSchema },
@@ -278,9 +260,6 @@ export function parseHostResult<M extends HostMethod>(method: M, result: unknown
 }
 
 export const hostEventSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('flow.graph'), graph: flowGraphSchema, revision: z.string().optional() }),
-  z.object({ type: z.literal('flow.run'), run: flowRunSchema }),
-  z.object({ type: z.literal('flow.node'), runId: z.string().uuid(), id: z.string().uuid(), result: flowNodeResultSchema }),
   z.object({ type: z.literal('group.layout'), groups: z.array(canvasGroupSchema), layout: z.record(rectSchema) }),
   z.object({ type: z.literal('terminal.output'), name: z.string(), data: z.string() }),
   z.object({ type: z.literal('terminal.state'), name: z.string(), state: sessionStateSchema, queued: z.number().int() }),

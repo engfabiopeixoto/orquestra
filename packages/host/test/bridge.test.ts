@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { call, defaultFlowNode, isRemoteAllowedEvent, type HostToMain } from '@orquestra/shared';
+import { call, isRemoteAllowedEvent, type HostToMain } from '@orquestra/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter } from '../../core/src/adapters/types.js';
 import { silentLogger } from '../../core/src/log.js';
@@ -97,24 +97,6 @@ describe('ponte do núcleo', () => {
     await request('project.open', { dir }); expect(await bridge!.dispatchForTest('portal.list', {}, { session: 'A' })).toMatchObject({ portals: [{ id: 'portal-test' }] });
     await request('portal.unregister', { id: 'portal-test' });
     await expect(bridge!.dispatchForTest('portal.click', { id: 'portal-test', selector: 'button' }, { session: 'A' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
-  });
-  it('nós de fluxo participam dos grupos e persistem com seus contratos e conexões', async () => {
-    const { command } = await setup();
-    let sequence = 0;
-    const result = async (method: string, params: unknown) => { const response = await command(`flow-${sequence++}`, method, params); if (response?.kind !== 'response') throw new Error(JSON.stringify(response)); return response.result as any; };
-    const dir = mkdtempSync(join(tmpdir(), 'orq-flow-group-')); await result('project.open', { dir });
-    const node = defaultFlowNode('input', randomUUID(), { x: 100, y: 100 });
-    await result('flow.save', { node });
-    const created = await result('group.create', { title: 'Dados', color: '#7aa7ff', kind: 'mixed', position: { x: 0, y: 0 }, members: [{ kind: 'flow', id: node.id }] });
-    const group = created.groups[0];
-    const moved = await result('group.move', { id: group.id, position: { x: group.position.x + 40, y: group.position.y + 70 } });
-    expect(moved.layout[`flow:${node.id}`]).toMatchObject({ x: 140, y: 170 });
-    await result('group.update', { id: group.id, locked: true });
-    expect(await command('flow-failed', 'flow.move', { nodes: [{ id: node.id, position: { x: 9999, y: 9999 } }] })).toMatchObject({ kind: 'response-error' });
-    expect((await result('flow.get', {})).graph.nodes[0].position).toEqual({ x: 140, y: 170 });
-    await result('project.close', {});
-    const saved = readWorkspace(dir); expect(saved.flow.nodes[0].id).toBe(node.id); expect(saved.groups[0].members).toEqual([{ kind: 'flow', id: node.id }]);
-    await result('project.open', { dir }); expect((await result('flow.get', {})).graph.nodes[0].position).toEqual({ x: 140, y: 170 });
   });
   it('grupos persistem por ID, movem membros e mantêm os agentes e conexões ao desagrupar', async () => {
     const { command, ptyHost } = await setup({ adapters: { shell: { ...createFakeAdapter(), kind: 'shell' } } });
@@ -954,7 +936,7 @@ describe('BUG 2 — memória de posição e grupo ao remover e recriar terminal'
     }
   });
 
-  it('achado 4: falha no regent.new preserva memória, rename/create limpam memória obsoleta e fallback evita nó de fluxo', async () => {
+  it('achado 4: falha no regent.new preserva memória, rename/create limpam memória obsoleta e fallback evita área ocupada', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'orq-bug2-a4-'));
     const { command, sent } = await setup();
     await command('1', 'project.open', { dir });
@@ -975,15 +957,9 @@ describe('BUG 2 — memória de posição e grupo ao remover e recriar terminal'
     await bridge!.dispatchForTest('regent.remove', { name: 'W1' }, { session: 'R' });
     await command('6', 'terminal.create', { name: 'W1', agent: 'shell' });
     await command('7', 'terminal.rename', { name: 'W1', newName: 'W2' });
-    // Nó de fluxo ocupa tanto (1400, 600) quanto a primeira posição placeBeside (760, 80) -> fallback evita nó de fluxo
-    const flow1 = defaultFlowNode('code', randomUUID());
-    flow1.position = { x: 1400, y: 600 };
-    flow1.size = { width: 280, height: 220 };
-    const flow2 = defaultFlowNode('code', randomUUID());
-    flow2.position = { x: 760, y: 80 };
-    flow2.size = { width: 280, height: 220 };
-    await command('8', 'flow.save', { node: flow1 });
-    await command('9', 'flow.save', { node: flow2 });
+    // Notas ocupam tanto (1400, 600) quanto a primeira posição placeBeside (760, 80) -> fallback evita ambas
+    await command('8', 'note.create', { name: 'n1', rect: { x: 1400, y: 600, width: 280, height: 220 } });
+    await command('9', 'note.create', { name: 'n2', rect: { x: 760, y: 80, width: 280, height: 220 } });
 
     mark = sent.length;
     await bridge!.dispatchForTest('regent.new', { name: 'W1', agent: 'shell' }, { session: 'R' });

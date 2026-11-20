@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { queueEntrySchema, terminalInfoSchema, workspaceInfoSchema, type ProjectSnapshot, type WorkspaceInfo } from './host-protocol.js';
 
 /**
- * O que o celular recebe de um workspace: só os agentes e as filas. Notas, fluxo, grupos, layout do canvas
+ * O que o celular recebe de um workspace: só os agentes e as filas. Notas, grupos, layout do canvas
  * e demais conteúdos do projeto nunca atravessam o gateway.
  */
 export const remoteSnapshotSchema = z.object({

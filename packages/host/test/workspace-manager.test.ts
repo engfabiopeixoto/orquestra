@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { call, defaultFlowNode, type HostToMain, type ProjectSnapshot } from '@orquestra/shared';
+import { call, type HostToMain, type ProjectSnapshot } from '@orquestra/shared';
 import { silentLogger } from '../../core/src/log.js';
 import { FakePtyHost } from '../../core/test/helpers/fake-pty-host.js';
 import { createFakeAdapter } from '../../core/test/helpers/fake-adapter.js';
@@ -32,25 +32,6 @@ async function setup(dataDir = mkdtempSync(join(tmpdir(), 'orq-multi-')), adapte
 }
 
 describe('até três workspaces isolados', () => {
-  it('fluxos de workspaces diferentes compartilham workers sem misturar resultados; fechar cancela apenas o seu fluxo', async () => {
-    const { command, open, dataDir, sent } = await setup(); const a = await open(), b = await open();
-    const one = defaultFlowNode('code', randomUUID()), two = defaultFlowNode('code', randomUUID());
-    for (const [node, workspaceId, value] of [[one, a.workspaceId, 1], [two, b.workspaceId, 2]] as const) {
-      node.config.language = 'javascript'; node.inputs[0]!.defaultValue = value;
-      node.config.code = 'function run(IN){const end=Date.now()+500; while(Date.now()<end){}; return {saida:IN.valor}}';
-      await command('flow.save', { node }, workspaceId); await command('flow.run', { force: false }, workspaceId);
-    }
-    await expect(command('flow.inspect', { nodeId: one.id, port: 'saida', direction: 'output' }, b.workspaceId)).rejects.toThrow();
-    await command('project.close', {}, a.workspaceId);
-    let state: any;
-    for (let i = 0; i < 100; i++) { state = await command('flow.get', {}, b.workspaceId); if (state.run.status !== 'running') break; await new Promise((resolve) => setTimeout(resolve, 25)); }
-    expect(state.run.status).toBe('success');
-    expect((await command('flow.inspect', { nodeId: two.id, port: 'saida', direction: 'output' }, b.workspaceId)).value).toBe(2);
-    expect(state.graph.nodes).toHaveLength(1);
-    expect(JSON.parse(readFileSync(join(dataDir, 'pids.json'), 'utf8')).length).toBeLessThanOrEqual(2);
-    const events = sent.filter((message) => message.kind === 'event' && message.event.type === 'flow.node');
-    expect(events.some((message) => message.kind === 'event' && message.event.workspaceId === b.workspaceId)).toBe(true);
-  });
   it('grupos e IDs de membros não atravessam projetos com nomes iguais', async () => {
     const { command, open } = await setup();
     const a = await open();

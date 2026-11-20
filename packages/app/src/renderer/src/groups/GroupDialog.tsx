@@ -10,10 +10,9 @@ export function GroupDialog({ draft, api, onClose }: { draft: GroupDraft; api: C
   const selected = new Set(draft.members.map((member) => member.id));
   const hasTerminal = draft.members.some((member) => member.kind === 'terminal');
   const hasNote = draft.members.some((member) => member.kind === 'note');
-  const hasFlow = draft.members.some((member) => member.kind === 'flow');
   const [title, setTitle] = useState(draft.group?.title ?? 'Novo grupo');
   const [color, setColor] = useState(draft.group?.color ?? COLORS[0]!);
-  const [kind, setKind] = useState<CanvasGroup['kind']>(draft.group?.kind ?? (hasFlow || hasTerminal && hasNote ? 'mixed' : hasNote ? 'notes' : 'agents'));
+  const [kind, setKind] = useState<CanvasGroup['kind']>(draft.group?.kind ?? (hasTerminal && hasNote ? 'mixed' : hasNote ? 'notes' : 'agents'));
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const transfers = !draft.group && appStore.getState().groups.some((group) => group.members.some((member) => selected.has(member.id)));
@@ -24,10 +23,7 @@ export function GroupDialog({ draft, api, onClose }: { draft: GroupDraft; api: C
     try {
       if (!draft.group && draft.members.length) {
         const elements = canvasElements(appStore.getState()).filter((element) => selected.has(element.id));
-        const ordinary = elements.filter((element) => element.kind !== 'flow');
-        const processing = elements.filter((element) => element.kind === 'flow');
-        if (ordinary.length) await api.command('layout.update', { nodes: ordinary.map((element) => ({ name: element.name, ...element.rect })) });
-        if (processing.length) await api.command('flow.move', { nodes: processing.map((element) => ({ id: element.id, position: { x: element.rect.x, y: element.rect.y }, size: { width: element.rect.width, height: element.rect.height } })) });
+        if (elements.length) await api.command('layout.update', { nodes: elements.map((element) => ({ name: element.name, ...element.rect })) });
       }
       const result = draft.group
         ? await api.command('group.update', { id: draft.group.id, title: title.trim(), color })

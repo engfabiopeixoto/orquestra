@@ -8,10 +8,6 @@ export type DisconnectableEdge = Pick<Edge, 'source' | 'target' | 'data'>;
 export async function disconnectEdge(edge: DisconnectableEdge, api: CommandApi): Promise<void> {
   const state = appStore.getState();
   try {
-    if (edge.data?.kind === 'flow') {
-      state.applyFlow(await api.command('flow.disconnect', { id: String(edge.data.id) }));
-      return;
-    }
     await api.command('edge.disconnect', { a: edge.source, b: edge.target });
     state.removeEdge({ a: edge.source, b: edge.target });
   } catch (error) {

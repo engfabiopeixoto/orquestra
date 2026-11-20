@@ -4,7 +4,7 @@ export function Palette({ onNewTerminal, onNewNote, onNewPortal, onNewGroup, onG
   const connectMode = useApp((state) => state.connectMode);
   const hasProject = useApp((state) => state.project !== null);
   const selectionMode = useApp((state) => state.selectionMode);
-  const selected = useApp((state) => state.selectedNodes.filter((name) => state.terminals[name] || state.notes[name] || name.startsWith('flow:') && state.flow.graph.nodes.some((node) => `flow:${node.id}` === name)).length);
+  const selected = useApp((state) => state.selectedNodes.filter((name) => state.terminals[name] || state.notes[name]).length);
   return (
     <><div className="palette">
       <button className={!connectMode && !selectionMode ? 'tool is-on' : 'tool'} data-testid="palette-select" onClick={() => { appStore.getState().setConnectMode(false); appStore.setState({ selectionMode: false }); }}>

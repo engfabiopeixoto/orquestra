@@ -42,7 +42,7 @@ export function isRemoteAllowedMethod(method: string): method is RemoteAllowedMe
 
 /**
  * Allowlist explícita de `HostEvent.type` repassados ao controle remoto.
- * Eventos internos de notas, fluxos, grupos e arestas não atravessam o gateway.
+ * Eventos internos de notas, grupos e arestas não atravessam o gateway.
  */
 export const REMOTE_ALLOWED_EVENTS = [
   'terminal.state',

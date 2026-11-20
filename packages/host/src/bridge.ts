@@ -10,7 +10,6 @@ import {
   regentGuide,
   GROUP_HEADER,
   GROUP_PADDING,
-  flowCanvasId,
   type HostAgent,
   type GroupElement,
   type GroupLayout,
@@ -58,8 +57,6 @@ import { OutputBatcher } from './output-batcher.js';
 import { NOTE_SIZE, overlaps, placeBeside, TERMINAL_SIZE, type Rect } from './placement.js';
 import { WorkspaceState } from './workspace-state.js';
 import { readAgyUsageIsolated } from './usage-worker.js';
-import { FlowEngine } from './flow-engine.js';
-import { FlowWorkerPool } from './flow-workers.js';
 import { browserMethodSchemas, isReadySessionState, type BrowserHandler, type BrowserMethod } from '@orquestra/shared';
 
 export type HostBridgeOptions = {
@@ -78,7 +75,6 @@ export type HostBridgeOptions = {
   onPids?: (pids: number[]) => void;
   usageState?: UsageState;
   eventSequence?: () => number;
-  flowWorkers?: FlowWorkerPool;
   /** Lista de projetos recentes (recent.json na pasta de dados). */
   recentFile: string;
   /** Padrões dos agentes (settings.json na pasta de dados). */
@@ -108,10 +104,9 @@ export type HostBridge = {
   /** Só para testes: chama os comandos do orq como se viessem do pipe. */
   dispatchForTest(method: MethodName, params: unknown, caller: { session: string }): Promise<unknown>;
   close(): Promise<void>;
-  cancelWork?(): Promise<void>;
 };
 
-type OpenProject = { dir: string; name: string; state: WorkspaceState; saver: WorkspaceSaver; flow?: FlowEngine };
+type OpenProject = { dir: string; name: string; state: WorkspaceState; saver: WorkspaceSaver };
 
 type BridgeMethod = Exclude<HostMethod, 'workspace.list' | 'workspace.activate' | 'remote.status' | 'remote.enable' | 'remote.pair' | 'remote.devices' | 'remote.revoke'>;
 type Handlers = { [M in BridgeMethod]: (params: HostParams<M>) => Promise<HostResult<M>> };
@@ -164,8 +159,6 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
   const usageAbort = new AbortController();
   const usagePids = new Set<number>();
   const catalogPids = new Set<number>();
-  let flowPids: number[] = [];
-  const flowWorkers = opts.flowWorkers ?? new FlowWorkerPool({ onPids: (pids) => { flowPids = pids; if (orquestra) recordPids(); } });
   const ownsModelCatalog = !opts.modelCatalog;
   const modelCatalog = opts.modelCatalog ?? new ModelCatalogStore({
     dataDir: opts.dataDir,
@@ -241,7 +234,7 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
   }
 
   function recordPids(): void {
-    const pids = [...orquestra.sessions().filter((session) => session.pid > 0 && session.state !== 'exited').map((session) => session.pid), ...usagePids, ...catalogPids, ...flowPids];
+    const pids = [...orquestra.sessions().filter((session) => session.pid > 0 && session.state !== 'exited').map((session) => session.pid), ...usagePids, ...catalogPids];
     opts.onPids?.(pids);
     if (!opts.agentPidFile) return;
     try {
@@ -346,7 +339,6 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
     });
     recordPids();
     changed();
-    syncFlowAgents();
     return session;
   }
 
@@ -360,12 +352,7 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
       }
       const resolvedPersona = params.persona ? resolvePersona(params.persona) : undefined;
       const remembered = peekRememberedTerminal(params.name);
-      const existingRects = [
-        ...Object.values(current.state.layout()),
-        ...requireFlow().snapshot().graph.nodes
-          .filter((node) => node.kind !== 'agent')
-          .map((node) => ({ ...node.position, ...node.size })),
-      ];
+      const existingRects = Object.values(current.state.layout());
       const canReuseRect = Boolean(remembered && !existingRects.some((other) => overlaps(remembered.rect, other)));
       const authorRect = current.state.rectOf(caller) ?? { x: 80, y: 80, ...TERMINAL_SIZE };
       const rect = canReuseRect
@@ -607,7 +594,6 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
         recordPids();
         project?.state.forget(event.name);
         changed();
-        syncFlowAgents();
         return opts.send({ kind: 'event', event: { type: 'terminal.removed', name: event.name } });
       }
       if (event.type === 'turn') {
@@ -635,7 +621,6 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
     viewport: current.state.viewport(),
     queues: Object.fromEntries(orquestra.sessions().map((session) => [session.name, orquestra.broker.list(session.name)])),
     groups: current.state.grouping.list(),
-    flow: requireFlow().snapshot(),
   });
 
   /**
@@ -654,38 +639,10 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
   async function closeProject(): Promise<void> {
     const portalIds = project?.state.browserNodes().map((portal) => portal.id) ?? [];
     if (!project) return;
-    await project.flow?.close();
     detachProject();
     for (const session of orquestra.sessions()) await orquestra.removeTerminal(session.name);
     for (const note of orquestra.notes.list()) orquestra.removeNote(note.name);
     for (const portal of portalIds) orquestra.topology.remove(portal);
-  }
-
-  function syncFlowAgents(): void {
-    if (!project?.flow) return;
-    project.flow.syncAgents(orquestra.sessions().filter((session) => session.acceptsPrompts).map((session) => ({ id: session.id, name: session.name, position: project!.state.rectOf(session.name) ?? { x: 80, y: 80 } })));
-  }
-  function requireFlow(): FlowEngine {
-    const current = requireProject();
-    if (!current.flow) {
-      current.flow = new FlowEngine({
-        dir: current.dir, graph: current.state.flowGraph(), workers: flowWorkers,
-        changed: (graph) => { current.state.setFlowGraph(graph); current.saver.schedule(); },
-        emit: (event) => opts.send({ kind: 'event', event }),
-        agent: async (terminalId, text, timeoutMs, signal) => {
-          const session = orquestra.sessions().find((session) => session.id === terminalId);
-          if (!session?.acceptsPrompts) throw new Error('Terminal de agente indisponível. Recarregue-o antes de executar esta etapa.');
-          const outcome = await orquestra.broker.submit({ asker: `Fluxo ${randomUUID()}`, target: session.name, text, timeoutMs, signal });
-          if (signal.aborted || outcome.status !== 'answered') { orquestra.broker.cancel(outcome.askId); throw new Error(signal.aborted ? 'Execução cancelada; o agente pode concluir o pedido em andamento.' : 'O agente não respondeu no prazo da etapa.'); }
-          return outcome.answer;
-        },
-      });
-      syncFlowAgents();
-    }
-    return current.flow;
-  }
-  async function flowCommand<T>(work: (flow: FlowEngine) => T | Promise<T>): Promise<T> {
-    try { return await work(requireFlow()); } catch (error) { if (error instanceof OrqError) throw error; throw new OrqError('USAGE', (error as Error).message); }
   }
 
   function restore(current: OpenProject, workspace: Workspace): void {
@@ -732,12 +689,11 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
     return [
       ...orquestra.describeTerminals().map((terminal) => ({ kind: 'terminal' as const, id: terminal.id, name: terminal.name, rect: current.state.rectOf(terminal.name)!, locked: Boolean(current.state.presentation(terminal.name).locked) })),
       ...orquestra.notes.list().map((note) => ({ kind: 'note' as const, id: note.id, name: note.name, rect: current.state.rectOf(note.name)!, locked: false })),
-      ...requireFlow().snapshot().graph.nodes.filter((node) => node.kind !== 'agent').map((node) => ({ kind: 'flow' as const, id: node.id, name: flowCanvasId(node.id), rect: { ...node.position, ...node.size, height: Math.max(node.size.height, 130 + Math.max(node.inputs.length, node.outputs.length) * 26) }, locked: false })),
     ];
   }
   function groupLayout(): GroupLayout {
     const current = requireProject();
-    return { groups: current.state.grouping.list(), layout: { ...current.state.layout(), ...Object.fromEntries(requireFlow().snapshot().graph.nodes.filter((node) => node.kind !== 'agent').map((node) => [flowCanvasId(node.id), { ...node.position, ...node.size, height: Math.max(node.size.height, 130 + Math.max(node.inputs.length, node.outputs.length) * 26) }])) } };
+    return { groups: current.state.grouping.list(), layout: current.state.layout() };
   }
   function emitGroupLayout(): GroupLayout {
     const result = groupLayout();
@@ -772,34 +728,6 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
       if (orquestra.topology.kindOf(id) === 'portal') orquestra.topology.remove(id);
       current.state.setBrowserNodes(current.state.browserNodes().filter((node) => node.id !== id)); changed(); return {};
     },
-    'flow.get': async () => requireFlow().snapshot(),
-    'flow.save': async ({ node }) => flowCommand((flow) => {
-      const grouping = requireProject().state.grouping, before = grouping.list();
-      try { const snapshot = flow.save(node, () => grouping.expand(groupElements())); if (grouping.list().length) emitGroupLayout(); return snapshot; }
-      catch (error) { grouping.replace(before); throw error; }
-    }),
-    'flow.remove': async ({ id }) => flowCommand((flow) => { const node = flow.snapshot().graph.nodes.find((node) => node.id === id); flow.remove(id); syncFlowAgents(); const snapshot = flow.snapshot(); if (node?.kind !== 'agent') { requireProject().state.grouping.forget(id); if (requireProject().state.grouping.list().length) emitGroupLayout(); } return snapshot; }),
-    'flow.connect': async (input) => flowCommand((flow) => flow.connect(input)),
-    'flow.disconnect': async ({ id }) => flowCommand((flow) => flow.disconnect(id)),
-    'flow.move': async ({ nodes, groupAssignments }) => flowCommand((flow) => {
-      const current = requireProject(), before = { graph: flow.snapshot().graph, groups: current.state.grouping.list() };
-      try {
-        flow.moveQuiet(nodes);
-        for (const assignment of groupAssignments ?? []) current.state.grouping.assign(assignment.groupId, [assignment.member], groupElements());
-        current.state.grouping.expand(groupElements());
-      } catch (error) { flow.restoreGraph(before.graph); current.state.grouping.replace(before.groups); throw error; }
-      flow.commitLayout(); if (current.state.grouping.list().length) emitGroupLayout(); return {};
-    }),
-    'flow.run': async (input) => flowCommand((flow) => flow.start(input)),
-    'flow.cancel': async () => flowCommand((flow) => flow.cancel()),
-    'flow.auto': async ({ enabled }) => flowCommand((flow) => flow.setAuto(enabled)),
-    'flow.test': async ({ id }) => flowCommand((flow) => flow.test(id)),
-    'flow.example': async ({ position }) => flowCommand((flow) => flow.example(position)),
-    'flow.inspect': async ({ nodeId, port, runId, direction }) => flowCommand((flow) => flow.inspect(nodeId, port, runId, direction)),
-    'flow.history': async () => flowCommand((flow) => flow.history()),
-    'flow.compare': async ({ before, after }) => flowCommand((flow) => flow.compare(before, after)),
-    'flow.exportPreview': async (input) => flowCommand((flow) => flow.exportPreview(input)),
-    'flow.exportApply': async (input) => flowCommand((flow) => flow.exportApply(input)),
     'group.layout': async () => { groupElements(); return groupLayout(); },
     'group.create': async (input) => { requireProject().state.grouping.create(input, groupElements()); return emitGroupLayout(); },
     'group.update': async (input) => { requireProject().state.grouping.update(input); return emitGroupLayout(); },
@@ -808,9 +736,7 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
     'group.move': async ({ id, position }) => {
       const current = requireProject();
       const moved = current.state.grouping.move(id, position, groupElements());
-      for (const { name, ...rect } of moved.filter((element) => !element.name.startsWith('flow:'))) current.state.place(name, rect);
-      const dataNodes = moved.filter((element) => element.name.startsWith('flow:')).map((element) => ({ id: element.name.slice(5), position: { x: element.x, y: element.y } }));
-      if (dataNodes.length) requireFlow().move(dataNodes);
+      for (const { name, ...rect } of moved) current.state.place(name, rect);
       return emitGroupLayout();
     },
     'group.resize': async ({ id, rect }) => { requireProject().state.grouping.resize(id, rect, groupElements()); return emitGroupLayout(); },
@@ -844,7 +770,7 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
       const current: OpenProject = {
         dir,
         name: basename(dir),
-          state: new WorkspaceState({ layout, flow: loaded.workspace.flow, groups: loaded.workspace.groups, elementIds: Object.fromEntries([...loaded.workspace.terminals, ...loaded.workspace.notes].map((element) => [element.name, element.id])), viewport: loaded.workspace.viewport, personas: loaded.workspace.personas, presentations: Object.fromEntries(loaded.workspace.terminals.filter((terminal) => terminal.blurred !== undefined || terminal.locked !== undefined).map((terminal) => [terminal.name, { blurred: terminal.blurred, locked: terminal.locked }])) }),
+          state: new WorkspaceState({ layout, groups: loaded.workspace.groups, elementIds: Object.fromEntries([...loaded.workspace.terminals, ...loaded.workspace.notes].map((element) => [element.name, element.id])), viewport: loaded.workspace.viewport, personas: loaded.workspace.personas, presentations: Object.fromEntries(loaded.workspace.terminals.filter((terminal) => terminal.blurred !== undefined || terminal.locked !== undefined).map((terminal) => [terminal.name, { blurred: terminal.blurred, locked: terminal.locked }])) }),
         saver: new WorkspaceSaver({ save: () => saveWorkspace(dir, capture(current)), delayMs: opts.saveDelayMs, log: opts.log }),
       };
       project = current;
@@ -908,7 +834,6 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
         removedTerminals.delete(changes.newName);
         project?.state.rename(name, changes.newName);
       }
-      syncFlowAgents();
       if (changes.regente === true && !before?.regente && session.adapter.acceptsPrompts) {
         orquestra.brief(session.name, 'Orquestra', regentGuide());
       }
@@ -1145,11 +1070,8 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
       }
     },
     dispatchForTest: (method, params, caller) => orquestra.dispatchForTest(method, params, caller, new AbortController().signal),
-    cancelWork: async () => { await project?.flow?.cancel(); },
     async close() {
       for (const [id, pending] of [...portalCalls]) { opts.send({ kind: 'portal-cancel', id }); pending.reject(new OrqError('APP_UNAVAILABLE', 'Workspace encerrado.')); }
-      await project?.flow?.close();
-      if (!opts.flowWorkers) await flowWorkers.close();
       unsubscribeModelCatalog();
       if (ownsModelCatalog) await modelCatalog.close();
       usageAbort.abort();

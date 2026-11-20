@@ -16,12 +16,11 @@ Running several agents at once means juggling terminal windows, copying prompts 
 - **Model tag.** Each agent terminal shows its model in the header. Click the tag to pick another model from the agent's list. The tag turns red when the agent is running a different model than the one chosen.
 - **Roles (personas).** Save reusable instructions per project or globally, and hand one to any terminal.
 - **Notes.** Markdown notes on the canvas that connected agents can read and write.
-- **Groups.** Frame related terminals, notes and flow nodes, and move them together.
+- **Groups.** Frame related terminals and notes, and move them together.
 - **Workspaces.** Keep up to three projects open at once, each with its own canvas.
 - **Browser portals.** Connect a browser node to an agent so it can navigate, click, type, scroll and take screenshots.
 - **Activity monitoring.** Turn on monitoring per terminal to get a Windows notification when it finishes a turn or waits for you while the app is unfocused.
 - **Subscription usage.** See the usage windows and reset times for Claude, Codex and agy. Agents can check them with `orq usage`, so the regent can delegate without hitting the limits.
-- **Visual data flow.** Build a processing graph on the same canvas with input, file, algorithm (JavaScript or Python), validation, test, view and output nodes. See [docs/fluxo-visual.md](docs/fluxo-visual.md) (in Portuguese).
 - **Mobile remote control (PWA).** Monitor and control your PC's workspaces from your phone over Tailscale.
 
 ## Mobile (Celular)
@@ -40,7 +39,6 @@ Orquestra includes a Progressive Web App (PWA) served directly by your PC over y
 - Windows x64. The code relies on Windows named pipes, `where.exe`, `cmd.exe` and PowerShell, and the installer targets Windows only.
 - Node.js 22 or newer and npm, to build or develop from source.
 - The agent CLIs you want to use, installed and signed in: `claude`, `agy`, `codex`. Orquestra finds them on `PATH` and in the common npm install folders.
-- Python 3, optional, for Python algorithms in the visual flow.
 
 ## Install
 
@@ -108,11 +106,11 @@ npm workspaces under `packages/`:
 | Package | Role |
 | --- | --- |
 | `app` | Electron app: main process, React renderer (canvas with React Flow, xterm.js terminals), electron-builder config and Playwright tests. |
-| `host` | Background process that owns terminals, workspaces, canvas groups and the visual flow engine. The app talks to it over a typed protocol. |
+| `host` | Background process that owns terminals, workspaces and canvas groups. The app talks to it over a typed protocol. |
 | `core` | Terminal sessions (node-pty), agent adapters for claude, agy, codex and shell, the local pipe server, notes, personas and subscription usage. |
 | `cli` | The `orq` command and the MCP server, bundled to a single `orq.mjs`. |
 | `mobile` | Progressive Web App (React + Vite + xterm.js) served by the host's remote gateway for monitoring and controlling workspaces from a phone. |
-| `shared` | Zod schemas and types shared by all packages: host protocol, workspace, flow and CLI client. |
+| `shared` | Zod schemas and types shared by all packages: host protocol, workspace and CLI client. |
 
 ## License
 

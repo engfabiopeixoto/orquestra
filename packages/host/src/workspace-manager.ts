@@ -5,7 +5,6 @@ import { z } from 'zod';
 import { OrqError, parseHostParams, type HostToMain, type MainToHost, type WorkspaceInfo, type ProjectSnapshot, type TerminalInfo } from '@orquestra/shared';
 import { ModelCatalogStore } from '@orquestra/core';
 import { startHostBridge, type HostBridge, type HostBridgeOptions, type UsageState } from './bridge.js';
-import { FlowWorkerPool } from './flow-workers.js';
 
 const MAX_WORKSPACES = 3;
 const registrySchema = z.object({ version: z.literal(1), selectedId: z.string().nullable(), workspaces: z.array(z.object({ id: z.string(), dir: z.string(), name: z.string() })).max(MAX_WORKSPACES) });
@@ -24,7 +23,6 @@ export async function startWorkspaceManager(opts: HostBridgeOptions): Promise<Ho
   let selectedId: string | null = null;
   let lifecycle: Promise<unknown> = Promise.resolve();
   let stopping = false;
-  const flowWorkers = new FlowWorkerPool({ onPids: (values) => recordPids('flow-workers', values) });
   const catalogPids = new Set<number>();
   const ownsModelCatalog = !opts.modelCatalog;
   const modelCatalog = opts.modelCatalog ?? new ModelCatalogStore({
@@ -114,7 +112,7 @@ export async function startWorkspaceManager(opts: HostBridgeOptions): Promise<Ho
     opts.send(message);
   }
 
-  const globalBridge = await startHostBridge({ ...opts, flowWorkers, modelCatalog, agentPidFile: undefined, usageState, onPids: (values) => recordPids('global', values), send: (message) => receive('global', message) });
+  const globalBridge = await startHostBridge({ ...opts, modelCatalog, agentPidFile: undefined, usageState, onPids: (values) => recordPids('global', values), send: (message) => receive('global', message) });
   recordPids('global', []);
   const unsubscribeModelCatalog = ownsModelCatalog
     ? modelCatalog.subscribe((catalog) => receive('global', { kind: 'event', event: { type: 'models.catalog', catalog } }))
@@ -165,7 +163,7 @@ export async function startWorkspaceManager(opts: HostBridgeOptions): Promise<Ho
       entry.info.status = 'opening';
       const suffix = createHash('sha256').update(entry.info.id).digest('hex').slice(0, 16);
       try {
-        entry.bridge = await startHostBridge({ ...opts, flowWorkers, modelCatalog, pipePath: `${opts.pipePath}-${suffix}`, agentPidFile: undefined, usageState, eventSequence: () => entry.sequence, onPids: (values) => recordPids(entry.info.id, values), send: (message) => receive(entry.info.id, message) });
+        entry.bridge = await startHostBridge({ ...opts, modelCatalog, pipePath: `${opts.pipePath}-${suffix}`, agentPidFile: undefined, usageState, eventSequence: () => entry.sequence, onPids: (values) => recordPids(entry.info.id, values), send: (message) => receive(entry.info.id, message) });
       } catch (error) { entry.info.status = 'paused'; throw error; }
     }
     try {
@@ -215,7 +213,6 @@ export async function startWorkspaceManager(opts: HostBridgeOptions): Promise<Ho
         const entry = id ? entries.get(id) : undefined;
         if (!entry) throw new OrqError('NOT_FOUND', 'Workspace não está aberto.');
         entry.info.status = 'closing';
-        await entry.bridge?.cancelWork?.();
         try {
           if (entry.bridge) await enqueue(entry, async () => { await Promise.allSettled([...entry.inFlight]); await call(entry.bridge!, 'project.close', {}); await entry.bridge!.close(); });
         } catch (error) { entry.info.status = entry.bridge ? 'open' : 'paused'; throw error; }
@@ -275,12 +272,10 @@ export async function startWorkspaceManager(opts: HostBridgeOptions): Promise<Ho
       await Promise.all([...confirms].map(([id, bridge]) => bridge.handle({ kind: 'confirm-reply', id, approved: false })));
       confirms.clear();
       await lifecycle;
-      await Promise.all([...entries.values()].map((entry) => entry.bridge?.cancelWork?.()));
       await Promise.all([...entries.values()].map(async (entry) => { await entry.tail; await Promise.allSettled([...entry.inFlight]); await entry.bridge?.close(); }));
       await globalBridge.close();
       unsubscribeModelCatalog();
       if (ownsModelCatalog) await modelCatalog.close();
-      await flowWorkers.close();
     },
   };
 }

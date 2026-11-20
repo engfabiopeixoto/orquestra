@@ -18,8 +18,6 @@ import { applyWheelScroll, forwardWheelToCanvas, forwardWheelToTerminal } from '
 import { activeWorkspaceId } from '../workspace-context';
 import { recoverGroupLayout } from '../groups/helpers';
 import { NodeConnectors } from '../canvas/NodeConnectors';
-import { TerminalFlowPorts } from '../flow/TerminalFlowPorts';
-import { AGENT_FLOW_IO } from '../flow/feature-flags';
 import { encodeWin32KeyEvent, installCodexInputMode } from './codex-input';
 import { ModelTag } from './ModelTag';
 
@@ -249,7 +247,6 @@ export function TerminalNode({ id, data, selected }: NodeProps<TerminalFlowNode>
           <button className="term-options nodrag nopan" aria-label={`Opções de ${view.name}`} data-testid={`terminal-options-${view.name}`} onClick={openFromButton}>⋯</button>
         </header>
         {view.notice ? <div className="term-notice">{view.notice}</div> : null}
-        {AGENT_FLOW_IO ? <TerminalFlowPorts name={data.name} /> : null}
         <div className="term-display">
           {view.unloaded ? <div className="terminal-unloaded nodrag nopan" data-testid={`terminal-unloaded-${data.name}`}><span>Agente parado</span><button onClick={() => void reload()}>Recarregar terminal</button></div> : <>
             <div className={view.blurred ? 'term-content is-blurred' : 'term-content'}><NodeErrorBoundary name={data.name}><TerminalBody key={view.epoch} name={data.name} readOnly={readOnly} agent={view.agent} /></NodeErrorBoundary></div>

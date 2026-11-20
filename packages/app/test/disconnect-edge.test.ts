@@ -20,17 +20,6 @@ describe('disconnectEdge', () => {
     expect(appStore.getState().edges).toEqual([{ a: 'B', b: 'C' }]);
   });
 
-  it('desconecta uma aresta de dados pelo id do fluxo e aplica o grafo devolvido', async () => {
-    const graph = { nodes: [], connections: [] };
-    const applyFlow = vi.fn();
-    appStore.setState({ applyFlow } as never);
-    const { api, command } = fakeApi(() => graph);
-    await disconnectEdge({ source: 'A', target: 'B', data: { kind: 'flow', id: 'c1' } }, api);
-    expect(command).toHaveBeenCalledWith('flow.disconnect', { id: 'c1' });
-    expect(applyFlow).toHaveBeenCalledWith(graph);
-    expect(appStore.getState().edges).toHaveLength(2);
-  });
-
   it('avisa com notificação de erro quando o host recusa e preserva a aresta', async () => {
     const notify = vi.fn();
     appStore.setState({ notify } as never);

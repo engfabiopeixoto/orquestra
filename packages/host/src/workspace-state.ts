@@ -1,4 +1,4 @@
-import { OrqError, personaSchema, workspaceAgentSchema, type FlowGraph, type CanvasGroup, type Persona, type Size, type Viewport, type Workspace } from '@orquestra/shared';
+import { OrqError, personaSchema, workspaceAgentSchema, type CanvasGroup, type Persona, type Size, type Viewport, type Workspace } from '@orquestra/shared';
 import type { Note, TerminalDescriptor } from '@orquestra/core';
 import { nextFree, NOTE_SIZE, TERMINAL_SIZE, type Rect } from './placement.js';
 import { CanvasGroups } from './canvas-groups.js';
@@ -11,11 +11,9 @@ export class WorkspaceState {
   private view: Viewport;
   readonly grouping: CanvasGroups;
   private readonly elementIds = new Map<string, string>();
-  private flow: FlowGraph;
   private portals: import('@orquestra/shared').BrowserNode[] = [];
 
-  constructor(initial: { layout?: Record<string, Rect>; viewport?: Viewport; personas?: Persona[]; presentations?: Record<string, { blurred?: boolean; locked?: boolean }>; groups?: CanvasGroup[]; elementIds?: Record<string, string>; flow?: FlowGraph } = {}) {
-    this.flow = initial.flow ?? { nodes: [], connections: [], autoRun: false };
+  constructor(initial: { layout?: Record<string, Rect>; viewport?: Viewport; personas?: Persona[]; presentations?: Record<string, { blurred?: boolean; locked?: boolean }>; groups?: CanvasGroup[]; elementIds?: Record<string, string> } = {}) {
     this.grouping = new CanvasGroups(initial.groups);
     for (const [name, id] of Object.entries(initial.elementIds ?? {})) this.elementIds.set(name, id);
     for (const [name, rect] of Object.entries(initial.layout ?? {})) this.rects.set(name, rect);
@@ -94,8 +92,6 @@ export class WorkspaceState {
   }
   restoreLayout(layout: Record<string, Rect>): void { this.rects.clear(); for (const [name, rect] of Object.entries(layout)) this.rects.set(name, rect); }
   registerElement(name: string, id: string): void { this.elementIds.set(name, id); }
-  flowGraph(): FlowGraph { return this.flow; }
-  setFlowGraph(graph: FlowGraph): void { this.flow = graph; }
   browserNodes(): import('@orquestra/shared').BrowserNode[] { return this.portals.map((portal) => ({ ...portal })); }
   setBrowserNodes(portals: import('@orquestra/shared').BrowserNode[]): void { this.portals = portals; }
 
@@ -129,8 +125,8 @@ export class WorkspaceState {
     });
     const names = new Set([...terminals.map((terminal) => terminal.name), ...notes.map((note) => note.name), ...this.portals.map((portal) => portal.id)]);
     for (const element of [...terminals, ...notes]) this.registerElement(element.name, element.id);
-    this.grouping.prune([...terminals.map((element) => ({ kind: 'terminal' as const, id: element.id })), ...notes.map((element) => ({ kind: 'note' as const, id: element.id })), ...this.flow.nodes.filter((node) => node.kind !== 'agent').map((node) => ({ kind: 'flow' as const, id: node.id }))]);
+    this.grouping.prune([...terminals.map((element) => ({ kind: 'terminal' as const, id: element.id })), ...notes.map((element) => ({ kind: 'note' as const, id: element.id }))]);
     const connections = input.connections.filter(({ a, b }) => names.has(a) && names.has(b));
-    return { schemaVersion: 1, viewport: this.view, terminals, notes, connections, personas: this.personas(), groups: this.grouping.list(), flow: this.flow, portals: this.browserNodes() };
+    return { schemaVersion: 1, viewport: this.view, terminals, notes, connections, personas: this.personas(), groups: this.grouping.list(), portals: this.browserNodes() };
   }
 }

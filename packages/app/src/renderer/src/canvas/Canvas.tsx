@@ -33,11 +33,8 @@ import { disconnectEdge, type DisconnectableEdge } from './disconnect-edge';
 import { DisconnectEdgeContext, RemovableEdge } from './RemovableEdge';
 import { PortalNode } from '../portal/PortalNode';
 import { portalStore, usePortalStore } from '../portal/portal-state';
-import { DataNode } from '../flow/DataNode';
-import { dataEdges } from '../flow/flow-edges';
-import { connectData } from '../flow/canvas-actions';
 
-const nodeTypes = { terminal: TerminalNode, note: NoteNode, groupFrame: GroupFrame, dataFlow: DataNode, portal: PortalNode };
+const nodeTypes = { terminal: TerminalNode, note: NoteNode, groupFrame: GroupFrame, portal: PortalNode };
 const edgeTypes = { removable: RemovableEdge };
 
 async function connect(a: string, b: string, api: CommandApi) {
@@ -93,9 +90,6 @@ export async function handleCanvasDelete({
           appStore.getState().notify('error', (error as Error).message);
         }
       }
-    } else if (node.type === 'dataFlow') {
-      try { appStore.getState().applyFlow(await api.command('flow.remove', { id: node.data.flowId })); }
-      catch (error) { appStore.getState().notify('error', (error as Error).message); }
     } else if (node.type === 'portal') {
       if (window.confirm(`Fechar o portal ${node.id}?`)) {
         void window.orquestra?.portal?.destroy(node.id, workspaceId);
@@ -128,12 +122,11 @@ export function Canvas({ snapToGrid = true, motion = 'contained', onRemoveReques
   const selection = useApp((state) => state.selectedNodes);
   const focusRequest = useWorkspaces((state) => state.focusRequest);
   const portals = usePortalStore((state) => state.portals);
-  const flow = useApp((state) => state.flow);
   const workspacePortals = useMemo(() => {
     const wsId = workspaceId || 'default';
     return Object.fromEntries(Object.entries(portals).filter(([_, p]) => p.workspaceId === wsId));
   }, [portals, workspaceId]);
-  const initialNodes = useMemo(() => buildFlowNodes(terminals, notes, [], groups, flow.graph, workspacePortals).map((node) => ({ ...node, selected: selection.includes(node.id) })), []);
+  const initialNodes = useMemo(() => buildFlowNodes(terminals, notes, [], groups, workspacePortals).map((node) => ({ ...node, selected: selection.includes(node.id) })), []);
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasFlowNode>(initialNodes);
   const { zoomTo, fitView, getViewport, setViewport, getNode, setCenter, screenToFlowPosition } = useReactFlow();
   const { zoom } = useViewport();
@@ -165,12 +158,12 @@ export function Canvas({ snapToGrid = true, motion = 'contained', onRemoveReques
   }, [initialViewport, setViewport]);
 
   useEffect(() => {
-    setNodes((previous) => buildFlowNodes(terminals, notes, previous, groups, flow.graph, workspacePortals).map((node) => node.type === 'groupFrame' ? { ...node, data: { ...node.data, dropTarget: node.data.groupId === dropTarget } } : node));
-  }, [terminals, notes, groups, dropTarget, flow.graph, workspacePortals, setNodes]);
+    setNodes((previous) => buildFlowNodes(terminals, notes, previous, groups, workspacePortals).map((node) => node.type === 'groupFrame' ? { ...node, data: { ...node.data, dropTarget: node.data.groupId === dropTarget } } : node));
+  }, [terminals, notes, groups, dropTarget, workspacePortals, setNodes]);
 
   // As arestas são derivadas da store; a seleção vive aqui para o Delete e o destaque funcionarem.
   const [selectedEdges, setSelectedEdges] = useState<ReadonlySet<string>>(new Set());
-  const baseEdges = useMemo(() => [...buildClosestEdges(edgesView, nodes, activity), ...dataEdges(flow.graph, terminals)], [edgesView, nodes, activity, flow.graph, terminals]);
+  const baseEdges = useMemo(() => buildClosestEdges(edgesView, nodes, activity), [edgesView, nodes, activity]);
   const edges = useMemo(() => baseEdges.map((edge) => selectedEdges.has(edge.id) ? { ...edge, selected: true } : edge), [baseEdges, selectedEdges]);
   useEffect(() => {
     const ids = new Set(baseEdges.map((edge) => edge.id));
@@ -291,18 +284,14 @@ export function Canvas({ snapToGrid = true, motion = 'contained', onRemoveReques
           const element = elements.find((element) => element.name === name);
           return element ? [{ member: { kind: element.kind, id: element.id }, groupId: groupDropTarget(state.groups, rect) }] : [];
         });
-        const ordinary = nodesToSave.filter((node) => !node.name.startsWith('flow:'));
-        const processing = nodesToSave.filter((node) => node.name.startsWith('flow:'));
-        const save = async () => {
-          if (ordinary.length) await api.command('layout.update', { nodes: ordinary, ...(state.groups.length ? { groupAssignments: assignments.filter((item) => item.member.kind !== 'flow') } : {}) });
-          if (processing.length) await api.command('flow.move', { nodes: processing.map((node) => ({ id: node.name.slice(5), position: { x: node.x, y: node.y }, size: { width: node.width, height: node.height } })), ...(state.groups.length ? { groupAssignments: assignments.filter((item) => item.member.kind === 'flow') } : {}) });
-        };
-        void save().catch((error) => recoverGroupLayout(api, error));
+        if (nodesToSave.length) {
+          void api.command('layout.update', { nodes: nodesToSave, ...(state.groups.length ? { groupAssignments: assignments } : {}) }).catch((error) => recoverGroupLayout(api, error));
+        }
       }}
       onMoveEnd={(_event, viewport) => { appStore.setState({ canvasViewport: viewport }); void api.command('layout.update', { nodes: [], viewport }).catch(() => {}); }}
-      onConnect={(connection: Connection) => void connectData(connection, api).then((handled) => { if (!handled) void connect(connection.source, connection.target, api); })}
+      onConnect={(connection: Connection) => void connect(connection.source, connection.target, api)}
       onNodeClick={(_event, node) => {
-        if (node.type === 'groupFrame' || node.type === 'dataFlow') return;
+        if (node.type === 'groupFrame') return;
         if (!connectMode) return;
         const edge = appStore.getState().pickForConnect(node.id);
         if (edge) void connect(edge.a, edge.b, api);

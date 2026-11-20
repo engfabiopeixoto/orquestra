@@ -22,7 +22,6 @@ import { GroupMembersDialog } from './groups/GroupMembersDialog';
 import { GroupUIContext } from './groups/ui-actions';
 import { selectionMembers } from './groups/helpers';
 import { portalStore } from './portal/portal-state';
-import { FlowWorkbench, FlowToolbar } from './flow/FlowWorkbench';
 
 const globalApi = createCommandApi(window.orquestra.invoke);
 
@@ -157,7 +156,6 @@ export function App() {
   };
 
   return (
-    <FlowWorkbench api={api}>
       <GroupUIContext.Provider value={{
         edit: (id, focus) => { const group = appStore.getState().groups.find((group) => group.id === id); if (group) setGroupDraft({ group, members: group.members, position: group.position, focus }); },
         members: (id) => setManagingGroup(id),
@@ -170,7 +168,6 @@ export function App() {
           <div className="titlebar" />
           <main className="canvas">
             <ReactFlowProvider key={project?.workspaceId ?? 'paused'}>
-            <FlowToolbar />
             <Palette onNewTerminal={() => void openNewTerminal()} onNewNote={() => void createNote()} onNewPortal={() => void createPortalNode()} onNewGroup={() => newGroup(false)} onGroupSelection={() => newGroup(true)} />
             {project ? <Canvas snapToGrid={canvasSettings.snapToGrid} motion={canvasSettings.motion} onRemoveRequest={(name) => void requestRemove(name)} onNewGroup={newGroup} /> : <div className="empty workspace-empty">{paused ? <><p>{paused.name} está pausado. Seus agentes serão iniciados ao ativar o workspace.</p><button onClick={() => void activateWorkspace(paused.id)}>Ativar workspace</button></> : <p>Abra uma pasta de projeto para começar.</p>}</div>}
             <ZoomControl />
@@ -197,6 +194,5 @@ export function App() {
         {groupDraft && project ? <GroupDialog key={groupDraft.group?.id ?? 'new'} draft={groupDraft} api={api} onClose={() => setGroupDraft(null)} /> : null}
         {managingGroup && project ? <GroupMembersDialog id={managingGroup} api={api} onClose={() => setManagingGroup(null)} /> : null}
       </GroupUIContext.Provider>
-    </FlowWorkbench>
   );
 }
