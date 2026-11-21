@@ -160,7 +160,8 @@ describe('Session Codex via rollout', () => {
   });
 
   it('evento session do rollout marca aceitação do pedido no Codex sem emitir aviso de timeout', async () => {
-    const { home, session } = makeSession(60);
+    // Prazo folgado: sob a suíte inteira, achar o rollout pode passar de 60 ms.
+    const { home, session } = makeSession(500);
     await ready(session);
     const warned: string[] = [];
     session.on('acceptanceTimeout', (id) => warned.push(id));
@@ -168,7 +169,7 @@ describe('Session Codex via rollout', () => {
     await session.injectPrompt('pedido codex', 'ask-codex-sess');
     createRollout(home, 'thread-session-accept');
     await waitFor(() => session.agentSessionId === 'thread-session-accept');
-    await new Promise((resolve) => setTimeout(resolve, 120));
+    await new Promise((resolve) => setTimeout(resolve, 600));
     expect(warned).toEqual([]);
   });
 
