@@ -24,16 +24,22 @@ import {
   type Persona,
   type PersonaScope,
   type ProjectSnapshot,
+  type QualityReport,
   type Result,
   type TerminalInfo,
   type Workspace,
+  qualityAgentPrompt,
 } from '@orquestra/shared';
 import {
   createOrquestra,
   readCodexUsage,
   readClaudeUsage,
   type SubscriptionUsage,
+  compareReports,
+  gitChanged,
   ProjectFiles,
+  readLastReport,
+  saveReport,
   agyStopHookCommand,
   ensureAgyGlobalHook,
   loadWorkspace,
@@ -57,6 +63,7 @@ import { OutputBatcher } from './output-batcher.js';
 import { NOTE_SIZE, overlaps, placeBeside, TERMINAL_SIZE, type Rect } from './placement.js';
 import { WorkspaceState } from './workspace-state.js';
 import { readAgyUsageIsolated } from './usage-worker.js';
+import { measureQualityIsolated } from './quality-worker.js';
 import { browserMethodSchemas, isReadySessionState, type BrowserHandler, type BrowserMethod } from '@orquestra/shared';
 
 export type HostBridgeOptions = {
@@ -97,12 +104,16 @@ export type HostBridgeOptions = {
   backgroundJobPollMs?: number;
   /** Leitores de uso das assinaturas injetáveis nos testes. */
   usageReaders?: Partial<Record<'claude' | 'codex' | 'agy', () => Promise<SubscriptionUsage>>>;
+  /** Caminho do script usado pelo worker de qualidade (injetável nos testes). */
+  qualityScript?: string;
 };
 
 export type HostBridge = {
   handle(message: Exclude<MainToHost, { kind: 'shutdown' }>): Promise<void>;
   /** Só para testes: chama os comandos do orq como se viessem do pipe. */
   dispatchForTest(method: MethodName, params: unknown, caller: { session: string }): Promise<unknown>;
+  /** Cancela operações em segundo plano (ex.: medição de qualidade) antes de encerrar. */
+  abortBackground?(): void;
   close(): Promise<void>;
 };
 
@@ -158,7 +169,12 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
   const usageCache = opts.usageState?.cache ?? new Map<string, { expiresAt: number; value: SubscriptionUsage }>();
   const usageAbort = new AbortController();
   const usagePids = new Set<number>();
+  const qualityPids = new Set<number>();
+  const qualityExitWaiters = new Set<() => void>();
   const catalogPids = new Set<number>();
+  let qualityPending: { dir: string; promise: Promise<QualityReport>; abort: AbortController } | null = null;
+  let qualityGen = 0;
+  let closing = false;
   const ownsModelCatalog = !opts.modelCatalog;
   const modelCatalog = opts.modelCatalog ?? new ModelCatalogStore({
     dataDir: opts.dataDir,
@@ -234,7 +250,7 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
   }
 
   function recordPids(): void {
-    const pids = [...orquestra.sessions().filter((session) => session.pid > 0 && session.state !== 'exited').map((session) => session.pid), ...usagePids, ...catalogPids];
+    const pids = [...orquestra.sessions().filter((session) => session.pid > 0 && session.state !== 'exited').map((session) => session.pid), ...usagePids, ...qualityPids, ...catalogPids];
     opts.onPids?.(pids);
     if (!opts.agentPidFile) return;
     try {
@@ -556,6 +572,83 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
     })), 'agy');
   };
 
+  const QUALITY_CACHE_MS = 60_000;
+
+  function waitForQualityExit(timeoutMs = 2500): Promise<void> {
+    if (qualityPids.size === 0) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        qualityExitWaiters.delete(done);
+        resolve();
+      };
+      const timer = setTimeout(done, timeoutMs);
+      qualityExitWaiters.add(done);
+    });
+  }
+
+  async function measureQuality(force: boolean): Promise<QualityReport> {
+    const current = requireProject();
+    const dir = current.dir;
+    if (qualityPending && qualityPending.dir === dir) return qualityPending.promise;
+
+    const gen = qualityGen;
+    const previous = await readLastReport(dir);
+    if (!force && previous) {
+      const ageMs = Date.now() - new Date(previous.measuredAt).getTime();
+      if (Number.isFinite(ageMs) && ageMs >= 0 && ageMs < QUALITY_CACHE_MS) {
+        return previous;
+      }
+    }
+
+    if (closing || gen !== qualityGen || project?.dir !== dir) {
+      throw new OrqError('APP_UNAVAILABLE', 'Medição de qualidade cancelada.');
+    }
+    if (qualityPending && qualityPending.dir === dir) return qualityPending.promise;
+
+    const abort = new AbortController();
+    let entry!: { dir: string; promise: Promise<QualityReport>; abort: AbortController };
+    const promise = (async () => {
+      try {
+        const [rawReport, changedFiles] = await Promise.all([
+          measureQualityIsolated({
+            script: opts.qualityScript ?? process.argv[1]!,
+            dir,
+            signal: abort.signal,
+            onStart: (pid) => { qualityPids.add(pid); recordPids(); },
+            onExit: (pid) => {
+              qualityPids.delete(pid);
+              recordPids();
+              if (qualityPids.size === 0) {
+                for (const wake of [...qualityExitWaiters]) wake();
+              }
+            },
+          }),
+          gitChanged(dir),
+        ]);
+
+        if (closing || abort.signal.aborted || gen !== qualityGen || project?.dir !== dir) {
+          throw new OrqError('APP_UNAVAILABLE', 'Medição de qualidade cancelada.');
+        }
+
+        const compared = compareReports(previous, rawReport, changedFiles);
+        const report: QualityReport = {
+          ...rawReport,
+          metrics: compared.metrics,
+          changed: compared.changed,
+        };
+        await saveReport(dir, report);
+        return report;
+      } finally {
+        if (qualityPending === entry) qualityPending = null;
+      }
+    })();
+
+    entry = { dir, promise, abort };
+    qualityPending = entry;
+    return promise;
+  }
+
   orquestra = await createOrquestra({
     pipePath: opts.pipePath,
     dataDir: opts.dataDir,
@@ -573,6 +666,7 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
     browser,
     browserNodes: () => project?.state.browserNodes() ?? [],
     usage: getProviderUsage,
+    quality: (params) => measureQuality(params.refresh === true),
     onEvent: (event) => {
       if (event.type === 'output') return batcher.push(event.name, event.data);
       if (event.type === 'state') {
@@ -629,6 +723,9 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
    */
   function detachProject(): void {
     if (!project) return;
+    qualityGen++;
+    qualityPending?.abort.abort();
+    qualityPending = null;
     project.saver.flush();
     project.saver.dispose();
     project = null;
@@ -755,6 +852,19 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
     'usage.codex': async () => getProviderUsage('codex'),
     'usage.claude': async () => getProviderUsage('claude'),
     'usage.agy': async () => getProviderUsage('agy'),
+    'quality.read': async () => ({ report: await readLastReport(requireProject().dir) }),
+    'quality.measure': async () => measureQuality(true),
+    'quality.ask': async ({ name, kind }) => {
+      const current = requireProject();
+      const session = requireSession(name);
+      if (!session.adapter.acceptsPrompts) {
+        throw new OrqError('UNSUPPORTED', `${name} é um shell e não recebe prompts. Use orq read para ler a tela.`);
+      }
+      const report = await readLastReport(current.dir);
+      await session.sendCommand(qualityAgentPrompt(kind, report));
+      opts.log.info({ terminal: name, kind }, 'pedido de qualidade enviado ao agente');
+      return {};
+    },
     'models.catalog': async () => modelCatalog.get(),
     'models.refresh': async ({ agent }) => modelCatalog.refresh(agent),
     'project.open': async ({ dir }) => {
@@ -1070,7 +1180,16 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
       }
     },
     dispatchForTest: (method, params, caller) => orquestra.dispatchForTest(method, params, caller, new AbortController().signal),
+    abortBackground() {
+      qualityGen++;
+      qualityPending?.abort.abort();
+    },
     async close() {
+      closing = true;
+      qualityGen++;
+      qualityPending?.abort.abort();
+      const pendingQuality = qualityPending?.promise.catch(() => {});
+      qualityPending = null;
       for (const [id, pending] of [...portalCalls]) { opts.send({ kind: 'portal-cancel', id }); pending.reject(new OrqError('APP_UNAVAILABLE', 'Workspace encerrado.')); }
       unsubscribeModelCatalog();
       if (ownsModelCatalog) await modelCatalog.close();
@@ -1080,6 +1199,7 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
       detachProject();
       batcher.flush();
       await orquestra.close();
+      await Promise.all([pendingQuality, waitForQualityExit(2500)]);
       opts.onPids?.([]);
     },
   };

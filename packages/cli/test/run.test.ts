@@ -390,4 +390,100 @@ describe('orq', () => {
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual(data);
   });
+
+  it('quality --changed chama o pipe com { changed: true } e imprime resumo formatado', async () => {
+    let calledMethod: string | undefined;
+    let calledParams: unknown;
+    const sampleReport = {
+      version: 1,
+      dir: 'E:/proj',
+      measuredAt: '2026-11-20T12:00:00.000Z',
+      durationMs: 42,
+      language: 'js-ts',
+      limits: { files: 3, skippedLarge: 0, truncated: false },
+      metrics: [
+        { id: 'size', signal: 'bad', value: 700, delta: 100 },
+        { id: 'complexity', signal: 'ok', value: 5, delta: 0 },
+        { id: 'dependencies', signal: 'ok', value: 0, delta: 0 },
+        { id: 'coverage', signal: 'missing', value: null, delta: null },
+        { id: 'mutation', signal: 'missing', value: null, delta: null },
+      ],
+      files: [],
+      functions: [],
+      cycles: [],
+      hotspots: [],
+      changed: [{ path: 'src/big.ts', kind: 'file-over-limit', detail: 'Passou de 350 linhas (700 linhas).' }],
+      coverage: null,
+      mutation: null,
+    };
+
+    const result = await cli(['quality', '--changed'], async (method, params) => {
+      calledMethod = method;
+      calledParams = params;
+      return sampleReport;
+    });
+
+    expect(result.code).toBe(0);
+    expect(calledMethod).toBe('quality');
+    expect(calledParams).toEqual({ changed: true });
+    expect(result.stdout).toContain('PROBLEMA');
+    expect(result.stdout).toContain('src/big.ts');
+    expect(result.stdout).toContain('orq quality --explain');
+  });
+
+  it('quality --explain coverage imprime explicação sem chamar o client, e métrica desconhecida sai com USAGE', async () => {
+    let called = false;
+    const result = await cli(
+      ['quality', '--explain', 'coverage'],
+      async () => {
+        called = true;
+        return {};
+      },
+      { env: {} },
+    );
+
+    expect(result.code).toBe(0);
+    expect(called).toBe(false);
+    expect(result.stdout).toContain('Cobertura de testes');
+
+    const bad = await cli(['quality', '--explain', 'xyz'], async () => ({}), { env: {} });
+    expect(bad.code).toBe(2);
+    expect(bad.stderr).toContain('Métrica desconhecida. Use: size, complexity, dependencies, coverage ou mutation.');
+  });
+
+  it('quality --refresh e quality --json repassam refresh e devolvem JSON estruturado', async () => {
+    const sampleReport = {
+      version: 1,
+      dir: 'E:/proj',
+      measuredAt: '2026-11-20T12:00:00.000Z',
+      durationMs: 10,
+      language: 'js-ts',
+      limits: { files: 1, skippedLarge: 0, truncated: false },
+      metrics: [
+        { id: 'size', signal: 'ok', value: 20, delta: null },
+        { id: 'complexity', signal: 'ok', value: 1, delta: null },
+        { id: 'dependencies', signal: 'ok', value: 0, delta: null },
+        { id: 'coverage', signal: 'missing', value: null, delta: null },
+        { id: 'mutation', signal: 'missing', value: null, delta: null },
+      ],
+      files: [],
+      functions: [],
+      cycles: [],
+      hotspots: [],
+      changed: [],
+      coverage: null,
+      mutation: null,
+    };
+
+    let calledParams: unknown;
+    const result = await cli(['quality', '--refresh', '--json'], async (method, params) => {
+      expect(method).toBe('quality');
+      calledParams = params;
+      return sampleReport;
+    });
+
+    expect(result.code).toBe(0);
+    expect(calledParams).toEqual({ refresh: true });
+    expect(JSON.parse(result.stdout)).toEqual(sampleReport);
+  });
 });

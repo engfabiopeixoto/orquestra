@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
-import { call, exitCodeFor, formatUsageSummary, OrqError, parseArgs as parseSharedArgs, REGENT_COMMANDS, type ClientOptions } from '@orquestra/shared';
+import { call, exitCodeFor, formatQualityExplain, formatQualitySummary, formatUsageSummary, OrqError, parseArgs as parseSharedArgs, QUALITY_GUIDE, QUALITY_METRICS, REGENT_COMMANDS, type ClientOptions, type QualityMetricId } from '@orquestra/shared';
 import { parseDuration } from './duration.js';
 import { runMcp } from './mcp.js';
 
@@ -17,6 +17,7 @@ const HELP = `Uso: orq <comando>
   whoami                         seu nome e tipo no canvas
   peers                          terminais conectados a você
   usage [claude|codex|agy]       crédito restante das assinaturas de IA
+  quality [--changed] [--refresh] [--explain <métrica>]  mede tamanho, complexidade, ciclos, cobertura e mutação
   prompt <peer> <texto|->        envia um prompt e espera a resposta (--timeout 8m, --file <arquivo>)
   result <id>                    resposta de um prompt pendente
   read <peer> [--lines N]        tela atual de um terminal conectado
@@ -65,6 +66,9 @@ export async function run(argv: string[], io: Io): Promise<number> {
         cwd: { type: 'string' },
         'no-resume': { type: 'boolean' },
         global: { type: 'boolean' },
+        changed: { type: 'boolean' },
+        refresh: { type: 'boolean' },
+        explain: { type: 'string' },
       },
     });
     const output = await execute(command, positionals, values, io);
@@ -88,6 +92,9 @@ type Flags = {
   cwd?: string;
   'no-resume'?: boolean;
   global?: boolean;
+  changed?: boolean;
+  refresh?: boolean;
+  explain?: string;
 };
 
 async function execute(
@@ -96,6 +103,13 @@ async function execute(
   flags: Flags,
   io: Io,
 ): Promise<Output> {
+  if (command === 'quality' && flags.explain !== undefined) {
+    if (!QUALITY_METRICS.includes(flags.explain as QualityMetricId)) {
+      throw new OrqError('USAGE', 'Métrica desconhecida. Use: size, complexity, dependencies, coverage ou mutation.');
+    }
+    const metric = flags.explain as QualityMetricId;
+    return { text: formatQualityExplain(metric), json: { id: metric, ...QUALITY_GUIDE[metric] } };
+  }
   const client = clientFromEnv(io.env);
   switch (command) {
     case 'whoami': {
@@ -116,6 +130,13 @@ async function execute(
       const provider = providerArg as 'claude' | 'codex' | 'agy' | undefined;
       const result = await call(client, 'usage', provider ? { provider } : {});
       return { text: formatUsageSummary(result.providers), json: result };
+    }
+    case 'quality': {
+      const result = await call(client, 'quality', {
+        ...(flags.changed ? { changed: true } : {}),
+        ...(flags.refresh ? { refresh: true } : {}),
+      });
+      return { text: formatQualitySummary(result, { changed: Boolean(flags.changed) }), json: result };
     }
     case 'prompt': {
       const target = required(args[0], 'o terminal de destino');

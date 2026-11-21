@@ -7,7 +7,7 @@ import type { ImportRef } from './source-metrics.js';
 export const ANALYZED_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'] as const;
 
 export interface PathAliases {
-  baseUrl: string;
+  baseUrl?: string;
   paths: Record<string, string[]>;
 }
 
@@ -50,7 +50,7 @@ export async function readPathAliases(dir: string): Promise<PathAliases | null> 
   const hasPaths = rawPaths && typeof rawPaths === 'object' && !Array.isArray(rawPaths);
   if (!hasBaseUrl && !hasPaths) return null;
 
-  const baseUrl = hasBaseUrl ? normalizePosix(rawBaseUrl) : '.';
+  const baseUrl = hasBaseUrl ? normalizePosix(rawBaseUrl) : undefined;
   const paths: Record<string, string[]> = {};
   if (hasPaths) {
     for (const [pattern, targets] of Object.entries(rawPaths as Record<string, unknown>)) {
@@ -60,7 +60,7 @@ export async function readPathAliases(dir: string): Promise<PathAliases | null> 
     }
   }
 
-  return { baseUrl, paths };
+  return baseUrl !== undefined ? { baseUrl, paths } : { paths };
 }
 
 function probeCandidates(baseInput: string, files: ReadonlySet<string>): string | null {
@@ -99,8 +99,9 @@ function probeCandidates(baseInput: string, files: ReadonlySet<string>): string 
 function resolveAliasCandidates(specifier: string, aliases: PathAliases): string[] {
   const exact = aliases.paths[specifier];
   const results: string[] = [];
+  const baseUrl = aliases.baseUrl ?? '.';
   const joinBase = (target: string) =>
-    aliases.baseUrl === '.' ? target : posix.join(aliases.baseUrl, target);
+    baseUrl === '.' ? target : posix.join(baseUrl, target);
 
   if (exact) {
     for (const target of exact) results.push(joinBase(target));
@@ -150,7 +151,7 @@ export function resolveImport(
     const resolved = probeCandidates(candidate, files);
     if (resolved) return resolved;
   }
-  if (aliases.baseUrl) {
+  if (aliases.baseUrl !== undefined) {
     const baseCandidate = aliases.baseUrl === '.' ? clean : posix.join(aliases.baseUrl, clean);
     return probeCandidates(baseCandidate, files);
   }

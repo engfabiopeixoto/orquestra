@@ -33,6 +33,7 @@ export function regentGuide(): string {
     'Use orq prompt <terminal> "<tarefa>" para passar tarefas e orq read <terminal> para acompanhar.',
     'Se um terminal não responder ou a fila dele travar (orq read mostra que nada anda), reinicie com orq restart <terminal> e reenvie a tarefa.',
     'Descarregue com orq unload <terminal> os agentes ociosos que não vai usar por um tempo e recarregue com orq load <terminal> antes de mandar nova tarefa; orq peers mostra quem está descarregado.',
+    'Depois de implementar, rode orq quality --changed e corrija o que ficou vermelho antes de entregar.',
   ].join('\n');
 }
 
@@ -52,6 +53,7 @@ export function orquestraGuide(opts: { terminalName?: string; regent: boolean; c
     'Os comandos usam ORQ_PIPE e ORQ_TOKEN herdados da sessão. Nunca imprima nem copie ORQ_TOKEN para a conversa, notas ou arquivos do projeto.',
     `Se orq não for encontrado no PATH, use este comando equivalente no PowerShell: ${fallback} whoami. Troque whoami por peers, prompt, read ou outros subcomandos conforme necessário.`,
     'Antes de afirmar que não há integração, execute whoami e relate a mensagem de erro concreta se o comando falhar.',
+    'Depois de implementar, rode orq quality --changed e corrija o que ficou vermelho antes de entregar.',
     opts.regent ? `${regentGuide()}\nSe o terminal informado pelo usuário não estiver conectado, use regent_link com seu nome retornado por whoami e o nome do destinatário antes de prompt.` : 'Você pode comunicar-se com os terminais conectados. Comandos de regente requerem o papel de regente.',
   ].filter(Boolean).join('\n');
 }

@@ -38,6 +38,22 @@ describe('import-graph e findCycles', () => {
     expect(aliases).toEqual({ baseUrl: '.', paths: { '@/*': ['src/*'] } });
   });
 
+  it('quando tsconfig tem paths sem baseUrl, não resolve pacote externo contra arquivo na raiz', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'orq-tsconfig-nobase-'));
+    temps.push(dir);
+    writeFileSync(
+      join(dir, 'tsconfig.json'),
+      JSON.stringify({ compilerOptions: { paths: { '@/*': ['src/*'] } } }),
+    );
+
+    const aliases = await readPathAliases(dir);
+    expect(aliases).toEqual({ paths: { '@/*': ['src/*'] } });
+
+    const files = new Set(['src/main.ts', 'src/u.ts', 'react.ts']);
+    expect(resolveImport('src/main.ts', '@/u', files, aliases)).toBe('src/u.ts');
+    expect(resolveImport('src/main.ts', 'react', files, aliases)).toBeNull();
+  });
+
   it('resolve imports usando apenas baseUrl quando paths não está definido', async () => {
     const files = new Set(['src/main.ts', 'src/utils/math.ts']);
     const aliases = { baseUrl: 'src', paths: {} };

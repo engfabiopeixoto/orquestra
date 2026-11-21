@@ -7,7 +7,7 @@ export const HOST_SCRIPT = join(here, 'dist', 'host.mjs');
 
 // Os pacotes do workspace são TypeScript sem build: entram no bundle. Módulos nativos e os que
 // carregam workers (pino-roll) ficam de fora e são resolvidos do node_modules da raiz.
-export const EXTERNAL_MODULES = ['node-pty', 'pino', 'pino-roll', '@xterm/headless', '@xterm/addon-serialize', 'zod', 'ws'];
+export const EXTERNAL_MODULES = ['node-pty', 'pino', 'pino-roll', '@xterm/headless', '@xterm/addon-serialize', 'zod', 'ws', 'typescript'];
 
 export async function buildHost(): Promise<string> {
   await build({

@@ -35,6 +35,7 @@ export type HandlerDeps = {
   browser?: BrowserHandler;
   browserNodes?: () => BrowserNode[];
   usage?: (provider: UsageProvider) => Promise<SubscriptionUsage>;
+  quality?: (params: Params<'quality'>) => Promise<Result<'quality'>>;
 };
 
 type Handlers = { [M in MethodName]: (params: Params<M>, caller: Caller, signal: AbortSignal) => Promise<Result<M>> };
@@ -103,8 +104,9 @@ export function createHandlers(deps: HandlerDeps): Dispatch {
       );
       return { providers: results };
     },
-    quality: async () => {
-      throw new OrqError('APP_UNAVAILABLE', 'A medição de qualidade precisa do app do Orquestra.');
+    quality: async (params) => {
+      if (!deps.quality) throw new OrqError('APP_UNAVAILABLE', 'A medição de qualidade precisa do app do Orquestra.');
+      return deps.quality(params);
     },
     peers: async (_params, caller) => ({
       peers: deps.topology.neighbors(caller.session, 'terminal').map((name) => {

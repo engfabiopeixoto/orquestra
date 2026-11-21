@@ -17,7 +17,7 @@ import { nodePtyHost, type PtyHost, type PtyProcess } from './pty-host.js';
 import { resolveExecutable } from './resolve-exe.js';
 import { Session, type TurnFailure, type TurnOwner } from './session.js';
 import { Topology } from './topology.js';
-import type { BrowserHandler, BrowserNode, SubscriptionUsage, UsageProvider } from '@orquestra/shared';
+import type { BrowserHandler, BrowserNode, QualityParams, QualityReport, SubscriptionUsage, UsageProvider } from '@orquestra/shared';
 
 export { type RegentHandler, type RegentMethod } from './handlers.js';
 
@@ -68,6 +68,7 @@ export type OrquestraOptions = {
   browser?: BrowserHandler;
   browserNodes?: () => BrowserNode[];
   usage?: (provider: UsageProvider) => Promise<SubscriptionUsage>;
+  quality?: (params: QualityParams) => Promise<QualityReport>;
 };
 
 export type OrquestraEvent =
@@ -172,6 +173,7 @@ export async function createOrquestra(opts: OrquestraOptions): Promise<Orquestra
     browser: opts.browser,
     browserNodes: opts.browserNodes,
     usage: opts.usage,
+    quality: opts.quality,
   });
   const server = await startPipeServer({
     pipePath: opts.pipePath,

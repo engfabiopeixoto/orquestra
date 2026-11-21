@@ -240,4 +240,75 @@ describe('até três workspaces isolados', () => {
     expect(usageEvents[0]).toMatchObject({ kind: 'event', event: { type: 'usage.updated', provider: 'codex' } });
     expect((usageEvents[0] as { event: { workspaceId?: string } }).event.workspaceId).toBeUndefined();
   });
+
+  it('project.close e close() abortam worker lento de qualidade sem travar em inFlight', async () => {
+    const sent: HostToMain[] = [];
+    const dataDir = mkdtempSync(join(tmpdir(), 'orq-multi-qual-'));
+    const projA = mkdtempSync(join(tmpdir(), 'orq-qproj-a-'));
+    const projB = mkdtempSync(join(tmpdir(), 'orq-qproj-b-'));
+    const pidFile = join(dataDir, 'slow-q.pid');
+    const script = join(dataDir, 'slow-quality-worker.mjs');
+    writeFileSync(
+      script,
+      [
+        "import { writeFileSync } from 'node:fs';",
+        `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
+        'setTimeout(() => {}, 15000);',
+      ].join('\n'),
+    );
+
+    const manager = await startWorkspaceManager({
+      send: (message) => sent.push(message),
+      adapters: { shell: createFakeAdapter(), agy: createFakeAdapter() },
+      cliScript: 'C:/orq/bin/orq.mjs',
+      pipePath: `\\\\.\\pipe\\orq-multi-${randomUUID()}`,
+      dataDir,
+      recentFile: join(dataDir, 'recent.json'),
+      settingsFile: join(dataDir, 'settings.json'),
+      personasFile: join(dataDir, 'personas.json'),
+      agentPidFile: join(dataDir, 'pids.json'),
+      agyHooksFile: join(dataDir, 'test-agy-hooks.json'),
+      log: silentLogger(),
+      ptyHost: new FakePtyHost(),
+      readyQuietMs: 10,
+      outputIntervalMs: 5,
+      qualityScript: script,
+      modelCatalogDeps: {
+        probeVersion: async () => null,
+        probeClaudeCatalogMtime: () => null,
+        discover: async (agent) => { throw new Error(`${agent} desativado nos testes de unidade`); },
+      },
+    });
+    managers.push(manager);
+
+    const openProj = async (dir: string) => {
+      const id = randomUUID();
+      await manager.handle({ kind: 'command', id, method: 'project.open', params: { dir } });
+      return (sent.find((m) => m.kind === 'response' && m.id === id) as { kind: 'response'; result: any }).result;
+    };
+
+    const a = await openProj(projA);
+    const measuringA = manager.handle({ kind: 'command', id: randomUUID(), method: 'quality.measure', params: {}, workspaceId: a.workspaceId });
+    await waitFor(() => {
+      try { return Number(readFileSync(pidFile, 'utf8')) > 0; } catch { return false; }
+    });
+
+    const tClose = Date.now();
+    await manager.handle({ kind: 'command', id: randomUUID(), method: 'project.close', params: {}, workspaceId: a.workspaceId });
+    await measuringA;
+    expect(Date.now() - tClose).toBeLessThan(3000);
+
+    const b = await openProj(projB);
+    writeFileSync(pidFile, '');
+    const measuringB = manager.handle({ kind: 'command', id: randomUUID(), method: 'quality.measure', params: {}, workspaceId: b.workspaceId });
+    await waitFor(() => {
+      try { return Number(readFileSync(pidFile, 'utf8')) > 0; } catch { return false; }
+    });
+
+    const tMgrClose = Date.now();
+    await manager.close();
+    await measuringB;
+    managers.splice(managers.indexOf(manager), 1);
+    expect(Date.now() - tMgrClose).toBeLessThan(3500);
+  });
 });

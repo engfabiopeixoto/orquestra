@@ -20,7 +20,7 @@ afterEach(async () => {
 const readWorkspace = (dir: string) => JSON.parse(readFileSync(join(dir, '.orquestra', 'workspace.json'), 'utf8'));
 
 import type { HostBridgeOptions } from '../src/bridge.js';
-type SetupOptions = { outputIntervalMs?: number; saveDelayMs?: number; adapters?: Record<string, AgentAdapter>; claudeDir?: string; listPipes?: () => string[]; usageReaders?: HostBridgeOptions['usageReaders'] };
+type SetupOptions = { outputIntervalMs?: number; saveDelayMs?: number; adapters?: Record<string, AgentAdapter>; claudeDir?: string; listPipes?: () => string[]; usageReaders?: HostBridgeOptions['usageReaders']; qualityScript?: string; onPids?: (pids: number[]) => void };
 
 async function setup(opts: SetupOptions = {}) {
   const sent: HostToMain[] = [];
@@ -62,6 +62,8 @@ async function setup(opts: SetupOptions = {}) {
     claudeDir: opts.claudeDir,
     listPipes: opts.listPipes,
     usageReaders: opts.usageReaders,
+    qualityScript: opts.qualityScript,
+    onPids: opts.onPids,
     backgroundJobPollMs: 30,
     modelCatalogDeps: {
       probeVersion: async () => null,
@@ -1022,5 +1024,179 @@ describe('BUG 3 — sincronização global de uso das assinaturas', () => {
     const res = await command('1', 'usage.claude', {});
     expect(res).toMatchObject({ kind: 'response-error' });
     expect(sent.filter((m) => m.kind === 'event' && m.event.type === 'usage.updated')).toEqual([]);
+  });
+});
+
+describe('medição de qualidade na ponte', () => {
+  it('duas chamadas quality.measure simultâneas sobem o processo filho apenas uma vez', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'orq-qbridge-'));
+    const countFile = join(dir, 'spawns.txt');
+    const script = join(dir, 'fake-quality-host.mjs');
+    const report = {
+      version: 1,
+      dir,
+      measuredAt: new Date().toISOString(),
+      durationMs: 15,
+      language: 'js-ts',
+      limits: { files: 1, skippedLarge: 0, truncated: false },
+      metrics: [
+        { id: 'size', signal: 'ok', value: 20, delta: null },
+        { id: 'complexity', signal: 'ok', value: 1, delta: null },
+        { id: 'dependencies', signal: 'ok', value: 0, delta: null },
+        { id: 'coverage', signal: 'missing', value: null, delta: null },
+        { id: 'mutation', signal: 'missing', value: null, delta: null },
+      ],
+      files: [],
+      functions: [],
+      cycles: [],
+      hotspots: [],
+      changed: [],
+      coverage: null,
+      mutation: null,
+    };
+    writeFileSync(
+      script,
+      [
+        "import { appendFileSync } from 'node:fs';",
+        `appendFileSync(${JSON.stringify(countFile)}, '1\\n');`,
+        `setTimeout(() => { process.stdout.write(JSON.stringify({ ok: true, report: ${JSON.stringify(report)} })); }, 150);`,
+      ].join('\n'),
+    );
+
+    const { command, sent, ptyHost } = await setup({
+      qualityScript: script,
+      adapters: {
+        shell: { ...createFakeAdapter(), kind: 'shell', acceptsPrompts: false },
+        claude: { ...createFakeAdapter(), kind: 'claude', acceptsPrompts: true },
+        agy: { ...createFakeAdapter(), kind: 'agy', acceptsPrompts: true },
+      },
+    });
+    // Sem projeto aberto, falha com USAGE
+    const noProj = await command('0', 'quality.read', {});
+    expect(noProj).toMatchObject({ kind: 'response-error', error: { code: 'USAGE' } });
+
+    await command('1', 'project.open', { dir });
+
+    await Promise.all([
+      bridge!.handle({ kind: 'command', id: '2', method: 'quality.measure', params: {} }),
+      bridge!.handle({ kind: 'command', id: '3', method: 'quality.measure', params: {} }),
+    ]);
+
+    const res2 = sent.find((m) => m.kind === 'response' && m.id === '2');
+    const res3 = sent.find((m) => m.kind === 'response' && m.id === '3');
+    expect(res2).toMatchObject({ kind: 'response', ok: true });
+    expect(res3).toMatchObject({ kind: 'response', ok: true });
+    expect(readFileSync(countFile, 'utf8').trim().split('\n')).toHaveLength(1);
+
+    // quality.read retorna a medição gravada
+    const readRes = await command('4', 'quality.read', {});
+    expect(readRes).toMatchObject({ kind: 'response', ok: true, result: { report: expect.objectContaining({ dir }) } });
+
+    // Cache de 60s via pipe sem refresh não dispara novo processo filho; refresh: true força nova medição
+    await bridge!.dispatchForTest('quality', {}, { session: 'R' });
+    expect(readFileSync(countFile, 'utf8').trim().split('\n')).toHaveLength(1);
+    await bridge!.dispatchForTest('quality', { refresh: true }, { session: 'R' });
+    expect(readFileSync(countFile, 'utf8').trim().split('\n')).toHaveLength(2);
+
+    // quality.ask rejeita inexistente e shell, e envia pedido de uma linha para agente compatível
+    const missingTerm = await command('5a', 'quality.ask', { name: 'NaoExiste', kind: 'coverage' });
+    expect(missingTerm).toMatchObject({ kind: 'response-error', error: { code: 'NOT_FOUND' } });
+
+    await command('5s', 'terminal.create', { name: 'Sh', agent: 'shell' });
+    await waitFor(() =>
+      sent.some((m) => m.kind === 'event' && m.event.type === 'terminal.state' && m.event.name === 'Sh' && m.event.state === 'idle'),
+    );
+    const shellRes = await command('5sb', 'quality.ask', { name: 'Sh', kind: 'coverage' });
+    expect(shellRes).toMatchObject({
+      kind: 'response-error',
+      error: { code: 'UNSUPPORTED', message: expect.stringContaining('é um shell e não recebe prompts') },
+    });
+
+    await command('5', 'terminal.create', { name: 'Dev', agent: 'claude' });
+    await waitFor(() =>
+      sent.some((m) => m.kind === 'event' && m.event.type === 'terminal.state' && m.event.name === 'Dev' && m.event.state === 'idle'),
+    );
+    const askRes = await command('6', 'quality.ask', { name: 'Dev', kind: 'coverage' });
+    expect(askRes).toMatchObject({ kind: 'response', ok: true });
+    expect(ptyHost.last().written.join('')).toContain('json-summary');
+  });
+
+  it('erro no worker de quality não gera UnhandledPromiseRejection nem derruba o processo', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'orq-qbridge-fail-'));
+    const script = join(dir, 'fail-worker.mjs');
+    writeFileSync(script, `process.stdout.write(JSON.stringify({ ok: false, error: 'Falha simulada.' }));`);
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const { command } = await setup({ qualityScript: script });
+      await command('1', 'project.open', { dir });
+      const res = await command('2', 'quality.measure', {});
+      expect(res).toMatchObject({ kind: 'response-error', error: { message: 'Falha simulada.' } });
+      await new Promise((r) => setTimeout(r, 30));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
+  it('trocar de projeto e close() abortam worker pendente, esperam saída do PID antes de onPids([]) e não gravam no projeto antigo', async () => {
+    const dirA = mkdtempSync(join(tmpdir(), 'orq-qbridge-a-'));
+    const dirB = mkdtempSync(join(tmpdir(), 'orq-qbridge-b-'));
+    const pidFile = join(dirA, 'worker.pid');
+    const script = join(dirA, 'slow-worker.mjs');
+    writeFileSync(
+      script,
+      [
+        "import { writeFileSync } from 'node:fs';",
+        `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
+        'setTimeout(() => {}, 10000);',
+      ].join('\n'),
+    );
+
+    const pidTimeline: number[][] = [];
+    const { command } = await setup({ qualityScript: script, onPids: (pids) => pidTimeline.push(pids) });
+    await command('1', 'project.open', { dir: dirA });
+
+    const pendingMeasure = bridge!.handle({ kind: 'command', id: '2', method: 'quality.measure', params: {} });
+    await waitFor(() => {
+      try { return Number(readFileSync(pidFile, 'utf8')) > 0; } catch { return false; }
+    });
+    const firstPid = Number(readFileSync(pidFile, 'utf8'));
+
+    // Trocar de projeto aborta medição anterior sem esperar 10 s e sem gravar last.json em dirA
+    const tSwitch = Date.now();
+    await command('3', 'project.open', { dir: dirB });
+    await pendingMeasure;
+    expect(Date.now() - tSwitch).toBeLessThan(3000);
+    expect(() => readFileSync(join(dirA, '.orquestra', 'quality', 'last.json'), 'utf8')).toThrow();
+    await expect.poll(() => {
+      try { process.kill(firstPid, 0); return true; } catch { return false; }
+    }, { timeout: 3000 }).toBe(false);
+
+    // Inicia medição em dirB e fecha o bridge: close() deve aguardar a saída do PID antes de zerar onPids([])
+    writeFileSync(
+      script,
+      [
+        "import { writeFileSync } from 'node:fs';",
+        `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
+        'setTimeout(() => {}, 10000);',
+      ].join('\n'),
+    );
+    const pendingB = bridge!.handle({ kind: 'command', id: '4', method: 'quality.measure', params: {} });
+    await waitFor(() => {
+      try { return Number(readFileSync(pidFile, 'utf8')) !== firstPid; } catch { return false; }
+    });
+    const secondPid = Number(readFileSync(pidFile, 'utf8'));
+
+    await bridge!.close();
+    await pendingB;
+    bridge = undefined;
+
+    let stillAlive = true;
+    try { process.kill(secondPid, 0); } catch { stillAlive = false; }
+    expect(stillAlive).toBe(false);
+    expect(pidTimeline.at(-1)).toEqual([]);
   });
 });

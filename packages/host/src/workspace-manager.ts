@@ -214,7 +214,10 @@ export async function startWorkspaceManager(opts: HostBridgeOptions): Promise<Ho
         if (!entry) throw new OrqError('NOT_FOUND', 'Workspace não está aberto.');
         entry.info.status = 'closing';
         try {
-          if (entry.bridge) await enqueue(entry, async () => { await Promise.allSettled([...entry.inFlight]); await call(entry.bridge!, 'project.close', {}); await entry.bridge!.close(); });
+          if (entry.bridge) {
+            entry.bridge.abortBackground?.();
+            await enqueue(entry, async () => { await Promise.allSettled([...entry.inFlight]); await call(entry.bridge!, 'project.close', {}); await entry.bridge!.close(); });
+          }
         } catch (error) { entry.info.status = entry.bridge ? 'open' : 'paused'; throw error; }
         entries.delete(entry.info.id); pids.delete(entry.info.id);
         if (selectedId === entry.info.id) selectedId = entries.keys().next().value ?? null;
@@ -272,7 +275,7 @@ export async function startWorkspaceManager(opts: HostBridgeOptions): Promise<Ho
       await Promise.all([...confirms].map(([id, bridge]) => bridge.handle({ kind: 'confirm-reply', id, approved: false })));
       confirms.clear();
       await lifecycle;
-      await Promise.all([...entries.values()].map(async (entry) => { await entry.tail; await Promise.allSettled([...entry.inFlight]); await entry.bridge?.close(); }));
+      await Promise.all([...entries.values()].map(async (entry) => { entry.bridge?.abortBackground?.(); await entry.tail; await Promise.allSettled([...entry.inFlight]); await entry.bridge?.close(); }));
       await globalBridge.close();
       unsubscribeModelCatalog();
       if (ownsModelCatalog) await modelCatalog.close();

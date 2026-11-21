@@ -21,9 +21,12 @@ describe('funções e guia do regente', () => {
     expect(guide).toContain('orq load');
   });
 
-  it('orquestraGuide orienta a consultar orq usage antes de delegar', () => {
+  it('orquestraGuide e regentGuide orientam a consultar orq usage e rodar orq quality --changed', () => {
+    const regent = regentGuide();
+    expect(regent).toContain('orq quality --changed');
     const guide = orquestraGuide({ terminalName: 'T1', regent: false, cliScript: 'cli.js', nodePath: 'node' });
     expect(guide).toContain('Antes de delegar, consulte orq usage para ver o crédito restante de cada assinatura (claude, codex, agy) e prefira agentes com folga.');
+    expect(guide).toContain('orq quality --changed');
   });
 
   it('a entrega da função começa pelo cabeçalho e inclui o guia só para regente', () => {

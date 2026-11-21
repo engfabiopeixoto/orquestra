@@ -59,6 +59,7 @@ export const groupLayoutSchema = z.object({ groups: z.array(canvasGroupSchema), 
 export type GroupLayout = z.infer<typeof groupLayoutSchema>;
 import { subscriptionUsageSchema, usageProviderSchema, type SubscriptionUsage } from './usage-schema.js';
 export { subscriptionUsageSchema, usageProviderSchema, type SubscriptionUsage, type UsageProvider } from './usage-schema.js';
+import { qualityReportSchema } from './quality-schema.js';
 export const projectFileSchema = z.object({
   name: z.string(), path: z.string(), kind: z.enum(['directory', 'file', 'link']),
   change: z.enum(['none', 'added', 'modified', 'removed']),
@@ -122,6 +123,9 @@ export const hostMethodSchemas = {
   },
   'usage.claude': { params: empty, result: subscriptionUsageSchema },
   'usage.agy': { params: empty, result: subscriptionUsageSchema },
+  'quality.read': { params: empty, result: z.object({ report: qualityReportSchema.nullable() }) },
+  'quality.measure': { params: empty, result: qualityReportSchema },
+  'quality.ask': { params: z.object({ name: z.string().min(1), kind: z.enum(['coverage', 'mutation']) }), result: empty },
   'models.catalog': { params: empty, result: modelCatalogSchema },
   'models.refresh': { params: z.object({ agent: modelAgentSchema.optional() }), result: modelCatalogSchema },
   'project.open': { params: z.object({ dir: z.string().min(1) }), result: projectSnapshotSchema },
