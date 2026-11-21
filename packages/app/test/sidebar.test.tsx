@@ -28,30 +28,6 @@ function fakeApi() {
       if (method === 'workspace.list') return { workspaces: [], selectedId: null };
       if (method === 'files.list') return { entries: [], comparison: 'session', truncated: false };
       if (method === 'files.read') return { path: (params as { path: string }).path, content: 'export const x = 1;', diff: null, kind: 'text' };
-      if (method === 'quality.read') return {
-        report: {
-          version: 1,
-          dir: 'C:\\proj\\alfa',
-          measuredAt: '2026-11-20T12:00:00.000Z',
-          durationMs: 10,
-          language: 'js-ts',
-          limits: { files: 1, skippedLarge: 0, truncated: false },
-          metrics: [
-            { id: 'size', signal: 'bad', value: 700, delta: null },
-            { id: 'complexity', signal: 'ok', value: 1, delta: null },
-            { id: 'dependencies', signal: 'ok', value: 0, delta: null },
-            { id: 'coverage', signal: 'missing', value: null, delta: null },
-            { id: 'mutation', signal: 'missing', value: null, delta: null },
-          ],
-          files: [],
-          functions: [],
-          cycles: [],
-          hotspots: [{ path: 'src/alvo.ts', score: 100, reason: '700 linhas' }],
-          changed: [],
-          coverage: null,
-          mutation: null,
-        },
-      };
       if (method === 'project.open') {
         const dir = (params as { dir: string }).dir;
         return { dir, name: dir.split('\\').at(-1), terminals: [], notes: [], edges: [], layout: {}, viewport: { x: 0, y: 0, zoom: 1 } };
@@ -110,37 +86,76 @@ describe('Sidebar', () => {
     expect(onOpenPersonas).toHaveBeenCalled();
   });
 
-  it('alterna entre Arquivos e Qualidade e abre pré-visualização ao clicar em caminho da Qualidade', async () => {
+  it('mostra o explorador sem abas quando há projeto e abre pré-visualização via openPath', async () => {
     const { api } = fakeApi();
+    const onOpenPathHandled = vi.fn();
     appStore.getState().loadProject({
       dir: 'C:\\proj\\alfa', name: 'alfa', notes: [], edges: [], layout: {}, viewport: { x: 0, y: 0, zoom: 1 },
       terminals: [],
     });
-    render(<Sidebar api={api} onOpenSettings={() => {}} onOpenPersonas={() => {}} />);
+    render(<Sidebar api={api} openPath="src/alvo.ts" onOpenPathHandled={onOpenPathHandled} onOpenSettings={() => {}} onOpenPersonas={() => {}} />);
 
-    fireEvent.click(await screen.findByTestId('sidebar-tab-quality'));
-    expect(screen.getByRole('tabpanel')).toBeTruthy();
-    const hotspot = await screen.findByRole('button', { name: /^src\/alvo\.ts/i });
-    fireEvent.click(hotspot);
-
+    expect(screen.queryByRole('tablist')).toBeNull();
+    expect(screen.queryByTestId('sidebar-tab-quality')).toBeNull();
     expect(await screen.findByRole('dialog', { name: 'Arquivo src/alvo.ts' })).toBeTruthy();
     expect(await screen.findByText('export const x = 1;')).toBeTruthy();
+    expect(onOpenPathHandled).toHaveBeenCalled();
   });
 
-  it('navega entre as abas Arquivos e Qualidade com ArrowRight e ArrowLeft', async () => {
+  it('separador horizontal ajusta altura de PROJETOS por teclado e duplo clique restaura padrão com persistência', async () => {
+    localStorage.clear();
     const { api } = fakeApi();
     appStore.getState().loadProject({
       dir: 'C:\\proj\\alfa', name: 'alfa', notes: [], edges: [], layout: {}, viewport: { x: 0, y: 0, zoom: 1 },
       terminals: [],
     });
-    render(<Sidebar api={api} onOpenSettings={() => {}} onOpenPersonas={() => {}} />);
+    const { unmount } = render(<Sidebar api={api} onOpenSettings={() => {}} onOpenPersonas={() => {}} />);
+    const sep = await screen.findByRole('separator', { name: /altura/i });
+    expect(sep.getAttribute('aria-orientation')).toBe('horizontal');
 
-    const filesTab = await screen.findByTestId('sidebar-tab-files');
-    const qualityTab = screen.getByTestId('sidebar-tab-quality');
-    fireEvent.keyDown(filesTab, { key: 'ArrowRight' });
-    expect(qualityTab.getAttribute('aria-selected')).toBe('true');
-    fireEvent.keyDown(qualityTab, { key: 'ArrowLeft' });
-    expect(filesTab.getAttribute('aria-selected')).toBe('true');
+    const initial = Number(sep.getAttribute('aria-valuenow'));
+    fireEvent.keyDown(sep, { key: 'ArrowDown' });
+    const grew = Number(sep.getAttribute('aria-valuenow'));
+    expect(grew).toBeGreaterThan(initial);
+
+    unmount();
+    render(<Sidebar api={api} onOpenSettings={() => {}} onOpenPersonas={() => {}} />);
+    const sepReloaded = await screen.findByRole('separator', { name: /altura/i });
+    expect(Number(sepReloaded.getAttribute('aria-valuenow'))).toBe(grew);
+
+    fireEvent.doubleClick(sepReloaded);
+    expect(Number(sepReloaded.getAttribute('aria-valuenow'))).toBe(initial);
+  });
+
+  it('mede altura real de .recent-projects antes do arrasto e só grava no localStorage ao concluir (pointerup)', async () => {
+    localStorage.clear();
+    const setItemSpy = vi.spyOn(Storage.prototype, 'setItem');
+    const originalClientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight');
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+      configurable: true,
+      get() {
+        if ((this as HTMLElement).classList?.contains('recent-projects')) return 64;
+        if ((this as HTMLElement).classList?.contains('side')) return 700;
+        return 0;
+      },
+    });
+    try {
+      const { api } = fakeApi();
+      render(<Sidebar api={api} onOpenSettings={() => {}} onOpenPersonas={() => {}} />);
+      const sep = await screen.findByRole('separator', { name: /altura/i });
+      expect(Number(sep.getAttribute('aria-valuenow'))).toBe(64);
+
+      fireEvent.pointerDown(sep, { button: 0, clientY: 100, pointerId: 2 });
+      fireEvent.pointerMove(sep, { clientY: 130, pointerId: 2 });
+      expect(setItemSpy).not.toHaveBeenCalled();
+
+      fireEvent.pointerUp(sep, { clientY: 130, pointerId: 2 });
+      expect(setItemSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      setItemSpy.mockRestore();
+      if (originalClientHeight) Object.defineProperty(HTMLElement.prototype, 'clientHeight', originalClientHeight);
+      else delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight;
+    }
   });
 });
 
@@ -221,10 +236,25 @@ describe('Sidebar: menu do Orquestra', () => {
   ])('o item "%s" envia %s e fecha o menu', async (label, action) => {
     renderSidebar();
     fireEvent.click(screen.getByRole('button', { name: 'Menu do Orquestra' }));
-    expect(screen.getAllByRole('menuitem')).toHaveLength(5);
+    expect(screen.getAllByRole('menuitem')).toHaveLength(6);
     fireEvent.click(screen.getByRole('menuitem', { name: label }));
     expect(appAction).toHaveBeenCalledWith(action);
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+  });
+
+  it('documenta Ctrl+Shift+Q no menu e alterna Qualidade quando há projeto', () => {
+    const onToggleQuality = vi.fn();
+    appStore.getState().loadProject({
+      dir: 'C:\\proj\\alfa', name: 'alfa', notes: [], edges: [], layout: {}, viewport: { x: 0, y: 0, zoom: 1 },
+      terminals: [],
+    });
+    const { api } = fakeApi();
+    render(<Sidebar api={api} onOpenSettings={() => {}} onOpenPersonas={() => {}} onToggleQuality={onToggleQuality} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Menu do Orquestra' }));
+    const item = screen.getByRole('menuitem', { name: 'Painel de Qualidade' });
+    expect(item.textContent).toContain('Ctrl+Shift+Q');
+    fireEvent.click(item);
+    expect(onToggleQuality).toHaveBeenCalledTimes(1);
   });
 
   it('abre Sobre no renderer sem enviar app-action', async () => {

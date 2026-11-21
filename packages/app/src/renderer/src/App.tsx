@@ -1,15 +1,17 @@
 import { emptySettings, type Settings } from '@orquestra/shared/args';
 import { ReactFlowProvider } from '@xyflow/react';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createCommandApi } from './api';
 import { Canvas } from './canvas/Canvas';
 import { Palette } from './canvas/Palette';
 import { Sidebar } from './canvas/Sidebar';
+import { isQualityToggleShortcut } from './canvas/shortcuts';
 import { ZoomControl } from './canvas/ZoomControl';
 import { EditTerminalDialog } from './components/EditTerminalDialog';
 import { NewTerminalDialog } from './components/NewTerminalDialog';
 import { NoticeList } from './components/NoticeList';
 import { PersonasDialog } from './components/PersonasDialog';
+import { QualityDrawer } from './components/QualityDrawer';
 import { SettingsDialog } from './components/SettingsDialog';
 import { SubscriptionUsage } from './components/SubscriptionUsage';
 import { activateWorkspace } from './project';
@@ -42,12 +44,36 @@ export function App() {
   const [creatingGroup, setCreatingGroup] = useState<string | undefined>();
   const [groupDraft, setGroupDraft] = useState<GroupDraft | null>(null);
   const [managingGroup, setManagingGroup] = useState<string | null>(null);
+  const [pendingOpenPath, setPendingOpenPath] = useState<string | null>(null);
+  const workspaceKey = project?.workspaceId ?? project?.dir ?? '';
+  const [qualityToggleSignal, setQualityToggleSignal] = useState(0);
 
   useEffect(() => {
     void globalApi.command('settings.get', {}).then((settings) => setCanvasSettings({ ...emptySettings().canvas, ...settings.canvas })).catch(() => {});
     void globalApi.command('models.catalog', {}).then((catalog) => appStore.getState().setModelCatalog(catalog)).catch(() => {});
   }, []);
   useEffect(() => { setCreating(false); setPersonasOpen(false); setCreatingGroup(undefined); setGroupDraft(null); setManagingGroup(null); }, [project?.workspaceId]);
+  useEffect(() => { setPendingOpenPath(null); }, [project?.dir]);
+
+  const toggleQuality = useCallback(() => {
+    setQualityToggleSignal((count) => count + 1);
+  }, []);
+  const clearPendingOpenPath = useCallback(() => setPendingOpenPath(null), []);
+  const handleOpenFileFromQuality = useCallback((filePath: string) => setPendingOpenPath(filePath), []);
+
+  useEffect(() => {
+    if (!project) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const state = appStore.getState();
+      const zoom = state.canvasViewport?.zoom ?? state.viewport?.zoom ?? 1;
+      const isFullZoom = Math.abs(zoom - 1) <= 0.001;
+      if (!isQualityToggleShortcut(event, { terminalFocused: state.focusedTerminal !== null, isFullZoom })) return;
+      event.preventDefault();
+      toggleQuality();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [project, toggleQuality]);
 
   useEffect(() => { syncPortalModalState(true); }, []);
   usePortalOverlay(creating || editing !== null || settingsOpen || personasOpen || groupDraft !== null || managingGroup !== null || changing);
@@ -157,9 +183,16 @@ export function App() {
         newNote: (id) => void createNote(id),
       }}>
         <div className="app">
-          <Sidebar onOpenSettings={() => setSettingsOpen(true)} onOpenPersonas={() => setPersonasOpen(true)} />
+          <Sidebar
+            openPath={pendingOpenPath}
+            onOpenPathHandled={clearPendingOpenPath}
+            onToggleQuality={project ? toggleQuality : undefined}
+            onOpenSettings={() => setSettingsOpen(true)}
+            onOpenPersonas={() => setPersonasOpen(true)}
+          />
           <div className="workspace-main">
           <div className="titlebar" />
+          <div className="workspace-stage">
           <main className="canvas">
             <ReactFlowProvider key={project?.workspaceId ?? 'paused'}>
             <Palette onNewTerminal={() => void openNewTerminal()} onNewNote={() => void createNote()} onNewPortal={() => void createPortalNode()} onNewGroup={() => newGroup(false)} onGroupSelection={() => newGroup(true)} />
@@ -169,6 +202,18 @@ export function App() {
             <SubscriptionUsage api={globalApi} />
             <NoticeList />
           </main>
+          {project ? (
+            <QualityDrawer
+              key={workspaceKey}
+              api={api}
+              projectDir={project.dir}
+              workspaceKey={workspaceKey}
+              terminals={Object.values(terminals)}
+              toggleSignal={qualityToggleSignal}
+              onOpenFile={handleOpenFileFromQuality}
+            />
+          ) : null}
+          </div>
           </div>
         </div>
         {changing ? <div className="workspace-changing" role="status">Atualizando workspace…</div> : null}

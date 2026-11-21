@@ -27,6 +27,13 @@ test('explorador acompanha alterações salvas e resumo separa 5h de 7d', async 
     await page.getByRole('button', { name: 'Alterações', exact: true }).click();
     await expect(page.locator('.code-added').filter({ hasText: '+atualizada' })).toBeVisible();
     await page.getByRole('button', { name: 'Fechar arquivo' }).click();
+    const resizer = page.getByTestId('projects-resizer');
+    await expect(resizer).toBeVisible();
+    const initialHeight = Number(await resizer.getAttribute('aria-valuenow'));
+    await resizer.focus();
+    await page.keyboard.press('ArrowDown');
+    expect(Number(await resizer.getAttribute('aria-valuenow'))).toBeGreaterThan(initialHeight);
+    await resizer.dblclick();
     const five = await page.getByTestId('usage-summary-codex-5h').boundingBox();
     const seven = await page.getByTestId('usage-summary-codex-7d').boundingBox();
     expect(seven!.y).toBeGreaterThan(five!.y);

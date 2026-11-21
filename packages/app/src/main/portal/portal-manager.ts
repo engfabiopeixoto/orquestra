@@ -256,7 +256,11 @@ export class PortalManager {
         const frame = this.ensureCanvasFrame();
         frame?.setBounds(payload.frameBounds);
       }
-      portal.lastVisible = payload.visible && !payload.clippedByModal;
+      portal.lastVisible =
+        payload.visible &&
+        !payload.clippedByModal &&
+        payload.frameBounds.width > 0 &&
+        payload.frameBounds.height > 0;
       const activeView = portal.tabs.get(portal.activeTabId);
       if (!activeView) return;
 

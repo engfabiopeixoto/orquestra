@@ -1,19 +1,23 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
 import { changedItemRefactorTarget, worstRefactorTarget } from '@orquestra/shared/quality-guide';
 import { QUALITY_METRICS, type QualityMetric, type QualityReport } from '@orquestra/shared/quality-schema';
 import type { CommandApi } from '../api';
 import { QualityAskMenuButton } from './QualityAskMenuButton';
 import { QualityMetricCard, type QualityAgentTerminal, type QualityAskRequest } from './QualityMetricCard';
 
-export function QualityPanel({
+export const QualityPanel = memo(function QualityPanel({
   api,
   projectDir,
   terminals,
+  headerAction,
+  onReportChange,
   onOpenFile,
 }: {
   api: CommandApi;
   projectDir: string;
   terminals: QualityAgentTerminal[];
+  headerAction?: ReactNode;
+  onReportChange?(report: QualityReport | null): void;
   onOpenFile(path: string): void;
 }) {
   const [report, setReport] = useState<QualityReport | null>(null);
@@ -25,6 +29,8 @@ export function QualityPanel({
   const mountedRef = useRef(true);
   const projectDirRef = useRef(projectDir);
   projectDirRef.current = projectDir;
+  const onReportChangeRef = useRef(onReportChange);
+  onReportChangeRef.current = onReportChange;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -43,7 +49,10 @@ export function QualityPanel({
     void api
       .command('quality.read', {})
       .then((res) => {
-        if (mountedRef.current && requestIdRef.current === req) setReport(res.report);
+        if (mountedRef.current && requestIdRef.current === req) {
+          setReport(res.report);
+          onReportChangeRef.current?.(res.report);
+        }
       })
       .catch((failure) => {
         if (mountedRef.current && requestIdRef.current === req) {
@@ -61,7 +70,10 @@ export function QualityPanel({
     setOpenMenuId(null);
     try {
       const next = await api.command('quality.measure', {});
-      if (mountedRef.current && requestIdRef.current === req) setReport(next);
+      if (mountedRef.current && requestIdRef.current === req) {
+        setReport(next);
+        onReportChangeRef.current?.(next);
+      }
     } catch (failure) {
       if (mountedRef.current && requestIdRef.current === req) {
         setError(failure instanceof Error ? failure.message : 'Não foi possível medir a qualidade.');
@@ -98,15 +110,18 @@ export function QualityPanel({
     <section className="quality-panel" aria-label="Qualidade do projeto">
       <div className="side-sec quality-head">
         <span>QUALIDADE</span>
-        <button
-          type="button"
-          className="quality-measure-btn"
-          data-testid="quality-measure"
-          disabled={measuring}
-          onClick={() => void measure()}
-        >
-          {measuring ? 'Medindo…' : 'Medir'}
-        </button>
+        <div className="quality-head-actions">
+          <button
+            type="button"
+            className="quality-measure-btn"
+            data-testid="quality-measure"
+            disabled={measuring}
+            onClick={() => void measure()}
+          >
+            {measuring ? 'Medindo…' : 'Medir'}
+          </button>
+          {headerAction}
+        </div>
       </div>
 
       {error ? <small className="usage-error" role="status">{error}</small> : null}
@@ -284,4 +299,4 @@ export function QualityPanel({
       </div>
     </section>
   );
-}
+});

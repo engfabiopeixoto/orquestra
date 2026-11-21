@@ -209,4 +209,33 @@ describe('PortalManager', () => {
     const switched = manager.switchTab('p1', firstTabId, 'ws-1');
     expect(switched?.activeTabId).toBe(firstTabId);
   });
+
+  it('oculta portal sem zerar moldura quando frameBounds fica com largura zero', async () => {
+    const { win, addedViews } = createMockWindow();
+    const manager = new PortalManager(() => win, () => {});
+    manager.setActiveWorkspace('ws-1');
+    manager.createPortal({ portalId: 'p1', workspaceId: 'ws-1' });
+    const view = (addedViews[0] as any).children[0] as any;
+
+    await manager.syncBounds({
+      portalId: 'p1',
+      workspaceId: 'ws-1',
+      bounds: { x: 220, y: 100, width: 300, height: 200 },
+      frameBounds: { x: 220, y: 100, width: 800, height: 600 },
+      canvasZoom: 1,
+      visible: true,
+    });
+    expect(view.setVisible).toHaveBeenLastCalledWith(true);
+
+    await manager.syncBounds({
+      portalId: 'p1',
+      workspaceId: 'ws-1',
+      bounds: { x: 220, y: 100, width: 300, height: 200 },
+      frameBounds: { x: 220, y: 100, width: 0, height: 600 },
+      canvasZoom: 1,
+      visible: false,
+    });
+    expect(view.setVisible).toHaveBeenLastCalledWith(false);
+    expect(manager.getPortalState('p1', 'ws-1')?.visible).toBe(false);
+  });
 });

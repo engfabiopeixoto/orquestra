@@ -139,15 +139,24 @@ export function PortalNode({ id, data, selected }: NodeProps<PortalFlowNode>) {
       const frameBounds = portalCanvasFrameBounds(canvasBounds, controls);
       const modal = document.querySelector<HTMLElement>('.dialog-backdrop, [role="dialog"]');
       const modalRect = modal?.getBoundingClientRect();
+      const frameVisible = frameBounds.width > 0 && frameBounds.height > 0;
       const clippedByModal = Boolean(modalRect && modalRect.width > 0 && modalRect.height > 0);
-      const syncKey = `${workspaceId}:${bounds.x}:${bounds.y}:${bounds.width}:${bounds.height}:${frameBounds.x}:${frameBounds.y}:${frameBounds.width}:${frameBounds.height}:${viewport.zoom}:${clippedByModal}`;
+      const syncKey = `${workspaceId}:${bounds.x}:${bounds.y}:${bounds.width}:${bounds.height}:${frameBounds.x}:${frameBounds.y}:${frameBounds.width}:${frameBounds.height}:${viewport.zoom}:${frameVisible}:${clippedByModal}`;
       if (syncKey === lastSyncKeyRef.current) return;
       lastSyncKeyRef.current = syncKey;
-      void bridge.syncBounds({ portalId: id, workspaceId, bounds, frameBounds, canvasZoom: viewport.zoom, visible: true, clippedByModal })
+      void bridge.syncBounds({ portalId: id, workspaceId, bounds, frameBounds, canvasZoom: viewport.zoom, visible: frameVisible, clippedByModal })
         .catch((syncError: Error) => setError(syncError.message));
     };
 
-    const observer = new ResizeObserver(() => sync());
+    const scheduleSync = () => {
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        sync();
+      });
+    };
+
+    const observer = new ResizeObserver(scheduleSync);
     observer.observe(el);
     const canvasElement = document.querySelector('.canvas');
     const controlsSelector = '.palette, .group-tools, .zoom-control, .zoom, .subscription-usage';
@@ -167,7 +176,7 @@ export function PortalNode({ id, data, selected }: NodeProps<PortalFlowNode>) {
     observeControls();
     const controlsMutationObserver = new MutationObserver(() => {
       observeControls();
-      sync();
+      scheduleSync();
     });
     if (canvasElement) controlsMutationObserver.observe(canvasElement, {
       childList: true,
@@ -177,28 +186,19 @@ export function PortalNode({ id, data, selected }: NodeProps<PortalFlowNode>) {
     });
 
     // Sincroniza em animações de scroll/zoom e movimentação do canvas
-    window.addEventListener('scroll', sync, true);
-    window.addEventListener('resize', sync);
+    window.addEventListener('scroll', scheduleSync, true);
+    window.addEventListener('resize', scheduleSync);
     sync();
 
-    // Durante movimento, mede uma vez por frame; no modo snapshot não envia bounds ao main.
-    const onMove = () => {
-      if (!rafId) {
-        rafId = requestAnimationFrame(() => {
-          sync();
-          rafId = null;
-        });
-      }
-    };
-    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointermove', scheduleSync);
 
     return () => {
-      if (rafId) cancelAnimationFrame(rafId);
+      if (rafId !== null) cancelAnimationFrame(rafId);
       observer.disconnect();
       controlsMutationObserver.disconnect();
-      window.removeEventListener('scroll', sync, true);
-      window.removeEventListener('resize', sync);
-      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('scroll', scheduleSync, true);
+      window.removeEventListener('resize', scheduleSync);
+      window.removeEventListener('pointermove', scheduleSync);
     };
   }, [id, workspaceId, nativeReady, portal?.mode, portal?.orientation, portal?.presetId, portal?.size?.width, portal?.size?.height, viewport.x, viewport.y, viewport.zoom]);
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { WorkspaceInfo } from '@orquestra/shared/host-protocol';
 import type { AppAction } from '../../../shared/app-action';
@@ -7,9 +7,18 @@ import { activateWorkspace, closeWorkspace, openProject } from '../project';
 import { useApp } from '../store';
 import { useWorkspaces, workspaceDot, workspaceSummary } from '../workspaces';
 import { ProjectFileExplorer } from '../components/ProjectFileExplorer';
-import { QualityPanel } from '../components/QualityPanel';
 import { AboutDialog } from '../components/AboutDialog';
+import { SplitHandle } from '../components/SplitHandle';
 import { usePortalOverlay } from '../portal/modal-overlay';
+import {
+  clampProjectsHeight,
+  EXPLORER_MIN_HEIGHT,
+  PROJECTS_DEFAULT_HEIGHT,
+  PROJECTS_MIN_HEIGHT,
+  readProjectsHeight,
+  writeProjectsHeight,
+} from '../layout-prefs';
+import { QUALITY_SHORTCUT_HINT } from './shortcuts';
 
 type Recent = { dir: string; name: string; openedAt: string };
 type Row = { dir: string; name: string; workspace?: WorkspaceInfo };
@@ -17,6 +26,7 @@ const defaultApi = createCommandApi((...args) => window.orquestra?.invoke(...arg
 const sameDir = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 type MenuItem = { id: string; label: string; hint?: string; action?: AppAction };
 const MENU_ITEMS: MenuItem[] = [
+  { id: 'toggle-quality', label: 'Painel de Qualidade', hint: QUALITY_SHORTCUT_HINT },
   { id: 'open-logs', action: 'open-logs', label: 'Abrir pasta de logs' },
   { id: 'reload', action: 'reload', label: 'Recarregar interface', hint: 'Ctrl+Shift+F5' },
   { id: 'devtools', action: 'devtools', label: 'Ferramentas do desenvolvedor', hint: 'F12' },
@@ -26,23 +36,29 @@ const MENU_ITEMS: MenuItem[] = [
 
 export function Sidebar({
   api = defaultApi,
+  openPath,
+  onOpenPathHandled,
+  onToggleQuality,
   onOpenSettings,
   onOpenPersonas,
 }: {
   api?: CommandApi;
+  openPath?: string | null;
+  onOpenPathHandled?(): void;
+  onToggleQuality?(): void;
   onOpenSettings(): void;
   onOpenPersonas(): void;
 }) {
   const project = useApp((state) => state.project);
-  const terminals = useApp((state) => state.terminals);
   const { workspaces, selectedId, changing } = useWorkspaces((state) => state);
   const [recent, setRecent] = useState<Recent[]>([]);
   const [filter, setFilter] = useState('');
-  const [projectTab, setProjectTab] = useState<'files' | 'quality'>('files');
-  const [pendingOpenPath, setPendingOpenPath] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
-  const filesTabRef = useRef<HTMLButtonElement>(null);
-  const qualityTabRef = useRef<HTMLButtonElement>(null);
+  const [projectsHeight, setProjectsHeight] = useState<number | null>(() => readProjectsHeight());
+  const [measuredDefaultHeight, setMeasuredDefaultHeight] = useState<number>(PROJECTS_DEFAULT_HEIGHT);
+  const [availableBodyHeight, setAvailableBodyHeight] = useState<number>(() => Math.max(240, (window.innerHeight || 720) - 210));
+  const asideRef = useRef<HTMLElement>(null);
+  const recentProjectsRef = useRef<HTMLDivElement>(null);
   const projectKey = project?.workspaceId ?? project?.dir ?? '';
   const [aboutOpen, setAboutOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -50,8 +66,27 @@ export function Sidebar({
   usePortalOverlay(menu !== null || aboutOpen);
 
   useEffect(() => {
-    setPendingOpenPath(null);
-  }, [project?.dir]);
+    const el = asideRef.current;
+    const recentEl = recentProjectsRef.current;
+    const measure = () => {
+      const asideHeight = el?.clientHeight ?? 0;
+      const bodyHeight = asideHeight > 0 ? asideHeight - 190 : (window.innerHeight || 720) - 210;
+      setAvailableBodyHeight(Math.max(PROJECTS_MIN_HEIGHT + EXPLORER_MIN_HEIGHT, bodyHeight));
+      const natural = recentEl?.clientHeight ?? 0;
+      if (natural > 0) setMeasuredDefaultHeight(natural);
+    };
+    measure();
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+    if (observer) {
+      if (el) observer.observe(el);
+      if (recentEl) observer.observe(recentEl);
+    }
+    window.addEventListener('resize', measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, []);
 
   useEffect(() => {
     void api.command('recent.list', {}).then((result) => setRecent(result.projects)).catch(() => setRecent([]));
@@ -93,6 +128,7 @@ export function Sidebar({
   const run = (item: MenuItem) => {
     setMenu(null);
     if (item.id === 'about') setAboutOpen(true);
+    else if (item.id === 'toggle-quality') onToggleQuality?.();
     else if (item.action) void window.orquestra?.appAction(item.action);
   };
 
@@ -103,9 +139,29 @@ export function Sidebar({
   ];
   const needle = filter.trim().toLowerCase();
   const shown = rows.filter((row) => !needle || row.name.toLowerCase().includes(needle) || row.dir.toLowerCase().includes(needle));
+  const maxProjectsHeight = Math.max(PROJECTS_MIN_HEIGHT, availableBodyHeight - EXPLORER_MIN_HEIGHT);
+  const effectiveProjectsHeight = clampProjectsHeight(
+    projectsHeight ?? measuredDefaultHeight,
+    availableBodyHeight,
+  );
+  const explorerPane = useMemo(
+    () =>
+      project ? (
+        <ProjectFileExplorer
+          key={projectKey}
+          api={api}
+          projectDir={project.dir}
+          openPath={openPath}
+          onOpenPathHandled={onOpenPathHandled}
+        />
+      ) : (
+        <div className="file-explorer-empty muted">Abra um projeto para navegar pelos arquivos.</div>
+      ),
+    [project?.dir, projectKey, api, openPath, onOpenPathHandled],
+  );
 
   return (
-    <aside className="side">
+    <aside ref={asideRef} className="side">
       <div className="brand">
         <img className="logo" src={new URL('../assets/orquestra-icon.png', import.meta.url).href} alt="" />
         <span className="brand-name">Orquestra</span>
@@ -119,7 +175,11 @@ export function Sidebar({
         </span>
       </div>
       <input className="side-filter" data-testid="recent-filter" placeholder="Filtrar" value={filter} onChange={(event) => setFilter(event.target.value)} />
-      <div className="recent-projects">
+      <div
+        ref={recentProjectsRef}
+        className="recent-projects"
+        style={projectsHeight !== null ? { height: effectiveProjectsHeight, maxHeight: 'none' } : undefined}
+      >
       {shown.length === 0 ? <p className="muted">{rows.length === 0 ? 'Nenhum projeto aberto ainda.' : 'Nada encontrado.'}</p> : null}
       {shown.map((row) => {
         const { workspace } = row;
@@ -143,84 +203,44 @@ export function Sidebar({
         );
       })}
       </div>
-      {project ? (
-        <>
-          <div className="side-tabs" role="tablist" aria-label="Painel do projeto">
-            <button
-              ref={filesTabRef}
-              id="sidebar-tab-files"
-              type="button"
-              role="tab"
-              aria-selected={projectTab === 'files'}
-              aria-controls="sidebar-panel-files"
-              className={`side-tab${projectTab === 'files' ? ' is-on' : ''}`}
-              data-testid="sidebar-tab-files"
-              onClick={() => setProjectTab('files')}
-              onKeyDown={(event) => {
-                if (event.key === 'ArrowRight') {
-                  event.preventDefault();
-                  setProjectTab('quality');
-                  qualityTabRef.current?.focus();
-                }
-              }}
-            >
-              Arquivos
-            </button>
-            <button
-              ref={qualityTabRef}
-              id="sidebar-tab-quality"
-              type="button"
-              role="tab"
-              aria-selected={projectTab === 'quality'}
-              aria-controls="sidebar-panel-quality"
-              className={`side-tab${projectTab === 'quality' ? ' is-on' : ''}`}
-              data-testid="sidebar-tab-quality"
-              onClick={() => setProjectTab('quality')}
-              onKeyDown={(event) => {
-                if (event.key === 'ArrowLeft') {
-                  event.preventDefault();
-                  setProjectTab('files');
-                  filesTabRef.current?.focus();
-                }
-              }}
-            >
-              Qualidade
-            </button>
-          </div>
-          {projectTab === 'files' ? (
-            <div className="side-tabpanel" id="sidebar-panel-files" role="tabpanel" aria-labelledby="sidebar-tab-files">
-              <ProjectFileExplorer
-                key={projectKey}
-                api={api}
-                projectDir={project.dir}
-                openPath={pendingOpenPath}
-                onOpenPathHandled={() => setPendingOpenPath(null)}
-              />
-            </div>
-          ) : (
-            <div className="side-tabpanel" id="sidebar-panel-quality" role="tabpanel" aria-labelledby="sidebar-tab-quality">
-              <QualityPanel
-                key={projectKey}
-                api={api}
-                projectDir={project.dir}
-                terminals={Object.values(terminals)}
-                onOpenFile={(filePath) => {
-                  setPendingOpenPath(filePath);
-                  setProjectTab('files');
-                }}
-              />
-            </div>
-          )}
-        </>
-      ) : (
-        <div className="file-explorer-empty muted">Abra um projeto para navegar pelos arquivos.</div>
-      )}
+      <SplitHandle
+        orientation="horizontal"
+        ariaLabel="Ajustar altura da lista de projetos"
+        value={effectiveProjectsHeight}
+        min={PROJECTS_MIN_HEIGHT}
+        max={maxProjectsHeight}
+        testId="projects-resizer"
+        title="Arraste ou dê duplo clique para restaurar a altura padrão"
+        onChange={(next) => setProjectsHeight(clampProjectsHeight(next, availableBodyHeight))}
+        onCommit={(finalHeight) => {
+          const clamped = clampProjectsHeight(finalHeight, availableBodyHeight);
+          setProjectsHeight(clamped);
+          writeProjectsHeight(clamped);
+        }}
+        onReset={() => {
+          setProjectsHeight(null);
+          writeProjectsHeight(null);
+        }}
+      />
+      {explorerPane}
       <div className="side-foot">
         <button className="side-btn" data-testid="open-personas" onClick={onOpenPersonas}>Funções</button>
         <button className="side-btn" data-testid="open-settings" onClick={onOpenSettings}>Padrões dos agentes</button>
       </div>
       {menu ? createPortal(<div ref={menuRef} className="ctx ctx-menu app-menu" role="menu" aria-label="Menu do Orquestra" style={{ position: 'fixed', left: menu.x, top: menu.y }}>
-        {MENU_ITEMS.map((item) => <button key={item.id} role="menuitem" title={item.hint} onClick={() => run(item)}>{item.label}</button>)}
+        {MENU_ITEMS.map((item) => (
+          <button
+            key={item.id}
+            role="menuitem"
+            aria-label={item.label}
+            title={item.hint}
+            disabled={item.id === 'toggle-quality' && (!project || !onToggleQuality)}
+            onClick={() => run(item)}
+          >
+            <span>{item.label}</span>
+            {item.hint ? <small className="menu-hint">{item.hint}</small> : null}
+          </button>
+        ))}
       </div>, document.body) : null}
       {aboutOpen ? <AboutDialog onClose={() => setAboutOpen(false)} /> : null}
     </aside>

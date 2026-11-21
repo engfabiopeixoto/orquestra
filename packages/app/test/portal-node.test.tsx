@@ -6,11 +6,17 @@ import { PortalNode } from '../src/renderer/src/portal/PortalNode';
 import { createInMemoryPortalBridge, setPortalBridge } from '../src/renderer/src/portal/portal-bridge';
 import { portalStore } from '../src/renderer/src/portal/portal-state';
 
-// ResizeObserver mock para jsdom
-global.ResizeObserver = class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
+// ResizeObserver mock para jsdom que permite simular redução do .canvas ao abrir/redimensionar o painel direito
+const resizeObservers: Array<{ targets: Set<Element>; cb: ResizeObserverCallback }> = [];
+global.ResizeObserver = class implements ResizeObserver {
+  private readonly entry = { targets: new Set<Element>(), cb: (() => {}) as ResizeObserverCallback };
+  constructor(cb: ResizeObserverCallback) {
+    this.entry.cb = cb;
+    resizeObservers.push(this.entry);
+  }
+  observe(target: Element) { this.entry.targets.add(target); }
+  unobserve(target: Element) { this.entry.targets.delete(target); }
+  disconnect() { this.entry.targets.clear(); }
 };
 
 beforeEach(() => {
@@ -110,5 +116,64 @@ describe('PortalNode', () => {
       const state = portalStore.getState().portals['portal-1'];
       expect(state?.tabs.length).toBe(2);
     });
+  });
+
+  it('atualiza frameBounds quando o canvas encolhe ao abrir o painel à direita e oculta quando width fica zero', async () => {
+    const baseBridge = createInMemoryPortalBridge();
+    const syncCalls: Array<{ bounds: { x: number; width: number }; frameBounds: { x: number; width: number }; visible: boolean }> = [];
+    setPortalBridge({
+      ...baseBridge,
+      syncBounds: async (payload) => {
+        syncCalls.push({ bounds: payload.bounds, frameBounds: payload.frameBounds, visible: payload.visible });
+        return baseBridge.syncBounds(payload);
+      },
+    });
+
+    let canvasWidth = 1000;
+    const canvas = document.createElement('main');
+    canvas.className = 'canvas';
+    canvas.getBoundingClientRect = () =>
+      ({ left: 220, top: 32, right: 220 + canvasWidth, bottom: 800, width: canvasWidth, height: 768, x: 220, y: 32, toJSON: () => ({}) }) as DOMRect;
+    document.body.appendChild(canvas);
+
+    try {
+      render(
+        <ReactFlowProvider>
+          <PortalNode {...createNodeProps('portal-1', 'Portal Direito')} />
+        </ReactFlowProvider>,
+      );
+
+      await waitFor(() => {
+        expect(syncCalls.some((c) => c.frameBounds.width === 1000 && c.visible)).toBe(true);
+      });
+
+      // Painel de Qualidade abre/redimensiona para 320px à direita -> .canvas encolhe para 680px
+      canvasWidth = 680;
+      for (const ro of resizeObservers) {
+        if (ro.targets.has(canvas)) {
+          ro.cb([], {} as ResizeObserver);
+        }
+      }
+
+      await waitFor(() => {
+        expect(syncCalls.at(-1)?.frameBounds.width).toBe(680);
+        expect(syncCalls.at(-1)?.visible).toBe(true);
+      });
+
+      // Janela muito estreita com painel aberto (canvas.width === 0) -> oculta o portal com o nó montado
+      canvasWidth = 0;
+      for (const ro of resizeObservers) {
+        if (ro.targets.has(canvas)) {
+          ro.cb([], {} as ResizeObserver);
+        }
+      }
+
+      await waitFor(() => {
+        expect(syncCalls.at(-1)?.frameBounds.width).toBe(0);
+        expect(syncCalls.at(-1)?.visible).toBe(false);
+      });
+    } finally {
+      canvas.remove();
+    }
   });
 });
