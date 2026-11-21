@@ -73,7 +73,7 @@ O Orquestra injeta `ORQ_PIPE` e `ORQ_TOKEN` em cada terminal que inicia e coloca
 ```
 orq whoami                              # seu nome e tipo de agente
 orq peers                               # terminais (e navegadores) conectados a você
-orq prompt revisor "Revise src/app.ts" --timeout 8m
+orq prompt revisor "Revise src/app.ts" --timeout 8m --quality   # --quality anexa o resumo de qualidade dos arquivos alterados
 echo "texto longo da tarefa" | orq prompt revisor -
 orq read revisor --lines 40             # tela atual de um terminal conectado
 orq result <id>                         # resposta de um prompt pendente

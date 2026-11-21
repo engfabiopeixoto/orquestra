@@ -486,4 +486,98 @@ describe('orq', () => {
     expect(calledParams).toEqual({ refresh: true });
     expect(JSON.parse(result.stdout)).toEqual(sampleReport);
   });
+
+  it('prompt --quality anexa o resumo de quality --changed --refresh ao texto (inclusive com --file) e não chama quality sem a flag', async () => {
+    const sampleReport = {
+      version: 1,
+      dir: 'E:/proj',
+      measuredAt: '2026-11-20T12:00:00.000Z',
+      durationMs: 10,
+      language: 'js-ts',
+      limits: { files: 1, skippedLarge: 0, truncated: false },
+      metrics: [
+        { id: 'size', signal: 'bad', value: 700, delta: 100 },
+        { id: 'complexity', signal: 'ok', value: 4, delta: 0 },
+        { id: 'dependencies', signal: 'ok', value: 0, delta: 0 },
+        { id: 'coverage', signal: 'ok', value: 85, delta: 2 },
+        { id: 'mutation', signal: 'missing', value: null, delta: null },
+      ],
+      files: [],
+      functions: [],
+      cycles: [],
+      hotspots: [],
+      changed: [{ path: 'src/big.ts', kind: 'file-over-limit', detail: 'Passou de 350 linhas (700 linhas).' }],
+      coverage: null,
+      mutation: null,
+    };
+
+    const file = join(mkdtempSync(join(tmpdir(), 'orq-cli-q-')), 'review.txt');
+    writeFileSync(file, 'Revise esta entrega.');
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const withFlag = await cli(['prompt', 'revisor', '--file', file, '--quality'], async (method, params) => {
+      calls.push({ method, params });
+      if (method === 'quality') return sampleReport;
+      return { status: 'answered', askId: 'q1', answer: 'aprovado' };
+    });
+
+    expect(withFlag.code).toBe(0);
+    expect(calls[0]).toEqual({ method: 'quality', params: { changed: true, refresh: true } });
+    expect(calls[1]?.method).toBe('prompt');
+    const sentText = (calls[1]?.params as { text: string }).text;
+    expect(sentText).toContain('Revise esta entrega.\n\n--- Qualidade (orq quality --changed, anexado pelo Orquestra) ---\n');
+    expect(sentText).toContain('src/big.ts');
+    expect(sentText).toContain('PROBLEMA');
+
+    const withoutFlagCalls: string[] = [];
+    const withoutFlag = await cli(['prompt', 'revisor', 'Oi'], async (method) => {
+      withoutFlagCalls.push(method);
+      return { status: 'answered', askId: 'q2', answer: 'ok' };
+    });
+    expect(withoutFlag.code).toBe(0);
+    expect(withoutFlagCalls).toEqual(['prompt']);
+  });
+
+  it('prompt --quality envia o prompt sem bloco e avisa no stderr se quality falhar', async () => {
+    let sentPrompt: unknown;
+    const result = await cli(['prompt', 'revisor', 'Revise o código', '--quality'], async (method, params) => {
+      if (method === 'quality') throw new OrqError('APP_UNAVAILABLE', 'app indisponível');
+      sentPrompt = params;
+      return { status: 'answered', askId: 'q3', answer: 'ok' };
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.stderr.length).toBeGreaterThan(0);
+    expect(sentPrompt).toMatchObject({ target: 'revisor', text: 'Revise o código' });
+    expect((sentPrompt as { timeoutMs: number }).timeoutMs).toBeGreaterThan(470_000);
+    expect((sentPrompt as { timeoutMs: number }).timeoutMs).toBeLessThanOrEqual(480_000);
+  });
+
+  it('prompt --quality valida --timeout antes de medir', async () => {
+    let qualityCalled = false;
+    const result = await cli(['prompt', 'revisor', 'Revise', '--timeout', 'abc', '--quality'], async (method) => {
+      if (method === 'quality') qualityCalled = true;
+      return {};
+    });
+
+    expect(result.code).toBe(2);
+    expect(qualityCalled).toBe(false);
+  });
+
+  it('prompt --quality aplica prazo próprio min(30s, timeoutMs/4), aborta medição lenta, avisa no stderr e desconta tempo do prompt', async () => {
+    let sentPrompt: { target: string; text: string; timeoutMs: number } | undefined;
+    const result = await cli(['prompt', 'revisor', 'Revise o código', '--timeout', '400ms', '--quality'], async (method, params) => {
+      if (method === 'quality') {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        return {};
+      }
+      sentPrompt = params as { target: string; text: string; timeoutMs: number };
+      return { status: 'answered', askId: 'q4', answer: 'ok' };
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.stderr).toContain('qualidade');
+    expect(sentPrompt?.text).toBe('Revise o código');
+    expect(sentPrompt?.timeoutMs).toBeGreaterThan(0);
+    expect(sentPrompt?.timeoutMs).toBeLessThan(400);
+  });
 });

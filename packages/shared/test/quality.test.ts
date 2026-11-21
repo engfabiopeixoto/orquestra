@@ -4,6 +4,7 @@ import {
   QUALITY_LIMITS,
   QUALITY_METRICS,
   formatQualityExplain,
+  formatQualityForReview,
   formatQualitySummary,
   isMethodName,
   parseParams,
@@ -156,5 +157,82 @@ describe('contrato, limites e guia de qualidade (shared)', () => {
     expect(qualityReportSchema.parse(report)).toEqual(report);
     expect(isMethodName('quality')).toBe(true);
     expect(parseParams('quality', { changed: true })).toEqual({ changed: true });
+  });
+
+  it('formatQualityForReview mostra 5 métricas com delta, destaca itens vermelhos/alterados e limita a 40 linhas / 4 KB', () => {
+    const report = makeFixtureReport();
+    const review = formatQualityForReview(report);
+
+    expect(review).toContain('PROBLEMA');
+    expect(review).toContain('700 linhas (+100)');
+    expect(review).toContain('65% (+5%)');
+    expect(review).toContain('src/big.ts');
+    expect(review).toContain('Passou de 350 linhas (700 linhas).');
+
+    const manyChanged = Array.from({ length: 60 }, (_, index) => ({
+      path: `src/file-${index}.ts`,
+      kind: 'file-over-limit' as const,
+      detail: `Arquivo ${index} passou de 350 linhas (${400 + index} linhas).`,
+    }));
+    const capped = formatQualityForReview(makeFixtureReport({ changed: manyChanged }));
+    const lines = capped.split('\n');
+    expect(lines.length).toBeLessThanOrEqual(40);
+    expect(new TextEncoder().encode(capped).length).toBeLessThanOrEqual(4096);
+    expect(capped).toMatch(/\(mais \d+ itens; rode orq quality --changed\)/);
+  });
+
+  it('formatQualityForReview separa vermelhos novos/piorados dos já existentes, trata primeira medição e corta por 4 KB com singular/plural', () => {
+    const separated = formatQualityForReview(
+      makeFixtureReport({
+        metrics: [
+          { id: 'size', signal: 'bad', value: 700, delta: 100 },
+          { id: 'complexity', signal: 'bad', value: 25, delta: 0 },
+          { id: 'dependencies', signal: 'bad', value: 1, delta: 0 },
+          { id: 'coverage', signal: 'bad', value: 40, delta: -5 },
+          { id: 'mutation', signal: 'bad', value: 50, delta: 0 },
+        ],
+        changed: [{ path: 'src/cycle.ts', kind: 'new-cycle', detail: 'Ciclo novo.' }],
+      }),
+    );
+    expect(separated).toContain('Vermelhos novos ou piorados: Tamanho dos módulos, Dependências, Cobertura de testes.');
+    expect(separated).toContain('Vermelhos que já existiam: Complexidade, Teste de mutação.');
+
+    const firstRun = formatQualityForReview(
+      makeFixtureReport({
+        metrics: [
+          { id: 'size', signal: 'ok', value: 120, delta: null },
+          { id: 'complexity', signal: 'ok', value: 5, delta: null },
+          { id: 'dependencies', signal: 'ok', value: 0, delta: null },
+          { id: 'coverage', signal: 'missing', value: null, delta: null },
+          { id: 'mutation', signal: 'missing', value: null, delta: null },
+        ],
+        changed: [],
+      }),
+    );
+    expect(firstRun).not.toContain('undefined');
+    expect(firstRun).not.toContain('null');
+    expect(firstRun).toContain('Nos arquivos alterados: nenhuma piora detectada.');
+
+    const headerProbe = formatQualityForReview(makeFixtureReport({ changed: [{ path: 'a.ts', kind: 'file-over-limit', detail: 'ok' }] }));
+    const baseBytes = new TextEncoder().encode(headerProbe).length;
+    const itemPayload = 'x'.repeat(Math.floor((4096 - baseBytes) / 3));
+    const byteCapped = formatQualityForReview(
+      makeFixtureReport({
+        changed: [
+          { path: 'src/1.ts', kind: 'file-over-limit', detail: itemPayload },
+          { path: 'src/2.ts', kind: 'file-over-limit', detail: itemPayload },
+          { path: 'src/3.ts', kind: 'file-over-limit', detail: itemPayload },
+        ],
+      }),
+    );
+    expect(byteCapped.split('\n').length).toBeLessThan(15);
+    expect(new TextEncoder().encode(byteCapped).length).toBeLessThanOrEqual(4096);
+    expect(byteCapped).toContain('(mais 1 item; rode orq quality --changed)');
+  });
+
+  it('formatQualityForReview informa em uma linha quando language é unsupported', () => {
+    const text = formatQualityForReview(makeFixtureReport({ language: 'unsupported', changed: [] }));
+    expect(text.split('\n')).toHaveLength(1);
+    expect(text).toContain('js-ts');
   });
 });

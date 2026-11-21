@@ -73,7 +73,7 @@ Orquestra injects `ORQ_PIPE` and `ORQ_TOKEN` into every terminal it starts and p
 ```
 orq whoami                              # your name and agent type
 orq peers                               # terminals (and browsers) connected to you
-orq prompt reviewer "Review src/app.ts" --timeout 8m
+orq prompt reviewer "Review src/app.ts" --timeout 8m --quality   # --quality attaches changed-files quality summary
 echo "long task text" | orq prompt reviewer -
 orq read reviewer --lines 40            # current screen of a connected terminal
 orq result <id>                         # answer of a pending prompt

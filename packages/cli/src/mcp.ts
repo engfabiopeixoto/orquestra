@@ -1,5 +1,5 @@
 import { createInterface } from 'node:readline';
-import { call, OrqError, parseParams, type MethodName } from '@orquestra/shared';
+import { attachQualityForReview, call, OrqError, parseParams, type MethodName } from '@orquestra/shared';
 import type { Io } from './run.js';
 
 const text = { type: 'string' };
@@ -20,7 +20,7 @@ export const ORQUESTRA_TOOLS = [
   tool('peers', 'Lista os terminais conectados a você no Orquestra, com nomes e estados.', {}, [], true),
   tool('usage', 'Consulta o crédito e limites de uso das assinaturas de IA (claude, codex, agy). Use antes de delegar tarefas para escolher agentes com folga de cota.', { provider: { type: 'string', enum: ['claude', 'codex', 'agy'] } }, [], true),
   tool('quality', 'Mede a qualidade do código do projeto aberto (tamanho, complexidade, ciclos de import, cobertura e mutação). Use depois de implementar, com changed=true, e corrija o que ficou vermelho.', { changed: { type: 'boolean' }, refresh: { type: 'boolean' } }, [], true),
-  tool('prompt', 'Entrega uma tarefa a um terminal conectado e espera sua resposta. Se retornar pending, consulte result com askId.', { target: text, text, timeoutMs: { ...positive, maximum: 600000, default: 480000 } }, ['target', 'text']),
+  tool('prompt', 'Entrega uma tarefa a um terminal conectado e espera sua resposta. Se retornar pending, consulte result com askId.', { target: text, text, timeoutMs: { ...positive, maximum: 600000, default: 480000 }, quality: { type: 'boolean', description: 'anexa a variação de qualidade dos arquivos alterados; use ao pedir revisão' } }, ['target', 'text']),
   tool('result', 'Consulta a resposta de uma tarefa pendente enviada no Orquestra.', { askId: text }, ['askId'], true),
   tool('read', 'Lê a tela atual de um terminal conectado no Orquestra.', { target: text, lines: positive }, ['target'], true),
   tool('note.list', 'Lista as notas conectadas a você no canvas.', {}, [], true),
@@ -69,12 +69,32 @@ export async function runMcp(io: Io): Promise<number> {
       const definition = ORQUESTRA_TOOLS.find((entry) => entry.name === request.params?.name);
       if (!definition) throw new OrqError('USAGE', 'Ferramenta do Orquestra desconhecida.');
       let input = request.params?.arguments ?? {};
+      let attachQuality = false;
       if (definition.method === 'prompt' && input && typeof input === 'object' && !Array.isArray(input)) {
-        const args = input as Record<string, unknown>;
+        const { quality, ...args } = input as Record<string, unknown>;
+        if (quality !== undefined && typeof quality !== 'boolean') {
+          throw new OrqError('USAGE', 'quality precisa ser booleano.');
+        }
+        attachQuality = quality === true;
         input = { ...args, timeoutMs: args.timeoutMs ?? 480000 };
         if (typeof (input as Record<string, unknown>).timeoutMs === 'number' && Number((input as Record<string, unknown>).timeoutMs) > 600000) throw new OrqError('USAGE', 'O prazo máximo é de 10 minutos.');
       }
-      const params = parseParams(definition.method, input);
+      let params = parseParams(definition.method, input);
+      if (definition.method === 'prompt' && attachQuality) {
+        const promptParams = params as { target: string; text: string; timeoutMs: number };
+        const attached = await attachQualityForReview(
+          promptParams.text,
+          promptParams.timeoutMs,
+          (signal) => call({ pipePath, token, signal }, 'quality', { changed: true, refresh: true }),
+          (message) => io.stderr.write(message),
+          controller.signal,
+        );
+        params = {
+          ...promptParams,
+          text: attached.text,
+          timeoutMs: attached.remainingTimeoutMs,
+        } as typeof params;
+      }
       const result = await call({ pipePath, token, signal: controller.signal }, definition.method, params);
       send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify(result) }] } });
     } catch (error) {

@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
-import { call, exitCodeFor, formatQualityExplain, formatQualitySummary, formatUsageSummary, OrqError, parseArgs as parseSharedArgs, QUALITY_GUIDE, QUALITY_METRICS, REGENT_COMMANDS, type ClientOptions, type QualityMetricId } from '@orquestra/shared';
+import { attachQualityForReview, call, exitCodeFor, formatQualityExplain, formatQualitySummary, formatUsageSummary, OrqError, parseArgs as parseSharedArgs, QUALITY_GUIDE, QUALITY_METRICS, REGENT_COMMANDS, type ClientOptions, type QualityMetricId } from '@orquestra/shared';
 import { parseDuration } from './duration.js';
 import { runMcp } from './mcp.js';
 
@@ -18,7 +18,7 @@ const HELP = `Uso: orq <comando>
   peers                          terminais conectados a você
   usage [claude|codex|agy]       crédito restante das assinaturas de IA
   quality [--changed] [--refresh] [--explain <métrica>]  mede tamanho, complexidade, ciclos, cobertura e mutação
-  prompt <peer> <texto|->        envia um prompt e espera a resposta (--timeout 8m, --file <arquivo>)
+  prompt <peer> <texto|->        envia um prompt e espera a resposta (--timeout 8m, --file <arquivo>, --quality)
   result <id>                    resposta de um prompt pendente
   read <peer> [--lines N]        tela atual de um terminal conectado
   note list | show <nota> | write <nota> <texto|-> | append <nota> <texto|->   (--file <arquivo>)
@@ -69,6 +69,7 @@ export async function run(argv: string[], io: Io): Promise<number> {
         changed: { type: 'boolean' },
         refresh: { type: 'boolean' },
         explain: { type: 'string' },
+        quality: { type: 'boolean' },
       },
     });
     const output = await execute(command, positionals, values, io);
@@ -95,6 +96,7 @@ type Flags = {
   changed?: boolean;
   refresh?: boolean;
   explain?: string;
+  quality?: boolean;
 };
 
 async function execute(
@@ -140,8 +142,18 @@ async function execute(
     }
     case 'prompt': {
       const target = required(args[0], 'o terminal de destino');
-      const text = await readText(args[1], flags.file, io.stdin);
-      const result = await call(client, 'prompt', { target, text, timeoutMs: parseDuration(flags.timeout ?? '8m') });
+      const rawText = await readText(args[1], flags.file, io.stdin);
+      let timeoutMs = parseDuration(flags.timeout ?? '8m');
+      let text = rawText;
+      if (flags.quality) {
+        ({ text, remainingTimeoutMs: timeoutMs } = await attachQualityForReview(
+          rawText,
+          timeoutMs,
+          (signal) => call({ ...client, signal }, 'quality', { changed: true, refresh: true }),
+          (message) => io.stderr.write(message),
+        ));
+      }
+      const result = await call(client, 'prompt', { target, text, timeoutMs });
       if (result.status === 'answered') return { text: result.answer, json: result };
       return { text: `pendente: id=${result.askId}; a resposta será entregue no seu terminal`, json: result };
     }
