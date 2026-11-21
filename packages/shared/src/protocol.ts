@@ -4,8 +4,10 @@ import { terminalNameSchema } from './names.js';
 import { personaScopeSchema } from './regent.js';
 import { browserMethodSchemas, browserNodeSchema } from './browser.js';
 import { usageParamsSchema, usageResultSchema } from './usage-schema.js';
+import { qualityParamsSchema, qualityReportSchema } from './quality-schema.js';
 
 export * from './usage-schema.js';
+export * from './quality-schema.js';
 
 export const PROTOCOL_VERSION = 1;
 
@@ -27,6 +29,10 @@ export const methodSchemas = {
   usage: {
     params: usageParamsSchema,
     result: usageResultSchema,
+  },
+  quality: {
+    params: qualityParamsSchema,
+    result: qualityReportSchema,
   },
   peers: {
     params: empty,

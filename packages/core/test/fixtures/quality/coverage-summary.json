@@ -1,0 +1,13 @@
+{
+  "total": {
+    "lines": { "total": 20, "covered": 14, "skipped": 0, "pct": 70 },
+    "branches": { "total": 10, "covered": 6, "skipped": 0, "pct": 60 },
+    "functions": { "total": 4, "covered": 3, "skipped": 0, "pct": 75 }
+  },
+  "E:\\proj\\src\\a.ts": {
+    "lines": { "total": 10, "covered": 9, "skipped": 0, "pct": 90 }
+  },
+  "e:/proj/src/b.ts": {
+    "lines": { "total": 10, "covered": 5, "skipped": 0, "pct": 50 }
+  }
+}

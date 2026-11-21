@@ -103,6 +103,9 @@ export function createHandlers(deps: HandlerDeps): Dispatch {
       );
       return { providers: results };
     },
+    quality: async () => {
+      throw new OrqError('APP_UNAVAILABLE', 'A medição de qualidade precisa do app do Orquestra.');
+    },
     peers: async (_params, caller) => ({
       peers: deps.topology.neighbors(caller.session, 'terminal').map((name) => {
         const session = requireSession(name);
