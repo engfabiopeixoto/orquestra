@@ -21,6 +21,7 @@ Rodar vários agentes ao mesmo tempo significa alternar entre janelas de termina
 - **Portais de navegador.** Conecte um navegador a um agente para ele navegar, clicar, digitar, rolar a página e capturar telas.
 - **Monitoramento de atividade.** Ative o monitoramento por terminal para receber uma notificação do Windows quando ele terminar um turno ou esperar por você com o app fora de foco.
 - **Uso das assinaturas.** Veja as janelas de uso e os horários de renovação do Claude, do Codex e do agy. Os agentes consultam esses dados com `orq usage`, e o regente pode delegar sem estourar os limites.
+- **Painel de Qualidade.** Meça o projeto JS/TS aberto em cinco métricas (tamanho, complexidade, ciclos de import, cobertura e mutação), com cada uma explicada e os pontos críticos para atacar primeiro. Os agentes conferem o próprio trabalho com `orq quality --changed`.
 - **Controle remoto no celular (PWA).** Acompanhe e controle os workspaces do PC pelo celular via Tailscale.
 
 ## Celular
@@ -78,6 +79,7 @@ orq read revisor --lines 40             # tela atual de um terminal conectado
 orq result <id>                         # resposta de um prompt pendente
 orq note write plano "Passo 1: ..."     # também: note list | show | append
 orq usage                               # crédito restante das assinaturas (também: usage claude|codex|agy)
+orq quality --changed                   # qualidade dos arquivos alterados (também: --refresh, --json, --explain <métrica>)
 orq portal list                         # navegadores conectados a você
 orq portal navigate <id> https://example.com
 ```
