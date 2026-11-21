@@ -7,6 +7,7 @@ import { activateWorkspace, closeWorkspace, openProject } from '../project';
 import { useApp } from '../store';
 import { useWorkspaces, workspaceDot, workspaceSummary } from '../workspaces';
 import { ProjectFileExplorer } from '../components/ProjectFileExplorer';
+import { QualityPanel } from '../components/QualityPanel';
 import { AboutDialog } from '../components/AboutDialog';
 import { usePortalOverlay } from '../portal/modal-overlay';
 
@@ -33,14 +34,24 @@ export function Sidebar({
   onOpenPersonas(): void;
 }) {
   const project = useApp((state) => state.project);
+  const terminals = useApp((state) => state.terminals);
   const { workspaces, selectedId, changing } = useWorkspaces((state) => state);
   const [recent, setRecent] = useState<Recent[]>([]);
   const [filter, setFilter] = useState('');
+  const [projectTab, setProjectTab] = useState<'files' | 'quality'>('files');
+  const [pendingOpenPath, setPendingOpenPath] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const filesTabRef = useRef<HTMLButtonElement>(null);
+  const qualityTabRef = useRef<HTMLButtonElement>(null);
+  const projectKey = project?.workspaceId ?? project?.dir ?? '';
   const [aboutOpen, setAboutOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   usePortalOverlay(menu !== null || aboutOpen);
+
+  useEffect(() => {
+    setPendingOpenPath(null);
+  }, [project?.dir]);
 
   useEffect(() => {
     void api.command('recent.list', {}).then((result) => setRecent(result.projects)).catch(() => setRecent([]));
@@ -132,7 +143,78 @@ export function Sidebar({
         );
       })}
       </div>
-      {project ? <ProjectFileExplorer key={project.dir} api={api} projectDir={project.dir} /> : <div className="file-explorer-empty muted">Abra um projeto para navegar pelos arquivos.</div>}
+      {project ? (
+        <>
+          <div className="side-tabs" role="tablist" aria-label="Painel do projeto">
+            <button
+              ref={filesTabRef}
+              id="sidebar-tab-files"
+              type="button"
+              role="tab"
+              aria-selected={projectTab === 'files'}
+              aria-controls="sidebar-panel-files"
+              className={`side-tab${projectTab === 'files' ? ' is-on' : ''}`}
+              data-testid="sidebar-tab-files"
+              onClick={() => setProjectTab('files')}
+              onKeyDown={(event) => {
+                if (event.key === 'ArrowRight') {
+                  event.preventDefault();
+                  setProjectTab('quality');
+                  qualityTabRef.current?.focus();
+                }
+              }}
+            >
+              Arquivos
+            </button>
+            <button
+              ref={qualityTabRef}
+              id="sidebar-tab-quality"
+              type="button"
+              role="tab"
+              aria-selected={projectTab === 'quality'}
+              aria-controls="sidebar-panel-quality"
+              className={`side-tab${projectTab === 'quality' ? ' is-on' : ''}`}
+              data-testid="sidebar-tab-quality"
+              onClick={() => setProjectTab('quality')}
+              onKeyDown={(event) => {
+                if (event.key === 'ArrowLeft') {
+                  event.preventDefault();
+                  setProjectTab('files');
+                  filesTabRef.current?.focus();
+                }
+              }}
+            >
+              Qualidade
+            </button>
+          </div>
+          {projectTab === 'files' ? (
+            <div className="side-tabpanel" id="sidebar-panel-files" role="tabpanel" aria-labelledby="sidebar-tab-files">
+              <ProjectFileExplorer
+                key={projectKey}
+                api={api}
+                projectDir={project.dir}
+                openPath={pendingOpenPath}
+                onOpenPathHandled={() => setPendingOpenPath(null)}
+              />
+            </div>
+          ) : (
+            <div className="side-tabpanel" id="sidebar-panel-quality" role="tabpanel" aria-labelledby="sidebar-tab-quality">
+              <QualityPanel
+                key={projectKey}
+                api={api}
+                projectDir={project.dir}
+                terminals={Object.values(terminals)}
+                onOpenFile={(filePath) => {
+                  setPendingOpenPath(filePath);
+                  setProjectTab('files');
+                }}
+              />
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="file-explorer-empty muted">Abra um projeto para navegar pelos arquivos.</div>
+      )}
       <div className="side-foot">
         <button className="side-btn" data-testid="open-personas" onClick={onOpenPersonas}>Funções</button>
         <button className="side-btn" data-testid="open-settings" onClick={onOpenSettings}>Padrões dos agentes</button>

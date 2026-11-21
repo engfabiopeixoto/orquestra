@@ -27,6 +27,31 @@ function fakeApi() {
       if (method === 'recent.list') return { projects };
       if (method === 'workspace.list') return { workspaces: [], selectedId: null };
       if (method === 'files.list') return { entries: [], comparison: 'session', truncated: false };
+      if (method === 'files.read') return { path: (params as { path: string }).path, content: 'export const x = 1;', diff: null, kind: 'text' };
+      if (method === 'quality.read') return {
+        report: {
+          version: 1,
+          dir: 'C:\\proj\\alfa',
+          measuredAt: '2026-11-20T12:00:00.000Z',
+          durationMs: 10,
+          language: 'js-ts',
+          limits: { files: 1, skippedLarge: 0, truncated: false },
+          metrics: [
+            { id: 'size', signal: 'bad', value: 700, delta: null },
+            { id: 'complexity', signal: 'ok', value: 1, delta: null },
+            { id: 'dependencies', signal: 'ok', value: 0, delta: null },
+            { id: 'coverage', signal: 'missing', value: null, delta: null },
+            { id: 'mutation', signal: 'missing', value: null, delta: null },
+          ],
+          files: [],
+          functions: [],
+          cycles: [],
+          hotspots: [{ path: 'src/alvo.ts', score: 100, reason: '700 linhas' }],
+          changed: [],
+          coverage: null,
+          mutation: null,
+        },
+      };
       if (method === 'project.open') {
         const dir = (params as { dir: string }).dir;
         return { dir, name: dir.split('\\').at(-1), terminals: [], notes: [], edges: [], layout: {}, viewport: { x: 0, y: 0, zoom: 1 } };
@@ -83,6 +108,39 @@ describe('Sidebar', () => {
     render(<Sidebar api={api} onOpenSettings={() => {}} onOpenPersonas={onOpenPersonas} />);
     fireEvent.click(await screen.findByTestId('open-personas'));
     expect(onOpenPersonas).toHaveBeenCalled();
+  });
+
+  it('alterna entre Arquivos e Qualidade e abre pré-visualização ao clicar em caminho da Qualidade', async () => {
+    const { api } = fakeApi();
+    appStore.getState().loadProject({
+      dir: 'C:\\proj\\alfa', name: 'alfa', notes: [], edges: [], layout: {}, viewport: { x: 0, y: 0, zoom: 1 },
+      terminals: [],
+    });
+    render(<Sidebar api={api} onOpenSettings={() => {}} onOpenPersonas={() => {}} />);
+
+    fireEvent.click(await screen.findByTestId('sidebar-tab-quality'));
+    expect(screen.getByRole('tabpanel')).toBeTruthy();
+    const hotspot = await screen.findByRole('button', { name: /src\/alvo\.ts/i });
+    fireEvent.click(hotspot);
+
+    expect(await screen.findByRole('dialog', { name: 'Arquivo src/alvo.ts' })).toBeTruthy();
+    expect(await screen.findByText('export const x = 1;')).toBeTruthy();
+  });
+
+  it('navega entre as abas Arquivos e Qualidade com ArrowRight e ArrowLeft', async () => {
+    const { api } = fakeApi();
+    appStore.getState().loadProject({
+      dir: 'C:\\proj\\alfa', name: 'alfa', notes: [], edges: [], layout: {}, viewport: { x: 0, y: 0, zoom: 1 },
+      terminals: [],
+    });
+    render(<Sidebar api={api} onOpenSettings={() => {}} onOpenPersonas={() => {}} />);
+
+    const filesTab = await screen.findByTestId('sidebar-tab-files');
+    const qualityTab = screen.getByTestId('sidebar-tab-quality');
+    fireEvent.keyDown(filesTab, { key: 'ArrowRight' });
+    expect(qualityTab.getAttribute('aria-selected')).toBe('true');
+    fireEvent.keyDown(qualityTab, { key: 'ArrowLeft' });
+    expect(filesTab.getAttribute('aria-selected')).toBe('true');
   });
 });
 

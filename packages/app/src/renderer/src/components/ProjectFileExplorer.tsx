@@ -25,7 +25,17 @@ function sameFolderResult(a: FolderView | undefined, b: FolderView): boolean {
   });
 }
 
-export function ProjectFileExplorer({ api, projectDir }: { api: CommandApi; projectDir: string }) {
+export function ProjectFileExplorer({
+  api,
+  projectDir,
+  openPath,
+  onOpenPathHandled,
+}: {
+  api: CommandApi;
+  projectDir: string;
+  openPath?: string | null;
+  onOpenPathHandled?(): void;
+}) {
   const [expanded, setExpanded] = useState(() => new Set(['']));
   const [folders, setFolders] = useState<Record<string, HostResult<'files.list'>>>({});
   const foldersRef = useRef(folders);
@@ -105,6 +115,11 @@ export function ProjectFileExplorer({ api, projectDir }: { api: CommandApi; proj
     return () => window.removeEventListener('keydown', escape);
   }, [selected]);
   useEffect(() => () => { selection.current++; }, []);
+  useEffect(() => {
+    if (!openPath) return;
+    void openFile(openPath);
+    onOpenPathHandled?.();
+  }, [openPath]);
   const toggle = (path: string) => setExpanded((previous) => { const next = new Set(previous); if (next.has(path)) next.delete(path); else next.add(path); return next; });
   const key = (event: KeyboardEvent<HTMLButtonElement>, file: ProjectFile) => {
     if (event.key === 'ArrowRight' && file.kind === 'directory' && !expanded.has(file.path)) { event.preventDefault(); toggle(file.path); }

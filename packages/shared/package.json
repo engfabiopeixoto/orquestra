@@ -15,7 +15,10 @@
     "./remote": "./src/remote.ts",
     "./remote-snapshot": "./src/remote-snapshot.ts",
     "./win32-input": "./src/win32-input.ts",
-    "./usage-format": "./src/usage-format.ts"
+    "./usage-format": "./src/usage-format.ts",
+    "./quality-schema": "./src/quality-schema.ts",
+    "./quality-guide": "./src/quality-guide.ts",
+    "./quality-format": "./src/quality-format.ts"
   },
   "dependencies": {
     "zod": "3.24.1"
