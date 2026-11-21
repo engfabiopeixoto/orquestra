@@ -167,10 +167,11 @@ describe('mobile:dev ciclo de vida e limpeza de tailscale', () => {
     void onHostMessageRef;
 
     const runPromise = runMobileDev(ctx.deps);
-    await vi.waitFor(() => expect(releaseSleep).toBeTypeOf('function'));
+    // Prazo folgado: sob a suíte inteira, 1 s (padrão do waitFor) não basta.
+    await vi.waitFor(() => expect(releaseSleep).toBeTypeOf('function'), { timeout: 10_000 });
 
     ctx.emitter.emit('SIGINT');
-    await vi.waitFor(() => expect(ctx.exitCodes).toEqual([0]));
+    await vi.waitFor(() => expect(ctx.exitCodes).toEqual([0]), { timeout: 10_000 });
     expect(ctx.bridge.close).toHaveBeenCalledTimes(1);
 
     releaseSleep();
