@@ -126,6 +126,20 @@ export const qualityParamsSchema = z.object({
 });
 export type QualityParams = z.infer<typeof qualityParamsSchema>;
 
+export const qualityRefactorTargetSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('function'), path: z.string().min(1), name: z.string().min(1), line: z.number().int().positive() }),
+  z.object({ type: z.literal('file'), path: z.string().min(1) }),
+  z.object({ type: z.literal('cycle'), files: z.array(z.string().min(1)).min(1) }),
+]);
+export type QualityRefactorTarget = z.infer<typeof qualityRefactorTargetSchema>;
+
+export const qualityAskParamsSchema = z.discriminatedUnion('kind', [
+  z.object({ name: z.string().min(1), kind: z.literal('coverage') }),
+  z.object({ name: z.string().min(1), kind: z.literal('mutation') }),
+  z.object({ name: z.string().min(1), kind: z.literal('refactor'), target: qualityRefactorTargetSchema }),
+]);
+export type QualityAskParams = z.infer<typeof qualityAskParamsSchema>;
+
 /** Calcula o sinal de semáforo para uma métrica usando apenas `QUALITY_LIMITS`. */
 export function signalFor(
   id: QualityMetricId,

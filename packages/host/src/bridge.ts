@@ -29,6 +29,8 @@ import {
   type TerminalInfo,
   type Workspace,
   qualityAgentPrompt,
+  qualityRefactorPrompt,
+  resolveQualityRefactorTarget,
 } from '@orquestra/shared';
 import {
   createOrquestra,
@@ -854,15 +856,24 @@ export async function startHostBridge(opts: HostBridgeOptions): Promise<HostBrid
     'usage.agy': async () => getProviderUsage('agy'),
     'quality.read': async () => ({ report: await readLastReport(requireProject().dir) }),
     'quality.measure': async () => measureQuality(true),
-    'quality.ask': async ({ name, kind }) => {
+    'quality.ask': async (params) => {
       const current = requireProject();
-      const session = requireSession(name);
+      const session = requireSession(params.name);
       if (!session.adapter.acceptsPrompts) {
-        throw new OrqError('UNSUPPORTED', `${name} é um shell e não recebe prompts. Use orq read para ler a tela.`);
+        throw new OrqError('UNSUPPORTED', `${params.name} é um shell e não recebe prompts. Use orq read para ler a tela.`);
       }
       const report = await readLastReport(current.dir);
-      await session.sendCommand(qualityAgentPrompt(kind, report));
-      opts.log.info({ terminal: name, kind }, 'pedido de qualidade enviado ao agente');
+      if (params.kind === 'refactor') {
+        const target = resolveQualityRefactorTarget(report, params.target);
+        if (!target) {
+          throw new OrqError('NOT_FOUND', 'Alvo de refatoração não encontrado na última medição. Clique em Medir de novo e tente novamente.');
+        }
+        await session.sendCommand(qualityRefactorPrompt(target, report));
+        opts.log.info({ terminal: params.name, kind: params.kind, target }, 'pedido de qualidade enviado ao agente');
+        return {};
+      }
+      await session.sendCommand(qualityAgentPrompt(params.kind, report));
+      opts.log.info({ terminal: params.name, kind: params.kind }, 'pedido de qualidade enviado ao agente');
       return {};
     },
     'models.catalog': async () => modelCatalog.get(),

@@ -3,13 +3,19 @@ import {
   QUALITY_GUIDE,
   QUALITY_LIMITS,
   QUALITY_METRICS,
+  changedItemRefactorTarget,
   formatQualityExplain,
   formatQualityForReview,
   formatQualitySummary,
+  hasQualityRefactorTarget,
   isMethodName,
+  parseHostParams,
   parseParams,
   qualityAgentPrompt,
+  qualityRefactorPrompt,
   qualityReportSchema,
+  resolveQualityRefactorTarget,
+  worstRefactorTarget,
   signalFor,
   type QualityReport,
 } from '../src/index.js';
@@ -234,5 +240,152 @@ describe('contrato, limites e guia de qualidade (shared)', () => {
     const text = formatQualityForReview(makeFixtureReport({ language: 'unsupported', changed: [] }));
     expect(text.split('\n')).toHaveLength(1);
     expect(text).toContain('js-ts');
+  });
+
+  it('qualityRefactorPrompt gera uma linha dentro do teto de ~1200 chars com limites de QUALITY_LIMITS para função, arquivo e ciclo', () => {
+    const report = makeFixtureReport({
+      cycles: [{ files: ['src/a.ts', 'src/b.ts'], typeOnly: false }],
+      functions: [{ path: 'src/big.ts', line: 10, name: 'render', complexity: 26, depth: 5, loc: 90 }],
+    });
+
+    const fnPrompt = qualityRefactorPrompt({ type: 'function', path: 'src/big.ts', name: 'render', line: 10 }, report);
+    expect(fnPrompt).not.toContain('\n');
+    expect(fnPrompt).not.toContain('\r');
+    expect(fnPrompt.length).toBeLessThanOrEqual(1200);
+    expect(fnPrompt).toContain('render');
+    expect(fnPrompt).toContain('src/big.ts:10');
+    expect(fnPrompt).toContain('26');
+    expect(fnPrompt).toContain(String(QUALITY_LIMITS.complexity.bad));
+    expect(fnPrompt).toContain(String(QUALITY_LIMITS.complexity.warn));
+    expect(fnPrompt).toContain('caracterização');
+    expect(fnPrompt).toContain('orq quality --changed --refresh');
+    expect(fnPrompt).toContain('commit');
+
+    const filePrompt = qualityRefactorPrompt({ type: 'file', path: 'src/big.ts' }, report);
+    expect(filePrompt).not.toContain('\n');
+    expect(filePrompt).not.toContain('\r');
+    expect(filePrompt.length).toBeLessThanOrEqual(1200);
+    expect(filePrompt).toContain('src/big.ts');
+    expect(filePrompt).toContain('700');
+    expect(filePrompt).toContain(String(QUALITY_LIMITS.fileLoc.bad));
+    expect(filePrompt).toContain(String(QUALITY_LIMITS.fileLoc.warn));
+    expect(filePrompt).toContain('exports');
+
+    const longFiles = Array.from({ length: 25 }, (_, i) => `packages/modulo-muito-longo-${i}/src/arquivo-${i}.ts`);
+    const cyclePrompt = qualityRefactorPrompt({ type: 'cycle', files: longFiles }, report);
+    expect(cyclePrompt).not.toContain('\n');
+    expect(cyclePrompt).not.toContain('\r');
+    expect(cyclePrompt.length).toBeLessThanOrEqual(1200);
+    expect(cyclePrompt).toContain('ciclo');
+    expect(cyclePrompt).toContain('orq quality --changed --refresh');
+  });
+
+  it('quality.ask aceita coverage, mutation e os 3 alvos de refactor no protocolo do host', () => {
+    expect(parseHostParams('quality.ask', { name: 'Dev', kind: 'coverage' })).toEqual({ name: 'Dev', kind: 'coverage' });
+    expect(parseHostParams('quality.ask', { name: 'Dev', kind: 'mutation' })).toEqual({ name: 'Dev', kind: 'mutation' });
+    expect(
+      parseHostParams('quality.ask', { name: 'Dev', kind: 'refactor', target: { type: 'function', path: 'src/a.ts', name: 'fn', line: 5 } }),
+    ).toEqual({ name: 'Dev', kind: 'refactor', target: { type: 'function', path: 'src/a.ts', name: 'fn', line: 5 } });
+    expect(
+      parseHostParams('quality.ask', { name: 'Dev', kind: 'refactor', target: { type: 'file', path: 'src/a.ts' } }),
+    ).toEqual({ name: 'Dev', kind: 'refactor', target: { type: 'file', path: 'src/a.ts' } });
+    expect(
+      parseHostParams('quality.ask', { name: 'Dev', kind: 'refactor', target: { type: 'cycle', files: ['src/a.ts', 'src/b.ts'] } }),
+    ).toEqual({ name: 'Dev', kind: 'refactor', target: { type: 'cycle', files: ['src/a.ts', 'src/b.ts'] } });
+
+    expect(() => parseHostParams('quality.ask', { name: 'Dev', kind: 'refactor' })).toThrow();
+    expect(() => parseHostParams('quality.ask', { name: 'Dev', kind: 'refactor', target: { type: 'unknown' } })).toThrow();
+  });
+
+  it('remove caracteres de controle/Unicode em singleLine, preserva REFACTOR_RULES em cortes e trata plural em ciclos', () => {
+    const dirtyReport = makeFixtureReport({
+      functions: [
+        { path: 'src/\x1b[31mbig\t.ts', line: 10, name: 'fn\x03\n\u2028"x"', complexity: 22, depth: 3, loc: 50 },
+      ],
+      changed: [
+        { path: 'src/a\x1b.ts\u2029\x07', kind: 'file-over-limit', detail: 'Grande' },
+      ],
+    });
+    const refPrompt = qualityRefactorPrompt(
+      { type: 'function', path: 'src/\x1b[31mbig\t.ts', name: 'fn\x03\n\u2028"x"', line: 10 },
+      dirtyReport,
+    );
+    expect(refPrompt).not.toMatch(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/);
+
+    const mutPrompt = qualityAgentPrompt('mutation', dirtyReport);
+    expect(mutPrompt).not.toMatch(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/);
+
+    const longCycle = Array.from({ length: 20 }, (_, i) => `packages/modulo-longo-${i}/src/arquivo-${i}.ts`);
+    const cyclePrompt = qualityRefactorPrompt({ type: 'cycle', files: longCycle }, makeFixtureReport());
+    expect(cyclePrompt.length).toBeLessThanOrEqual(1200);
+    expect(cyclePrompt).toContain('não faça commit e entregue para revisão.');
+
+    // Verifica plural exato (+1 arquivo vs +N arquivos)
+    const almostFullFiles = Array.from({ length: 11 }, (_, i) => `packages/modulo-extenso-${String(i).padStart(2, '0')}/src/arquivo-item-${i}.ts`);
+    const oneLeftPrompt = qualityRefactorPrompt({ type: 'cycle', files: almostFullFiles }, makeFixtureReport());
+    if (oneLeftPrompt.includes('+1 ')) {
+      expect(oneLeftPrompt).toContain('+1 arquivo)');
+      expect(oneLeftPrompt).not.toContain('+1 arquivos)');
+    }
+  });
+
+  it('normaliza caminhos Windows, compara ciclos como conjunto, ignora testes e prioriza depth > 4', () => {
+    const report = makeFixtureReport({
+      files: [
+        { path: 'src/Big.ts', loc: 400, test: false, functions: 2, maxComplexity: 9, sumComplexity: 14, maxDepth: 6, fanIn: 0, fanOut: 0, commits90d: 1 },
+        { path: 'src/Big.test.ts', loc: 900, test: true, functions: 1, maxComplexity: 30, sumComplexity: 30, maxDepth: 8, fanIn: 0, fanOut: 0, commits90d: 1 },
+      ],
+      functions: [
+        { path: 'src/Big.test.ts', line: 5, name: 'testFn', complexity: 30, depth: 8, loc: 90 },
+        { path: 'src/Big.ts', line: 10, name: 'okHigh', complexity: 9, depth: 1, loc: 30 },
+        { path: 'src/Big.ts', line: 40, name: 'deepWarn', complexity: 5, depth: 6, loc: 40 },
+        { path: 'src/Big.ts', line: 80, name: 'anon', complexity: 12, depth: 2, loc: 25 },
+      ],
+      cycles: [{ files: ['src/A.ts', 'src/b.ts'], typeOnly: false }],
+    });
+
+    expect(resolveQualityRefactorTarget(report, { type: 'file', path: './src\\big.ts' })).toEqual({
+      type: 'file',
+      path: 'src/Big.ts',
+    });
+    expect(resolveQualityRefactorTarget(report, { type: 'cycle', files: ['src\\b.ts', 'src/a.ts'] })).toEqual({
+      type: 'cycle',
+      files: ['src/A.ts', 'src/b.ts'],
+    });
+    expect(hasQualityRefactorTarget(report, { type: 'function', path: 'src\\big.ts', name: 'deepWarn', line: 40 })).toBe(true);
+    expect(hasQualityRefactorTarget(report, { type: 'function', path: 'src/Big.ts', name: 'deepWarn', line: 99 })).toBe(false);
+
+    // Quando nenhuma função viola complexity.warn (>10), prioriza função que viola depth (>4) frente a complexity 9 depth 1
+    const depthReport = makeFixtureReport({
+      files: report.files,
+      functions: [
+        { path: 'src/Big.test.ts', line: 5, name: 'testFn', complexity: 30, depth: 8, loc: 90 },
+        { path: 'src/Big.ts', line: 10, name: 'okHigh', complexity: 9, depth: 1, loc: 30 },
+        { path: 'src/Big.ts', line: 40, name: 'deepWarn', complexity: 5, depth: 6, loc: 40 },
+      ],
+    });
+    expect(worstRefactorTarget('complexity', depthReport)?.target).toEqual({
+      type: 'function',
+      path: 'src/Big.ts',
+      name: 'deepWarn',
+      line: 40,
+    });
+
+    // Só arquivos de teste em files -> sem alvo de refatoração em size e complexity
+    const onlyTestsReport = makeFixtureReport({
+      files: [{ path: 'src/only.test.ts', loc: 900, test: true, functions: 1, maxComplexity: 30, sumComplexity: 30, maxDepth: 8, fanIn: 0, fanOut: 0, commits90d: 1 }],
+      functions: [{ path: 'src/only.test.ts', line: 5, name: 'onlyTestFn', complexity: 30, depth: 8, loc: 90 }],
+      hotspots: [],
+      changed: [],
+    });
+    expect(worstRefactorTarget('size', onlyTestsReport)).toBeNull();
+    expect(worstRefactorTarget('complexity', onlyTestsReport)).toBeNull();
+
+    // changedItemRefactorTarget não cai para outra linha quando parsed tem { name, line }
+    const changedFn = changedItemRefactorTarget(
+      { path: 'src/Big.ts', kind: 'function-over-limit', detail: 'Função anon (linha 120) tem complexidade 15 (limite 10).' },
+      report,
+    );
+    expect(changedFn?.target).toEqual({ type: 'function', path: 'src/Big.ts', name: 'anon', line: 120 });
   });
 });

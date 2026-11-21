@@ -120,7 +120,7 @@ describe('Sidebar', () => {
 
     fireEvent.click(await screen.findByTestId('sidebar-tab-quality'));
     expect(screen.getByRole('tabpanel')).toBeTruthy();
-    const hotspot = await screen.findByRole('button', { name: /src\/alvo\.ts/i });
+    const hotspot = await screen.findByRole('button', { name: /^src\/alvo\.ts/i });
     fireEvent.click(hotspot);
 
     expect(await screen.findByRole('dialog', { name: 'Arquivo src/alvo.ts' })).toBeTruthy();

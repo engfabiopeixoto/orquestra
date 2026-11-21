@@ -1121,6 +1121,124 @@ describe('medição de qualidade na ponte', () => {
     expect(ptyHost.last().written.join('')).toContain('json-summary');
   });
 
+  it('quality.ask com kind refactor valida alvo em last.json, recusa shell/inexistente e envia prompt certo', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'orq-qrefactor-'));
+    const script = join(dir, 'refactor-quality-host.mjs');
+    const report = {
+      version: 1,
+      dir,
+      measuredAt: new Date().toISOString(),
+      durationMs: 12,
+      language: 'js-ts',
+      limits: { files: 2, skippedLarge: 0, truncated: false },
+      metrics: [
+        { id: 'size', signal: 'bad', value: 700, delta: 100 },
+        { id: 'complexity', signal: 'bad', value: 56, delta: 10 },
+        { id: 'dependencies', signal: 'bad', value: 1, delta: 1 },
+        { id: 'coverage', signal: 'missing', value: null, delta: null },
+        { id: 'mutation', signal: 'missing', value: null, delta: null },
+      ],
+      files: [
+        { path: 'packages/cli/src/run.ts', loc: 700, test: false, functions: 1, maxComplexity: 56, sumComplexity: 56, maxDepth: 4, fanIn: 0, fanOut: 1, commits90d: 3 },
+      ],
+      functions: [
+        { path: 'packages/cli/src/run.ts', line: 120, name: 'execute', complexity: 56, depth: 4, loc: 180 },
+      ],
+      cycles: [{ files: ['src/a.ts', 'src/b.ts'], typeOnly: false }],
+      hotspots: [{ path: 'packages/cli/src/run.ts', score: 1200, reason: '700 linhas' }],
+      changed: [],
+      coverage: null,
+      mutation: null,
+    };
+    writeFileSync(script, `process.stdout.write(JSON.stringify({ ok: true, report: ${JSON.stringify(report)} }));`);
+
+    const { command, sent, ptyHost } = await setup({
+      qualityScript: script,
+      adapters: {
+        shell: { ...createFakeAdapter(), kind: 'shell', acceptsPrompts: false },
+        claude: { ...createFakeAdapter(), kind: 'claude', acceptsPrompts: true },
+      },
+    });
+    await command('1', 'project.open', { dir });
+    await command('2', 'terminal.create', { name: 'Sh', agent: 'shell' });
+    await command('3', 'terminal.create', { name: 'Dev', agent: 'claude' });
+    await waitFor(() =>
+      sent.some((m) => m.kind === 'event' && m.event.type === 'terminal.state' && m.event.name === 'Dev' && m.event.state === 'idle'),
+    );
+
+    // Antes de medir (sem last.json) -> erro pedindo para medir de novo
+    const noReport = await command('4', 'quality.ask', {
+      name: 'Dev',
+      kind: 'refactor',
+      target: { type: 'file', path: 'packages/cli/src/run.ts' },
+    });
+    expect(noReport).toMatchObject({ kind: 'response-error', error: { code: 'NOT_FOUND', message: expect.stringMatching(/medir/i) } });
+
+    await command('5', 'quality.measure', {});
+
+    // Alvo inexistente -> erro claro em pt-BR
+    const badTarget = await command('6', 'quality.ask', {
+      name: 'Dev',
+      kind: 'refactor',
+      target: { type: 'function', path: 'packages/cli/src/run.ts', name: 'naoExiste', line: 999 },
+    });
+    expect(badTarget).toMatchObject({ kind: 'response-error', error: { code: 'NOT_FOUND', message: expect.stringMatching(/medir/i) } });
+
+    // Shell recusado
+    const shellErr = await command('7', 'quality.ask', {
+      name: 'Sh',
+      kind: 'refactor',
+      target: { type: 'file', path: 'packages/cli/src/run.ts' },
+    });
+    expect(shellErr).toMatchObject({ kind: 'response-error', error: { code: 'UNSUPPORTED' } });
+
+    // Alvo de função válido
+    const okFn = await command('8', 'quality.ask', {
+      name: 'Dev',
+      kind: 'refactor',
+      target: { type: 'function', path: 'packages/cli/src/run.ts', name: 'execute', line: 120 },
+    });
+    expect(okFn).toMatchObject({ kind: 'response', ok: true });
+    expect(ptyHost.last().written.join('')).toContain('execute');
+    expect(ptyHost.last().written.join('')).toContain('packages/cli/src/run.ts:120');
+    expect(ptyHost.last().written.join('')).toContain('56');
+
+    // Alvo de ciclo válido
+    const okCycle = await command('9', 'quality.ask', {
+      name: 'Dev',
+      kind: 'refactor',
+      target: { type: 'cycle', files: ['src/a.ts', 'src/b.ts'] },
+    });
+    expect(okCycle).toMatchObject({ kind: 'response', ok: true });
+    expect(ptyHost.last().written.join('')).toContain('src/a.ts');
+
+    // Caminho Windows com barra invertida e caixa diferente + ciclo em outra ordem resolvem ao alvo canônico
+    const winFile = await command('10', 'quality.ask', {
+      name: 'Dev',
+      kind: 'refactor',
+      target: { type: 'file', path: './packages\\CLI\\src\\Run.ts' },
+    });
+    expect(winFile).toMatchObject({ kind: 'response', ok: true });
+    expect(ptyHost.last().written.join('')).toContain('packages/cli/src/run.ts');
+    expect(ptyHost.last().written.join('')).toContain('700 linhas');
+
+    const reversedCycle = await command('11', 'quality.ask', {
+      name: 'Dev',
+      kind: 'refactor',
+      target: { type: 'cycle', files: ['src\\b.ts', 'src/A.ts'] },
+    });
+    expect(reversedCycle).toMatchObject({ kind: 'response', ok: true });
+    expect(ptyHost.last().written.join('')).toContain('src/a.ts -> src/b.ts');
+
+    // Função com mesmo nome em linha errada é recusada
+    const wrongLine = await command('12', 'quality.ask', {
+      name: 'Dev',
+      kind: 'refactor',
+      target: { type: 'function', path: 'packages/cli/src/run.ts', name: 'execute', line: 999 },
+    });
+    expect(wrongLine).toMatchObject({ kind: 'response-error', error: { code: 'NOT_FOUND' } });
+  });
+
   it('erro no worker de quality não gera UnhandledPromiseRejection nem derruba o processo', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'orq-qbridge-fail-'));
     const script = join(dir, 'fail-worker.mjs');

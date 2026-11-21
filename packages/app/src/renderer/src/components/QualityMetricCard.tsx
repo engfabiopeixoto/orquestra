@@ -1,15 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { QUALITY_GUIDE } from '@orquestra/shared/quality-guide';
-import type { QualityMetric, QualityMetricId, QualitySignal } from '@orquestra/shared/quality-schema';
-import { usePortalOverlay } from '../portal/modal-overlay';
+import { useState } from 'react';
+import { QUALITY_GUIDE, type QualityRefactorChoice } from '@orquestra/shared/quality-guide';
+import type { QualityMetric, QualityMetricId, QualityRefactorTarget, QualitySignal } from '@orquestra/shared/quality-schema';
+import { QualityAskMenuButton, type QualityAgentTerminal } from './QualityAskMenuButton';
 
-export type QualityAgentTerminal = {
-  name: string;
-  agent: string;
-  state?: string;
-  unloaded?: boolean;
-};
+export type { QualityAgentTerminal };
+
+export type QualityAskRequest =
+  | { kind: 'coverage' | 'mutation' }
+  | { kind: 'refactor'; target: QualityRefactorTarget };
 
 const SIGNAL_TEXT: Record<QualitySignal, string> = {
   ok: 'OK',
@@ -44,61 +42,28 @@ export function QualityMetricCard({
   metric,
   terminals,
   staleCoverage,
+  refactorTarget,
+  openMenuId,
+  onOpenMenuChange,
   onAskAgent,
 }: {
   metric: QualityMetric;
   terminals: QualityAgentTerminal[];
   staleCoverage?: boolean;
-  onAskAgent(terminalName: string, kind: 'coverage' | 'mutation'): void;
+  refactorTarget?: QualityRefactorChoice | null;
+  openMenuId?: string | null;
+  onOpenMenuChange?(id: string | null): void;
+  onAskAgent(terminalName: string, request: QualityAskRequest): void;
 }) {
   const [guideOpen, setGuideOpen] = useState(false);
-  const [menuPos, setMenuPos] = useState<{ left: number; top: number } | null>(null);
-  const askButtonRef = useRef<HTMLButtonElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
   const guide = QUALITY_GUIDE[metric.id];
   const delta = deltaInfo(metric.id, metric.delta);
   const askKind = metric.id === 'coverage' || metric.id === 'mutation' ? metric.id : null;
-  const eligibleTerminals = terminals.filter((t) => t.agent !== 'shell' && !t.unloaded && t.state !== 'exited');
-  const menuOpen = menuPos !== null && askKind !== null && eligibleTerminals.length > 0;
-  usePortalOverlay(menuOpen);
-
-  useEffect(() => {
-    if (menuPos && eligibleTerminals.length === 0) setMenuPos(null);
-  }, [menuPos, eligibleTerminals.length]);
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (!menuRef.current?.contains(target) && !askButtonRef.current?.contains(target)) {
-        setMenuPos(null);
-      }
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setMenuPos(null);
-        askButtonRef.current?.focus();
-      }
-    };
-    document.addEventListener('pointerdown', onPointerDown);
-    window.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown);
-      window.removeEventListener('keydown', onKeyDown);
-    };
-  }, [menuOpen]);
-
-  const toggleMenu = () => {
-    const rect = askButtonRef.current?.getBoundingClientRect();
-    setMenuPos((current) =>
-      current
-        ? null
-        : {
-            left: Math.min(rect?.left ?? 10, Math.max(8, window.innerWidth - 220)),
-            top: Math.min((rect?.bottom ?? 80) + 4, Math.max(8, window.innerHeight - 140)),
-          },
-    );
-  };
+  const canRefactor =
+    (metric.id === 'size' || metric.id === 'complexity' || metric.id === 'dependencies') &&
+    (metric.signal === 'warn' || metric.signal === 'bad') &&
+    Boolean(refactorTarget);
+  const cardMenuId = `card-${metric.id}`;
 
   return (
     <article className={`quality-card is-${metric.signal}`} data-testid={`quality-card-${metric.id}`}>
@@ -127,18 +92,33 @@ export function QualityMetricCard({
       {metric.signal === 'missing' && askKind ? (
         <div className="quality-missing">
           <p className="quality-missing-text">{guide.what}</p>
-          <button
-            ref={askButtonRef}
-            type="button"
+          <QualityAskMenuButton
+            label="Pedir a um agente"
             className="quality-ask-btn"
-            disabled={eligibleTerminals.length === 0}
-            title={eligibleTerminals.length === 0 ? 'Abra um terminal de agente' : 'Escolher agente para configurar'}
-            aria-haspopup="menu"
-            aria-expanded={menuPos !== null}
-            onClick={toggleMenu}
-          >
-            Pedir a um agente
-          </button>
+            title="Escolher agente para configurar"
+            menuAriaLabel={`Escolher agente para ${guide.title}`}
+            terminals={terminals}
+            open={openMenuId !== undefined ? openMenuId === cardMenuId : undefined}
+            onOpenChange={onOpenMenuChange ? (next) => onOpenMenuChange(next ? cardMenuId : null) : undefined}
+            onSelectTerminal={(name) => onAskAgent(name, { kind: askKind })}
+          />
+        </div>
+      ) : null}
+
+      {canRefactor && refactorTarget ? (
+        <div className="quality-missing">
+          <small className="quality-ask-target">{`Alvo: ${refactorTarget.label}`}</small>
+          <QualityAskMenuButton
+            label="Pedir refatoração a um agente"
+            className="quality-ask-btn"
+            title={`Alvo: ${refactorTarget.label}`}
+            ariaLabel={`Pedir refatoração de ${guide.title}: ${refactorTarget.label}`}
+            menuAriaLabel={`Escolher agente para ${guide.title}: ${refactorTarget.label}`}
+            terminals={terminals}
+            open={openMenuId !== undefined ? openMenuId === cardMenuId : undefined}
+            onOpenChange={onOpenMenuChange ? (next) => onOpenMenuChange(next ? cardMenuId : null) : undefined}
+            onSelectTerminal={(name) => onAskAgent(name, { kind: 'refactor', target: refactorTarget.target })}
+          />
         </div>
       ) : null}
 
@@ -150,33 +130,6 @@ export function QualityMetricCard({
           <p><strong>Como melhorar:</strong> {guide.improve}</p>
         </div>
       ) : null}
-
-      {menuOpen && menuPos
-        ? createPortal(
-            <div
-              ref={menuRef}
-              className="ctx ctx-menu quality-agent-menu"
-              role="menu"
-              aria-label={`Escolher agente para ${guide.title}`}
-              style={{ position: 'fixed', left: menuPos.left, top: menuPos.top }}
-            >
-              {eligibleTerminals.map((terminal) => (
-                <button
-                  key={terminal.name}
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setMenuPos(null);
-                    onAskAgent(terminal.name, askKind);
-                  }}
-                >
-                  {`${terminal.name} (${terminal.agent})`}
-                </button>
-              ))}
-            </div>,
-            document.body,
-          )
-        : null}
     </article>
   );
 }

@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
+import { changedItemRefactorTarget, worstRefactorTarget } from '@orquestra/shared/quality-guide';
 import { QUALITY_METRICS, type QualityMetric, type QualityReport } from '@orquestra/shared/quality-schema';
 import type { CommandApi } from '../api';
-import { QualityMetricCard, type QualityAgentTerminal } from './QualityMetricCard';
+import { QualityAskMenuButton } from './QualityAskMenuButton';
+import { QualityMetricCard, type QualityAgentTerminal, type QualityAskRequest } from './QualityMetricCard';
 
 export function QualityPanel({
   api,
@@ -18,6 +20,7 @@ export function QualityPanel({
   const [measuring, setMeasuring] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const requestIdRef = useRef(0);
   const mountedRef = useRef(true);
   const projectDirRef = useRef(projectDir);
@@ -36,6 +39,7 @@ export function QualityPanel({
     setMeasuring(false);
     setError(null);
     setStatusMessage(null);
+    setOpenMenuId(null);
     void api
       .command('quality.read', {})
       .then((res) => {
@@ -54,6 +58,7 @@ export function QualityPanel({
     setMeasuring(true);
     setError(null);
     setStatusMessage(null);
+    setOpenMenuId(null);
     try {
       const next = await api.command('quality.measure', {});
       if (mountedRef.current && requestIdRef.current === req) setReport(next);
@@ -66,12 +71,13 @@ export function QualityPanel({
     }
   };
 
-  const askAgent = async (name: string, kind: 'coverage' | 'mutation') => {
+  const askAgent = async (name: string, request: QualityAskRequest) => {
     const startDir = projectDirRef.current;
     setError(null);
     setStatusMessage(null);
+    setOpenMenuId(null);
     try {
-      await api.command('quality.ask', { name, kind });
+      await api.command('quality.ask', { name, ...request });
       if (mountedRef.current && projectDirRef.current === startDir) {
         setStatusMessage(`Pedido enviado para ${name}.`);
       }
@@ -124,7 +130,10 @@ export function QualityPanel({
                   metric={metric}
                   terminals={terminals}
                   staleCoverage={Boolean(report.coverage?.stale)}
-                  onAskAgent={(name, kind) => void askAgent(name, kind)}
+                  refactorTarget={metric.signal === 'warn' || metric.signal === 'bad' ? worstRefactorTarget(metric.id, report) : null}
+                  openMenuId={openMenuId}
+                  onOpenMenuChange={setOpenMenuId}
+                  onAskAgent={(name, request) => void askAgent(name, request)}
                 />
               ))}
             </div>
@@ -133,14 +142,31 @@ export function QualityPanel({
               <div className="quality-section">
                 <h3 className="quality-section-title">Nos arquivos alterados</h3>
                 <ul className="quality-list">
-                  {report.changed.map((item, idx) => (
-                    <li key={`${item.path}-${item.kind}-${idx}`}>
-                      <button type="button" className="quality-file-btn" onClick={() => onOpenFile(item.path)}>
-                        <span className="quality-item-path">{item.path}</span>
-                        <small className="quality-item-detail">{item.detail}</small>
-                      </button>
-                    </li>
-                  ))}
+                  {report.changed.map((item, idx) => {
+                    const choice = changedItemRefactorTarget(item, report);
+                    const menuId = `changed-${idx}`;
+                    return (
+                      <li key={`${item.path}-${item.kind}-${idx}`} className="quality-list-row">
+                        <button type="button" className="quality-file-btn" onClick={() => onOpenFile(item.path)}>
+                          <span className="quality-item-path">{item.path}</span>
+                          <small className="quality-item-detail">{item.detail}</small>
+                        </button>
+                        {choice ? (
+                          <QualityAskMenuButton
+                            label="Refatorar"
+                            className="quality-refactor-btn"
+                            title={`Refatorar ${choice.label}`}
+                            ariaLabel={`Refatorar alterado ${choice.label}`}
+                            menuAriaLabel={`Escolher agente para alterado ${choice.label}`}
+                            terminals={terminals}
+                            open={openMenuId === menuId}
+                            onOpenChange={(next) => setOpenMenuId(next ? menuId : null)}
+                            onSelectTerminal={(name) => void askAgent(name, { kind: 'refactor', target: choice.target })}
+                          />
+                        ) : null}
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             ) : null}
@@ -149,14 +175,28 @@ export function QualityPanel({
               <div className="quality-section">
                 <h3 className="quality-section-title">Pontos críticos</h3>
                 <ul className="quality-list">
-                  {report.hotspots.map((spot) => (
-                    <li key={spot.path}>
-                      <button type="button" className="quality-file-btn" onClick={() => onOpenFile(spot.path)}>
-                        <span className="quality-item-path">{spot.path}</span>
-                        <small className="quality-item-detail">{spot.reason}</small>
-                      </button>
-                    </li>
-                  ))}
+                  {report.hotspots.map((spot) => {
+                    const menuId = `hotspot-${spot.path}`;
+                    return (
+                      <li key={spot.path} className="quality-list-row">
+                        <button type="button" className="quality-file-btn" onClick={() => onOpenFile(spot.path)}>
+                          <span className="quality-item-path">{spot.path}</span>
+                          <small className="quality-item-detail">{spot.reason}</small>
+                        </button>
+                        <QualityAskMenuButton
+                          label="Refatorar"
+                          className="quality-refactor-btn"
+                          title={`Refatorar ${spot.path}`}
+                          ariaLabel={`Refatorar ponto crítico ${spot.path}`}
+                          menuAriaLabel={`Escolher agente para ponto crítico ${spot.path}`}
+                          terminals={terminals}
+                          open={openMenuId === menuId}
+                          onOpenChange={(next) => setOpenMenuId(next ? menuId : null)}
+                          onSelectTerminal={(name) => void askAgent(name, { kind: 'refactor', target: { type: 'file', path: spot.path } })}
+                        />
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             ) : null}
@@ -165,20 +205,37 @@ export function QualityPanel({
               <div className="quality-section">
                 <h3 className="quality-section-title">Ciclos de import</h3>
                 <ul className="quality-list">
-                  {report.cycles.map((cycle, index) => (
-                    <li key={`${cycle.typeOnly ? 'type' : 'rt'}-${index}`} className="quality-cycle-item">
-                      <span className={`quality-cycle-kind ${cycle.typeOnly ? 'is-warn' : 'is-bad'}`}>
-                        {cycle.typeOnly ? 'Só tipos' : 'Em execução'}
-                      </span>
-                      <div className="quality-cycle-files">
-                        {cycle.files.map((filePath) => (
-                          <button key={filePath} type="button" className="quality-link-btn" onClick={() => onOpenFile(filePath)}>
-                            {filePath}
-                          </button>
-                        ))}
-                      </div>
-                    </li>
-                  ))}
+                  {report.cycles.map((cycle, index) => {
+                    const menuId = `cycle-${index}`;
+                    const cycleLabel = cycle.files.join(' ↔ ');
+                    return (
+                      <li key={`${cycle.typeOnly ? 'type' : 'rt'}-${index}`} className="quality-cycle-item">
+                        <div className="quality-cycle-head">
+                          <span className={`quality-cycle-kind ${cycle.typeOnly ? 'is-warn' : 'is-bad'}`}>
+                            {cycle.typeOnly ? 'Só tipos' : 'Em execução'}
+                          </span>
+                          <QualityAskMenuButton
+                            label="Refatorar"
+                            className="quality-refactor-btn"
+                            title={`Refatorar ciclo ${cycleLabel}`}
+                            ariaLabel={`Refatorar ciclo ${cycleLabel}`}
+                            menuAriaLabel={`Escolher agente para ciclo ${cycleLabel}`}
+                            terminals={terminals}
+                            open={openMenuId === menuId}
+                            onOpenChange={(next) => setOpenMenuId(next ? menuId : null)}
+                            onSelectTerminal={(name) => void askAgent(name, { kind: 'refactor', target: { type: 'cycle', files: cycle.files } })}
+                          />
+                        </div>
+                        <div className="quality-cycle-files">
+                          {cycle.files.map((filePath) => (
+                            <button key={filePath} type="button" className="quality-link-btn" onClick={() => onOpenFile(filePath)}>
+                              {filePath}
+                            </button>
+                          ))}
+                        </div>
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             ) : null}
@@ -187,14 +244,31 @@ export function QualityPanel({
               <div className="quality-section">
                 <h3 className="quality-section-title">Funções mais complexas</h3>
                 <ul className="quality-list">
-                  {report.functions.slice(0, 10).map((fn) => (
-                    <li key={`${fn.path}:${fn.line}:${fn.name}`}>
-                      <button type="button" className="quality-file-btn" onClick={() => onOpenFile(fn.path)}>
-                        <span className="quality-item-path">{`${fn.name} (${fn.complexity})`}</span>
-                        <small className="quality-item-detail">{`${fn.path}:${fn.line}`}</small>
-                      </button>
-                    </li>
-                  ))}
+                  {report.functions.slice(0, 10).map((fn) => {
+                    const menuId = `fn-${fn.path}:${fn.line}:${fn.name}`;
+                    const fnLabel = `${fn.name} (${fn.path}:${fn.line})`;
+                    return (
+                      <li key={`${fn.path}:${fn.line}:${fn.name}`} className="quality-list-row">
+                        <button type="button" className="quality-file-btn" onClick={() => onOpenFile(fn.path)}>
+                          <span className="quality-item-path">{`${fn.name} (${fn.complexity})`}</span>
+                          <small className="quality-item-detail">{`${fn.path}:${fn.line}`}</small>
+                        </button>
+                        <QualityAskMenuButton
+                          label="Refatorar"
+                          className="quality-refactor-btn"
+                          title={`Refatorar ${fnLabel}`}
+                          ariaLabel={`Refatorar função ${fnLabel}`}
+                          menuAriaLabel={`Escolher agente para função ${fnLabel}`}
+                          terminals={terminals}
+                          open={openMenuId === menuId}
+                          onOpenChange={(next) => setOpenMenuId(next ? menuId : null)}
+                          onSelectTerminal={(name) =>
+                            void askAgent(name, { kind: 'refactor', target: { type: 'function', path: fn.path, name: fn.name, line: fn.line } })
+                          }
+                        />
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             ) : null}

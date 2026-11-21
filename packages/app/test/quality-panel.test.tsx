@@ -205,7 +205,7 @@ describe('QualityPanel', () => {
     expect(sizeCard.textContent).toContain('▲ +100 piorou');
 
     const hotspotsSection = screen.getByText('Pontos críticos').closest('.quality-section') as HTMLElement;
-    const hotspotBtn = within(hotspotsSection).getByRole('button', { name: /src\/big\.ts/i });
+    const hotspotBtn = within(hotspotsSection).getByRole('button', { name: /^src\/big\.ts/i });
     fireEvent.click(hotspotBtn);
     expect(onOpenFile).toHaveBeenCalledWith('src/big.ts');
   });
@@ -383,5 +383,225 @@ describe('QualityPanel', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'claude-1 (claude)' }));
     const status = await screen.findByRole('status');
     expect(status.textContent).toContain('Pedido enviado para claude-1.');
+  });
+
+  it('mostra "Pedir refatoração a um agente" nos cartões warn/bad com pior alvo, omite em ok e envia quality.ask com target', async () => {
+    const report = makeReport({
+      metrics: [
+        { id: 'size', signal: 'bad', value: 700, delta: 100 },
+        { id: 'complexity', signal: 'warn', value: 14, delta: 0 },
+        { id: 'dependencies', signal: 'bad', value: 1, delta: 1 },
+        { id: 'coverage', signal: 'ok', value: 80, delta: 0 },
+        { id: 'mutation', signal: 'ok', value: 85, delta: 0 },
+      ],
+      files: [
+        { path: 'src/huge.test.ts', loc: 950, test: true, functions: 1, maxComplexity: 3, sumComplexity: 3, maxDepth: 1, fanIn: 0, fanOut: 0, commits90d: 1 },
+        { path: 'src/small.ts', loc: 120, test: false, functions: 1, maxComplexity: 4, sumComplexity: 4, maxDepth: 1, fanIn: 0, fanOut: 0, commits90d: 1 },
+        { path: 'src/big.ts', loc: 700, test: false, functions: 4, maxComplexity: 14, sumComplexity: 28, maxDepth: 3, fanIn: 1, fanOut: 2, commits90d: 8 },
+      ],
+      functions: [
+        { path: 'src/small.ts', line: 3, name: 'helper', complexity: 4, depth: 1, loc: 10 },
+        { path: 'src/big.ts', line: 12, name: 'render', complexity: 14, depth: 3, loc: 80 },
+      ],
+      cycles: [
+        { files: ['src/t1.ts', 'src/t2.ts'], typeOnly: true },
+        { files: ['src/a.ts', 'src/b.ts'], typeOnly: false },
+      ],
+      coverage: { source: 'summary', generatedAt: '2026-11-20T12:00:00.000Z', stale: false, lines: 80, branches: null, functions: null, files: [] },
+    });
+    const { api, calls } = makeFakeApi({ readReport: report });
+    const { rerender } = render(
+      <QualityPanel
+        api={api}
+        projectDir="E:/proj/demo"
+        terminals={[
+          { name: 'sh-1', agent: 'shell', state: 'idle' },
+          { name: 'codex-1', agent: 'codex', state: 'idle' },
+        ]}
+        onOpenFile={() => {}}
+      />,
+    );
+
+    const sizeCard = await screen.findByTestId('quality-card-size');
+    expect(within(sizeCard).getByText(/src\/big\.ts/)).toBeTruthy();
+    const sizeBtn = within(sizeCard).getByRole('button', { name: /Pedir refatoração/i });
+    expect(sizeBtn.getAttribute('title')).toContain('src/big.ts');
+    fireEvent.click(sizeBtn);
+    expect(screen.getAllByRole('menuitem').map((el) => el.textContent)).toEqual(['codex-1 (codex)']);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'codex-1 (codex)' }));
+    await waitFor(() => {
+      expect(calls).toContainEqual(['quality.ask', { name: 'codex-1', kind: 'refactor', target: { type: 'file', path: 'src/big.ts' } }]);
+    });
+
+    const compCard = screen.getByTestId('quality-card-complexity');
+    expect(within(compCard).getByText(/render/)).toBeTruthy();
+    const compBtn = within(compCard).getByRole('button', { name: /Pedir refatoração/i });
+    expect(compBtn.getAttribute('title')).toContain('render');
+    fireEvent.click(compBtn);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'codex-1 (codex)' }));
+    await waitFor(() => {
+      expect(calls).toContainEqual([
+        'quality.ask',
+        { name: 'codex-1', kind: 'refactor', target: { type: 'function', path: 'src/big.ts', name: 'render', line: 12 } },
+      ]);
+    });
+
+    const depsCard = screen.getByTestId('quality-card-dependencies');
+    expect(within(depsCard).getByText(/src\/a\.ts/)).toBeTruthy();
+    const depsBtn = within(depsCard).getByRole('button', { name: /Pedir refatoração/i });
+    expect(depsBtn.getAttribute('title')).toContain('src/a.ts');
+    fireEvent.click(depsBtn);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'codex-1 (codex)' }));
+    await waitFor(() => {
+      expect(calls).toContainEqual([
+        'quality.ask',
+        { name: 'codex-1', kind: 'refactor', target: { type: 'cycle', files: ['src/a.ts', 'src/b.ts'] } },
+      ]);
+    });
+
+    const okApi = makeFakeApi({
+      readReport: makeReport({
+        metrics: [
+          { id: 'size', signal: 'ok', value: 100, delta: 0 },
+          { id: 'complexity', signal: 'ok', value: 4, delta: 0 },
+          { id: 'dependencies', signal: 'ok', value: 0, delta: 0 },
+          { id: 'coverage', signal: 'ok', value: 85, delta: 0 },
+          { id: 'mutation', signal: 'ok', value: 85, delta: 0 },
+        ],
+        cycles: [],
+      }),
+    });
+    rerender(
+      <QualityPanel api={okApi.api} projectDir="E:/proj/ok" terminals={[{ name: 'codex-1', agent: 'codex', state: 'idle' }]} onOpenFile={() => {}} />,
+    );
+    await screen.findByText('100 linhas');
+    expect(screen.queryByRole('button', { name: /Pedir refatoração a um agente/i })).toBeNull();
+  });
+
+  it('exibe botão "Refatorar" nos itens das 4 listas mantendo clique no caminho e respeitando portal overlay / Escape', async () => {
+    const onOpenFile = vi.fn();
+    const report = makeReport({
+      files: [{ path: 'src/big.ts', loc: 700, test: false, functions: 1, maxComplexity: 14, sumComplexity: 14, maxDepth: 3, fanIn: 0, fanOut: 0, commits90d: 2 }],
+      functions: [{ path: 'src/big.ts', line: 12, name: 'render', complexity: 14, depth: 3, loc: 80 }],
+      cycles: [{ files: ['src/a.ts', 'src/b.ts'], typeOnly: false }],
+      hotspots: [{ path: 'src/big.ts', score: 980, reason: '700 linhas' }],
+      changed: [
+        { path: 'src/big.ts', kind: 'file-over-limit', detail: 'Passou de 350 linhas (700 linhas).' },
+        { path: 'src/big.ts', kind: 'function-over-limit', detail: 'Função render (linha 12) tem complexidade 14 (limite 10).' },
+        { path: 'src/a.ts', kind: 'new-cycle', detail: 'Novo ciclo envolvendo: src/a.ts ↔ src/b.ts.' },
+      ],
+    });
+    const { api, calls } = makeFakeApi({ readReport: report });
+    render(
+      <QualityPanel
+        api={api}
+        projectDir="E:/proj/demo"
+        terminals={[{ name: 'claude-1', agent: 'claude', state: 'idle' }]}
+        onOpenFile={onOpenFile}
+      />,
+    );
+
+    const hotspotsSection = (await screen.findByText('Pontos críticos')).closest('.quality-section') as HTMLElement;
+    fireEvent.click(within(hotspotsSection).getByRole('button', { name: /^src\/big\.ts/i }));
+    expect(onOpenFile).toHaveBeenCalledWith('src/big.ts');
+
+    const hotspotRefactor = within(hotspotsSection).getByRole('button', { name: /^Refatorar /i });
+    fireEvent.click(hotspotRefactor);
+    expect(setModalState).toHaveBeenCalledWith(true);
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(setModalState).toHaveBeenLastCalledWith(false);
+    expect(document.activeElement).toBe(hotspotRefactor);
+
+    const changedSection = screen.getByText('Nos arquivos alterados').closest('.quality-section') as HTMLElement;
+    const changedBtns = within(changedSection).getAllByRole('button', { name: /^Refatorar /i });
+    expect(changedBtns).toHaveLength(3);
+    fireEvent.click(changedBtns[1]!);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'claude-1 (claude)' }));
+    await waitFor(() => {
+      expect(calls).toContainEqual([
+        'quality.ask',
+        { name: 'claude-1', kind: 'refactor', target: { type: 'function', path: 'src/big.ts', name: 'render', line: 12 } },
+      ]);
+    });
+    expect((await screen.findByRole('status')).textContent).toContain('Pedido enviado para claude-1.');
+
+    const cyclesSection = screen.getByText('Ciclos de import').closest('.quality-section') as HTMLElement;
+    fireEvent.click(within(cyclesSection).getByRole('button', { name: /^Refatorar /i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'claude-1 (claude)' }));
+    await waitFor(() => {
+      expect(calls).toContainEqual([
+        'quality.ask',
+        { name: 'claude-1', kind: 'refactor', target: { type: 'cycle', files: ['src/a.ts', 'src/b.ts'] } },
+      ]);
+    });
+
+    const funcsSection = screen.getByText('Funções mais complexas').closest('.quality-section') as HTMLElement;
+    expect(within(funcsSection).getAllByRole('button', { name: /^Refatorar /i })).toHaveLength(1);
+  });
+
+  it('mantém só um menu aberto por vez, aplica aria-label único e oculta botão do cartão quando só há arquivos de teste', async () => {
+    const report = makeReport({
+      files: [
+        { path: 'src/big.ts', loc: 700, test: false, functions: 1, maxComplexity: 14, sumComplexity: 14, maxDepth: 3, fanIn: 0, fanOut: 0, commits90d: 2 },
+      ],
+      functions: [{ path: 'src/big.ts', line: 12, name: 'render', complexity: 14, depth: 3, loc: 80 }],
+      cycles: [{ files: ['src/a.ts', 'src/b.ts'], typeOnly: false }],
+      hotspots: [{ path: 'src/big.ts', score: 980, reason: '700 linhas' }],
+      changed: [],
+    });
+    const { api } = makeFakeApi({ readReport: report });
+    const { rerender } = render(
+      <QualityPanel
+        api={api}
+        projectDir="E:/proj/demo"
+        terminals={[{ name: 'codex-1', agent: 'codex', state: 'idle' }]}
+        onOpenFile={() => {}}
+      />,
+    );
+
+    const sizeRefactorBtn = await screen.findByRole('button', { name: 'Pedir refatoração de Tamanho dos módulos: src/big.ts' });
+    const compRefactorBtn = screen.getByRole('button', { name: 'Pedir refatoração de Complexidade: render (src/big.ts:12)' });
+    const hotspotBtn = screen.getByRole('button', { name: 'Refatorar ponto crítico src/big.ts' });
+    const cycleBtn = screen.getByRole('button', { name: 'Refatorar ciclo src/a.ts ↔ src/b.ts' });
+    const fnBtn = screen.getByRole('button', { name: 'Refatorar função render (src/big.ts:12)' });
+
+    const labels = [sizeRefactorBtn, compRefactorBtn, hotspotBtn, cycleBtn, fnBtn].map((el) => el.getAttribute('aria-label'));
+    expect(new Set(labels).size).toBe(5);
+
+    fireEvent.click(sizeRefactorBtn);
+    expect(screen.getAllByRole('menu')).toHaveLength(1);
+
+    // Abrir segundo menu (teclado/clique) fecha o primeiro: sempre no máximo 1 menu aberto
+    fireEvent.click(compRefactorBtn);
+    expect(screen.getAllByRole('menu')).toHaveLength(1);
+    expect(screen.getByRole('menu', { name: /Complexidade/i })).toBeTruthy();
+
+    // Só arquivos de teste em files -> sem alvo de refatoração em Tamanho/Complexidade
+    const onlyTestsApi = makeFakeApi({
+      readReport: makeReport({
+        metrics: [
+          { id: 'size', signal: 'bad', value: 900, delta: 0 },
+          { id: 'complexity', signal: 'bad', value: 25, delta: 0 },
+          { id: 'dependencies', signal: 'ok', value: 0, delta: 0 },
+          { id: 'coverage', signal: 'ok', value: 85, delta: 0 },
+          { id: 'mutation', signal: 'ok', value: 85, delta: 0 },
+        ],
+        files: [{ path: 'src/big.test.ts', loc: 900, test: true, functions: 1, maxComplexity: 25, sumComplexity: 25, maxDepth: 6, fanIn: 0, fanOut: 0, commits90d: 1 }],
+        functions: [{ path: 'src/big.test.ts', line: 4, name: 'testCase', complexity: 25, depth: 6, loc: 50 }],
+        cycles: [],
+        hotspots: [],
+        changed: [],
+      }),
+    });
+    rerender(
+      <QualityPanel
+        api={onlyTestsApi.api}
+        projectDir="E:/proj/tests-only"
+        terminals={[{ name: 'codex-1', agent: 'codex', state: 'idle' }]}
+        onOpenFile={() => {}}
+      />,
+    );
+    await screen.findByText('900 linhas');
+    expect(screen.queryByRole('button', { name: /Pedir refatoração/i })).toBeNull();
   });
 });
