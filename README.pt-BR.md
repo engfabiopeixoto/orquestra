@@ -21,7 +21,7 @@ Rodar vários agentes ao mesmo tempo significa alternar entre janelas de termina
 - **Portais de navegador.** Conecte um navegador a um agente para ele navegar, clicar, digitar, rolar a página e capturar telas.
 - **Monitoramento de atividade.** Ative o monitoramento por terminal para receber uma notificação do Windows quando ele terminar um turno ou esperar por você com o app fora de foco.
 - **Uso das assinaturas.** Veja as janelas de uso e os horários de renovação do Claude, do Codex e do agy. Os agentes consultam esses dados com `orq usage`, e o regente pode delegar sem estourar os limites.
-- **Painel de Qualidade.** Meça o projeto JS/TS aberto em cinco métricas (tamanho, complexidade, ciclos de import, cobertura e mutação), com cada uma explicada e os pontos críticos para atacar primeiro. Os agentes conferem o próprio trabalho com `orq quality --changed`.
+- **Painel de Qualidade.** Meça o projeto JS/TS aberto em cinco métricas (tamanho, complexidade, ciclos de import, cobertura e mutação), com cada uma explicada e os pontos críticos para atacar primeiro. Fica num painel retrátil à direita do canvas (`Ctrl+Shift+Q`), e cada item vermelho pode virar um pedido de refatoração a um agente. Os agentes conferem o próprio trabalho com `orq quality --changed`.
 - **Controle remoto no celular (PWA).** Acompanhe e controle os workspaces do PC pelo celular via Tailscale.
 
 ## Celular

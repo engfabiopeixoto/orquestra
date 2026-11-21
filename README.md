@@ -21,7 +21,7 @@ Running several agents at once means juggling terminal windows, copying prompts 
 - **Browser portals.** Connect a browser node to an agent so it can navigate, click, type, scroll and take screenshots.
 - **Activity monitoring.** Turn on monitoring per terminal to get a Windows notification when it finishes a turn or waits for you while the app is unfocused.
 - **Subscription usage.** See the usage windows and reset times for Claude, Codex and agy. Agents can check them with `orq usage`, so the regent can delegate without hitting the limits.
-- **Quality panel.** Measure the open JS/TS project on five metrics (size, complexity, import cycles, coverage and mutation), each one explained, with the hotspots to tackle first. Agents check their own work with `orq quality --changed`.
+- **Quality panel.** Measure the open JS/TS project on five metrics (size, complexity, import cycles, coverage and mutation), each one explained, with the hotspots to tackle first. It lives in a collapsible panel to the right of the canvas (`Ctrl+Shift+Q`), and any red item can become a refactoring request to an agent. Agents check their own work with `orq quality --changed`.
 - **Mobile remote control (PWA).** Monitor and control your PC's workspaces from your phone over Tailscale.
 
 ## Mobile (Celular)
