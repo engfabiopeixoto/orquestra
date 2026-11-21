@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { QualityReport, QualitySignal } from '@orquestra/shared/quality-schema';
 import type { CommandApi } from '../api';
 import { QUALITY_SHORTCUT_HINT } from '../canvas/shortcuts';
@@ -54,6 +54,8 @@ export function QualityDrawer({
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth || 1280);
   const [draggingWidth, setDraggingWidth] = useState(false);
   const initialToggleRef = useRef(toggleSignal);
+  const onToggleRef = useRef(onToggle);
+  onToggleRef.current = onToggle;
   usePortalOverlay(draggingWidth);
 
   useEffect(() => {
@@ -79,9 +81,9 @@ export function QualityDrawer({
     };
   }, [api, projectDir, open]);
 
-  const toggle = () => {
-    if (onToggle) {
-      onToggle();
+  const toggle = useCallback(() => {
+    if (onToggleRef.current) {
+      onToggleRef.current();
       return;
     }
     setPrefs((current) => {
@@ -89,7 +91,23 @@ export function QualityDrawer({
       writeQualityDrawerPrefs(workspaceKey, next);
       return next;
     });
-  };
+  }, [workspaceKey]);
+
+  const headerAction = useMemo(
+    () => (
+      <button
+        type="button"
+        className="quality-collapse-btn"
+        data-testid="quality-drawer-collapse"
+        aria-label="Recolher painel de Qualidade"
+        title={`Recolher Qualidade (${QUALITY_SHORTCUT_HINT})`}
+        onClick={toggle}
+      >
+        »
+      </button>
+    ),
+    [toggle],
+  );
 
   useEffect(() => {
     if (toggleSignal === initialToggleRef.current) return;
@@ -157,18 +175,7 @@ export function QualityDrawer({
           terminals={terminals}
           onReportChange={setReport}
           onOpenFile={onOpenFile}
-          headerAction={
-            <button
-              type="button"
-              className="quality-collapse-btn"
-              data-testid="quality-drawer-collapse"
-              aria-label="Recolher painel de Qualidade"
-              title={`Recolher Qualidade (${QUALITY_SHORTCUT_HINT})`}
-              onClick={toggle}
-            >
-              »
-            </button>
-          }
+          headerAction={headerAction}
         />
       </div>
     </aside>

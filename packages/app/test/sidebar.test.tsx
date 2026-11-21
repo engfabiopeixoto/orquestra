@@ -146,10 +146,14 @@ describe('Sidebar', () => {
       expect(Number(sep.getAttribute('aria-valuenow'))).toBe(64);
 
       fireEvent.pointerDown(sep, { button: 0, clientY: 100, pointerId: 2 });
-      fireEvent.pointerMove(sep, { clientY: 130, pointerId: 2 });
+      fireEvent.pointerUp(sep, { clientY: 100, pointerId: 2 });
       expect(setItemSpy).not.toHaveBeenCalled();
 
-      fireEvent.pointerUp(sep, { clientY: 130, pointerId: 2 });
+      fireEvent.pointerDown(sep, { button: 0, clientY: 100, pointerId: 3 });
+      fireEvent.pointerMove(sep, { clientY: 130, pointerId: 3 });
+      expect(setItemSpy).not.toHaveBeenCalled();
+
+      fireEvent.pointerUp(sep, { clientY: 130, pointerId: 3 });
       expect(setItemSpy).toHaveBeenCalledTimes(1);
     } finally {
       setItemSpy.mockRestore();

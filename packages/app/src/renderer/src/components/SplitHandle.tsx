@@ -33,7 +33,7 @@ export function SplitHandle({
   onReset?(): void;
 }) {
   const [dragging, setDragging] = useState(false);
-  const dragRef = useRef<{ pointerId: number; startCoord: number; startValue: number; lastValue: number } | null>(null);
+  const dragRef = useRef<{ pointerId: number; startCoord: number; startValue: number; lastValue: number; moved: boolean } | null>(null);
   const rafRef = useRef<number | null>(null);
   const pendingCoordRef = useRef<number | null>(null);
   const onDraggingChangeRef = useRef(onDraggingChange);
@@ -51,6 +51,7 @@ export function SplitHandle({
     const active = dragRef.current;
     if (!active) return null;
     const delta = coord - active.startCoord;
+    if (delta !== 0) active.moved = true;
     const next = clamp(active.startValue + (reverse ? -delta : delta));
     active.lastValue = next;
     onChange(next);
@@ -61,7 +62,7 @@ export function SplitHandle({
     if (event.button !== 0) return;
     event.preventDefault();
     const startCoord = orientation === 'vertical' ? event.clientX : event.clientY;
-    dragRef.current = { pointerId: event.pointerId, startCoord, startValue: value, lastValue: value };
+    dragRef.current = { pointerId: event.pointerId, startCoord, startValue: value, lastValue: value, moved: false };
     try {
       event.currentTarget.setPointerCapture?.(event.pointerId);
     } catch {
@@ -74,14 +75,16 @@ export function SplitHandle({
   const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
     const active = dragRef.current;
     if (!active || active.pointerId !== event.pointerId) return;
-    pendingCoordRef.current = orientation === 'vertical' ? event.clientX : event.clientY;
+    const coord = orientation === 'vertical' ? event.clientX : event.clientY;
+    if (coord !== active.startCoord) active.moved = true;
+    pendingCoordRef.current = coord;
     if (rafRef.current !== null) return;
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = null;
       if (pendingCoordRef.current !== null) {
-        const coord = pendingCoordRef.current;
+        const nextCoord = pendingCoordRef.current;
         pendingCoordRef.current = null;
-        flushDrag(coord);
+        flushDrag(nextCoord);
       }
     });
   };
@@ -99,10 +102,11 @@ export function SplitHandle({
       pendingCoordRef.current = null;
       finalValue = flushDrag(coord) ?? finalValue;
     }
+    const moved = active.moved;
     dragRef.current = null;
     setDragging(false);
     onDraggingChange?.(false);
-    onCommit?.(finalValue);
+    if (moved) onCommit?.(finalValue);
     try {
       if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
         event.currentTarget.releasePointerCapture(event.pointerId);

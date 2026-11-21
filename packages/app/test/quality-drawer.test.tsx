@@ -143,9 +143,13 @@ describe('QualityDrawer & layout prefs', () => {
     fireEvent.keyDown(sep, { key: 'Home' });
     expect(Number(sep.getAttribute('aria-valuenow'))).toBe(QUALITY_MIN_WIDTH);
 
-    // Arrasto por pointer events usa setModalState durante o arrasto e só persiste ao concluir (pointerup)
+    // Clique simples sem arrastar não grava no localStorage; arrastar só grava ao concluir (pointerup)
     const setItemSpy = vi.spyOn(Storage.prototype, 'setItem');
     const drawer = screen.getByTestId('quality-drawer');
+    fireEvent.pointerDown(sep, { button: 0, clientX: 800, pointerId: 9 });
+    fireEvent.pointerUp(sep, { clientX: 800, pointerId: 9 });
+    expect(setItemSpy).not.toHaveBeenCalled();
+
     fireEvent.pointerDown(sep, { button: 0, clientX: 800, pointerId: 1 });
     expect(window.orquestra.portal.setModalState).toHaveBeenCalledWith(true);
     fireEvent.pointerMove(sep, { clientX: 700, pointerId: 1 });
